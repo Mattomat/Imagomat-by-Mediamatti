@@ -42,7 +42,8 @@ def write_dng(path: str | Path, data: np.ndarray, *, cfa: bool, color_matrix: np
               unique_model: str | None = None, iso: int | None = None, exposure_time: float | None = None,
               fnumber: float | None = None, focal_length: float | None = None,
               capture_time: _dt.datetime | None = None, orientation: int = 1,
-              baseline_exposure: float = 0.0, preview: np.ndarray | None = None) -> Path:
+              baseline_exposure: float = 0.0, preview: np.ndarray | None = None,
+              xmp: bytes | None = None) -> Path:
     """Schreibt eine DNG.
 
     data: uint16, bei cfa=True (H, W) im RGGB-Muster, sonst (H, W, 3) linear in Kamerafarben.
@@ -55,10 +56,10 @@ def write_dng(path: str | Path, data: np.ndarray, *, cfa: bool, color_matrix: np
         (50706, "B", 4, (1, 4, 0, 0), True),                      # DNGVersion
         (50707, "B", 4, (1, 1, 0, 0), True),                      # DNGBackwardVersion
         (50708, "s", 0, unique_model or f"{make} {model}", True),  # UniqueCameraModel
-        (50721, "q" if False else "2i", 9, _srational(cm), True),  # ColorMatrix1 (SRATIONAL)
+        (50721, "2i", 9, _srational(cm), True),                   # ColorMatrix1 (SRATIONAL)
         (50778, "H", 1, 21, True),                                # CalibrationIlluminant1 = D65
         (50728, "2I", 3, _rational(as_shot_neutral), True),       # AsShotNeutral
-        (50714, "H" if cfa else "H", 1, int(black), True),        # BlackLevel
+        (50714, "H", 1, int(black), True),                        # BlackLevel
         (50717, "H", 1, int(white), True),                        # WhiteLevel
         (50730, "2i", 1, _srational([baseline_exposure], 100), True),  # BaselineExposure
         (271, "s", 0, make, True),
@@ -76,6 +77,8 @@ def write_dng(path: str | Path, data: np.ndarray, *, cfa: bool, color_matrix: np
     dt = (capture_time or _dt.datetime.now()).strftime("%Y:%m:%d %H:%M:%S")
     extratags.append((36867, "s", 0, dt, True))                   # DateTimeOriginal
     extratags.append((306, "s", 0, dt, True))
+    if xmp:
+        extratags.append((700, "B", len(xmp), xmp, True))           # XMLPacket (eingebettetes XMP)
     if cfa:
         extratags += [
             (33421, "H", 2, (2, 2), True),                        # CFARepeatPatternDim

@@ -168,15 +168,17 @@ def read_linear(path: str | Path, max_side: int | None = 1600) -> tuple[np.ndarr
     return np.ascontiguousarray(lin), info
 
 
-def decode(path: str | Path, half_size: bool = True) -> tuple[np.ndarray, RawInfo]:
-    """Demosaictes, lineares Kamera-RGB als float32 (ohne Weissabgleich), Anzeigeorientierung."""
+def decode(path: str | Path, half_size: bool = True, oriented: bool = True) -> tuple[np.ndarray, RawInfo]:
+    """Demosaictes, lineares Kamera-RGB als float32 (ohne Weissabgleich).
+
+    oriented=True: Anzeigeorientierung, sonst Sensororientierung."""
     with rawpy.imread(str(path)) as r:
         info = raw_info(r)
         rgb = r.postprocess(half_size=half_size, use_camera_wb=False, user_wb=[1, 1, 1, 1],
                             output_color=rawpy.ColorSpace.raw, gamma=(1, 1), no_auto_bright=True,
                             output_bps=16, user_flip=0, highlight_mode=rawpy.HighlightMode.Clip)
     lin = rgb.astype(np.float32) / 65535.0
-    return orient(lin, info.orientation), info
+    return (orient(lin, info.orientation) if oriented else lin), info
 
 
 def estimate_noise(path: str | Path) -> dict[str, float]:
