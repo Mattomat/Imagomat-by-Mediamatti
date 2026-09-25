@@ -7,3 +7,4 @@ node_modules/
 frontend/dist/
 src-tauri/target/
 .DS_Store
+*.tsbuildinfo
