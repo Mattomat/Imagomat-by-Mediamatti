@@ -87,11 +87,9 @@ def import_folder(db: Database, folder: Path, name: str | None = None, profile: 
 # Stufe 1
 # ---------------------------------------------------------------------------
 
-def _stage1(db: Database, row: Any) -> None:
-    image_id, path = row["id"], Path(row["path"])
+def compute_metrics(path: Path) -> tuple[np.ndarray, dict[str, Any], int, int | None, int | None, str]:
+    """Stufe-1-Metriken für eine Datei (ohne Datenbank; auch fürs Stil-Training genutzt)."""
     img, orientation = raw_io.load_preview(path, PREVIEW_SIDE)
-    pp = preview_path(image_id)
-    cv2.imwrite(str(pp), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
     data: dict[str, Any] = {"preview_w": img.shape[1], "preview_h": img.shape[0]}
     g = quality.gray(img)
     data.update(quality.exposure_stats(img))
@@ -107,14 +105,23 @@ def _stage1(db: Database, row: Any) -> None:
             lin, info = raw_io.read_linear(path, max_side=1024)
             data.update(quality.linear_stats(lin, info.camera_wb))
             data.update({"as_shot_temp": info.as_shot_temp, "as_shot_tint": info.as_shot_tint,
-                         "camera_wb": info.camera_wb.tolist()})
+                         "camera_wb": info.camera_wb.tolist(), "xyz_to_cam": info.xyz_to_cam.ravel().tolist()})
             orientation = info.orientation
             width, height = info.width, info.height
             data.update({f"noise_{k}": v for k, v in raw_io.estimate_noise(path).items()})
         except Exception as e:  # noqa: BLE001 - defekte RAWs sollen den Shoot nicht stoppen
             log.warning("RAW-Analyse fehlgeschlagen für %s: %s", path.name, e)
             data["raw_error"] = str(e)
+    data["orientation"] = orientation
     ph = str(imagehash.phash(Image.fromarray(img).resize((256, int(256 * img.shape[0] / img.shape[1])))))
+    return img, data, orientation, width, height, ph
+
+
+def _stage1(db: Database, row: Any) -> None:
+    image_id, path = row["id"], Path(row["path"])
+    img, data, orientation, width, height, ph = compute_metrics(path)
+    pp = preview_path(image_id)
+    cv2.imwrite(str(pp), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
     db.update_analysis(image_id, data, phash=ph)
     with db.tx() as c:
         c.execute("UPDATE images SET preview_path=?, orientation=?, width=COALESCE(?, width),"
@@ -127,17 +134,10 @@ def _stage1(db: Database, row: Any) -> None:
 # Stufe 2
 # ---------------------------------------------------------------------------
 
-def _stage2_faces(db: Database, row: Any, img: np.ndarray) -> list[tuple[float, ...]]:
+def compute_content(img: np.ndarray):
+    """Gesichter + Motiv/Himmel für ein Vorschaubild (ohne Datenbank)."""
     s = load_settings()
     faces = detect_faces(img, ear_threshold=s.culling.eyes_closed_threshold)
-    with db.tx() as c:
-        c.execute("DELETE FROM faces WHERE image_id=? AND person_id IS NULL", (row["id"],))
-        for f in faces:
-            c.execute(
-                "INSERT INTO faces(image_id, bbox, landmarks, det_score, embedding, eyes_open, sharpness, yaw)"
-                " VALUES(?,?,?,?,?,?,?,?)",
-                (row["id"], dumps(list(f.bbox)), dumps(f.kps), f.score, f32_to_blob(f.embedding), f.eyes_open,
-                 f.eye_sharpness, f.yaw))
     main = max(faces, key=lambda f: f.height * f.score, default=None)
     data: dict[str, Any] = {
         "face_count": len(faces),
@@ -146,6 +146,9 @@ def _stage2_faces(db: Database, row: Any, img: np.ndarray) -> list[tuple[float, 
         "eyes_closed_any": any(f.eyes_open is not None and f.eyes_open < 0.5 and f.height > 0.05 for f in faces),
         "faces_cut": any(f.bbox[0] <= 0.002 or f.bbox[2] >= 0.998 or f.bbox[1] <= 0.002 for f in faces),
     }
+    if main is not None:
+        crop = quality.crop_region(quality.gray(img), main.bbox)
+        data["face_luma"] = float(crop.mean()) if crop.size else None
     boxes = [f.bbox for f in faces]
     seg = segment(img, boxes)
     data.update(seg.stats(img))
@@ -156,10 +159,23 @@ def _stage2_faces(db: Database, row: Any, img: np.ndarray) -> list[tuple[float, 
         # Angeschnitten = Motiv berührt linken, rechten oder oberen Rand (unten ist bei Halbtotalen normal)
         x0, y0, x1, _ = seg.subject_bbox
         data["subject_cut"] = bool(x0 < 0.005 or x1 > 0.995 or y0 < 0.005)
+    return faces, data, seg
+
+
+def _stage2_faces(db: Database, row: Any, img: np.ndarray) -> list[tuple[float, ...]]:
+    faces, data, seg = compute_content(img)
+    with db.tx() as c:
+        c.execute("DELETE FROM faces WHERE image_id=? AND person_id IS NULL", (row["id"],))
+        for f in faces:
+            c.execute(
+                "INSERT INTO faces(image_id, bbox, landmarks, det_score, embedding, eyes_open, sharpness, yaw)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (row["id"], dumps(list(f.bbox)), dumps(f.kps), f.score, f32_to_blob(f.embedding), f.eyes_open,
+                 f.eye_sharpness, f.yaw))
     np.save(_mask_file(row["id"]), np.stack([seg.subject, seg.sky]).astype(np.float16))
     db.update_analysis(row["id"], data)
     db.mark_step(row["id"], STEP_FACES)
-    return body_boxes(boxes, img.shape[1] / img.shape[0])
+    return body_boxes([f.bbox for f in faces], img.shape[1] / img.shape[0])
 
 
 def _mask_file(image_id: int) -> Path:

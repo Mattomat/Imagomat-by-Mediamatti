@@ -200,6 +200,17 @@ def display_to_sensor(x: float, y: float, orientation: int) -> tuple[float, floa
     return x, y
 
 
+def sensor_to_display(x: float, y: float, orientation: int) -> tuple[float, float]:
+    """Umkehrung von display_to_sensor."""
+    if orientation == 6:
+        return 1 - y, x
+    if orientation == 8:
+        return y, 1 - x
+    if orientation == 7:
+        return 1 - y, 1 - x
+    return display_to_sensor(x, y, orientation)  # 1, 2, 3, 4, 5 sind selbstinvers
+
+
 def to_lightroom_crop(plan: CropPlan, orientation: int = 1) -> dict[str, object]:
     """CropPlan -> crs-Felder. Liefert HasCrop=False, wenn nichts zu tun ist."""
     full = plan.area_fraction > 0.999 and abs(plan.angle) < 0.01
