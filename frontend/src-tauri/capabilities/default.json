@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Standardrechte: Ordner-/Dateidialog, Backend-Sidecar starten",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-open",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [{ "name": "binaries/imagomat-server", "sidecar": true, "args": true }]
+    }
+  ]
+}

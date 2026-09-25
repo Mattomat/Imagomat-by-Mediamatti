@@ -1,7 +1,9 @@
 # Phase 0: Machbarkeitsbericht Imagomat
 
 Stand: 25.09.2026 (Referenz: Lightroom Classic 15.5, August 2026)
-Status: **Entwurf, wartet auf dein OK.** Bis dahin wird kein App-Code geschrieben.
+Status: **umgesetzt.** Auf deinen Wunsch wurden alle Punkte gebaut, auch die riskanten
+(Denoise-Deklaration, KI-Masken, Katalog-Export). Offene Hypothesen werden mit
+[docs/lightroom-roundtrip.md](../lightroom-roundtrip.md) auf deinem Mac geprüft.
 
 ---
 

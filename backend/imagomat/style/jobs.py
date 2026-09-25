@@ -145,21 +145,48 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
     ctx.progress(len(items), "Entwicklung fertig")
 
 
+def user_changed(predicted: dict[str, Any], final: dict[str, Any]) -> bool:
+    """Hat die Person in Lightroom etwas an unseren Werten geändert?"""
+    from ..lightroom.params import PARAMS, to_number
+
+    for k, p in PARAMS.items():
+        a, b = to_number(predicted.get(k)), to_number(final.get(k))
+        if a is None and b is None:
+            continue
+        tol = 0.05 if p.decimals else 1.0
+        if abs((a if a is not None else p.default) - (b if b is not None else p.default)) > tol:
+            return True
+    return str(predicted.get("ToneCurvePV2012")) != str(final.get("ToneCurvePV2012")) and \
+        final.get("ToneCurvePV2012") is not None
+
+
 @job("feedback")
 def feedback(ctx: JobContext, shoot_id: int, profile: str, folder: str | None = None, weight: float = 2.0) -> None:
     """Deine Korrekturen aus Lightroom (XMP) zurücklesen und das Profil nachtrainieren."""
+    from .sources import embedded_xmp
+
     db = ctx.db
+    if folder is None:
+        row = db.one("SELECT settings FROM shoots WHERE id=?", (shoot_id,))
+        folder = (json.loads(row["settings"] or "{}") if row else {}).get("last_export")
     items = shoot_records(db, shoot_id, only_keep=False)
     ctx.set_total(len(items) + 1)
     recs = []
     for i, it in enumerate(items):
         src = Path(it.record.path)
-        xmp = (Path(folder) / src.name).with_suffix(".xmp") if folder else src.with_suffix(".xmp")
-        if not xmp.exists():
+        base = Path(folder) if folder else src.parent
+        doc = None
+        side = (base / src.name).with_suffix(".xmp")
+        dn = base / f"{src.stem}-DN.dng"
+        if side.exists():
+            doc = read_xmp(side)
+        elif dn.exists():
+            doc = embedded_xmp(dn)
+        if doc is None or not doc.crs:
             continue
-        doc = read_xmp(xmp)
-        if not doc.crs:
-            continue
+        pred = db.one("SELECT params FROM edits WHERE image_id=?", (it.image_id,))
+        if pred and not user_changed(json.loads(pred["params"]), doc.crs):
+            continue  # unverändert übernommen: kein neues Lernsignal
         it.record.crs = doc.crs
         it.record.weight = weight
         recs.append(it.record)

@@ -152,3 +152,38 @@ def test_paint_fallback_and_radial():
     assert comps and all(c["What"] == "Mask/Paint" and c["Dabs"][0].startswith("d ") for c in comps)
     rc = radial_component((0.2, 0.1, 0.4, 0.5), orientation=1)
     assert rc["Left"] == 0.2 and rc["Bottom"] == 0.5
+
+
+def test_feedback_uses_last_export(tmp_path: Path):
+    import json
+
+    from imagomat.export import exporter  # noqa: F401
+    from imagomat.lightroom.xmp import read_xmp
+
+    train = tmp_path / "train"
+    train.mkdir()
+    t0 = dt.datetime(2026, 4, 1, 20, 0)
+    for i in range(6):
+        b = [0.4, 0.8, 1.6][i % 3]
+        write_sidecar(_write(train, i, b, t0), XmpDoc(crs=_user_edit(b)))
+    db = Database(tmp_path / "f.db")
+    jm = JobManager(db)
+    assert jm.run_sync(db.create_job("train_profile", None, {"name": "FB", "folders": [str(train)]}))["status"] == "done"
+    shoot = tmp_path / "shoot"
+    shoot.mkdir()
+    for i in range(4):
+        _write(shoot, 50 + i, 1.0, t0)
+    sid = import_folder(db, shoot, profile="FB")
+    for kind, params in (("analyze", {}), ("develop", {"only_keep": False}),
+                         ("export", {"target": str(tmp_path / "exp")})):
+        assert jm.run_sync(db.create_job(kind, sid, params))["status"] == "done"
+    # "Korrektur in Lightroom": Belichtung auf +1.5 setzen
+    x = tmp_path / "exp" / "IMG0050.xmp"
+    doc = read_xmp(x)
+    doc.crs["Exposure2012"] = "+1.50"
+    x.write_bytes(__import__("imagomat.lightroom.xmp", fromlist=["serialize"]).serialize(doc))
+    j = jm.run_sync(db.create_job("feedback", sid, {"profile": "FB"}))
+    assert j["status"] == "done", j["error"]
+    assert StyleModel.load("FB").n == 7   # nur das korrigierte Bild kommt dazu
+    up = db.one("SELECT user_params FROM edits e JOIN images i ON i.id=e.image_id WHERE i.filename='IMG0050.dng'")
+    assert json.loads(up[0])["Exposure2012"] == "+1.50"

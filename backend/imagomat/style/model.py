@@ -55,7 +55,8 @@ LEARNED_KEYS = set(DIRECT) | {
     "SplitToningShadowSaturation", "SplitToningHighlightHue", "SplitToningHighlightSaturation",
     "ColorGradeMidtoneHue", "ColorGradeMidtoneSat", "ColorGradeGlobalHue", "ColorGradeGlobalSat",
     "MaskGroupBasedCorrections", "HasCrop", "CropTop", "CropLeft", "CropBottom", "CropRight", "CropAngle",
-    "CropConstrainToWarp", "RawFileName", "AlreadyApplied", "HasSettings",
+    "CropConstrainToWarp", "RawFileName", "AlreadyApplied", "HasSettings", "Version", "ProcessVersion",
+    "CompatibleVersion",
     # Vorsicht bei Ebenen/Retusche: nie auf andere Bilder übertragen
     "RetouchInfo", "RetouchAreas", "CircularGradientBasedCorrections", "GradientBasedCorrections",
     "PaintBasedCorrections", "DepthBasedCorrections", "LensBlur", "UprightTransform_0", "UprightTransform_1",

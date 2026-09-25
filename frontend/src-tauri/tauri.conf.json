@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Imagomat",
+  "version": "0.1.0",
+  "identifier": "ch.mediamatti.imagomat",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Imagomat",
+        "width": 1480,
+        "height": 940,
+        "minWidth": 1100,
+        "minHeight": 700
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' http://127.0.0.1:8765 data:; connect-src 'self' http://127.0.0.1:8765 ws://127.0.0.1:8765; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "category": "Photography",
+    "icon": ["icons/icon.png"],
+    "externalBin": ["binaries/imagomat-server"],
+    "macOS": { "minimumSystemVersion": "13.0" }
+  }
+}

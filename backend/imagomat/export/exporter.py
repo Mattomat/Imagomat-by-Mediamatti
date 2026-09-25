@@ -315,5 +315,10 @@ def export_shoot(ctx: JobContext, shoot_id: int, target: str, formats: list[str]
     if "jpeg" in formats:
         export_jpeg(items, tgt, jpeg_side, ctx)
     write_log(items, tgt, meta)
+    row = db.one("SELECT settings FROM shoots WHERE id=?", (shoot_id,))
+    st = json.loads(row["settings"] or "{}") if row else {}
+    st["last_export"] = str(tgt)
+    with db.tx() as c:
+        c.execute("UPDATE shoots SET settings=? WHERE id=?", (json.dumps(st), shoot_id))
     kept = sum(1 for it in items if it.decision == "keep")
     ctx.progress(message=f"Export fertig: {kept} behalten, {len(items) - kept} aussortiert -> {tgt}", advance=1)
