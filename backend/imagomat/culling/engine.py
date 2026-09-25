@@ -154,6 +154,18 @@ def detect_series(items: list[CullItem], cs: CullingSettings) -> None:
         prev = it
 
 
+def _weaker_reason(it: CullItem, best: CullItem) -> str | None:
+    """Warum ist ein Serienbild schlechter als das beste? (für ein verständliches Log)"""
+    f, b = it.feats, best.feats
+    if f["sharp"] < b["sharp"] - 0.25:
+        return "bewegung" if f["motion"] > b["motion"] + 0.1 else "unscharf"
+    if f["has_face"] and f["eyes_open"] < b["eyes_open"] - 0.3:
+        return "augen_zu"
+    if f["exposure"] < b["exposure"] - 0.3:
+        return "ueberbelichtet" if f["clip_hi"] > b["clip_hi"] else "unterbelichtet"
+    return None
+
+
 def select(items: list[CullItem], cs: CullingSettings) -> None:
     n = len(items)
     target = max(1, int(round(cs.keep_ratio * n)))
@@ -173,11 +185,8 @@ def select(items: list[CullItem], cs: CullingSettings) -> None:
                 continue
             dup = any((it.emb is not None and k.emb is not None and float(it.emb @ k.emb) > cs.duplicate_similarity)
                       or _phash_dist(it.phash, k.phash) <= 6 for k in kept)
-            if dup:
-                it.reasons.append("duplikat")
-                continue
-            if it.score < kept[0].score * 0.9:
-                it.reasons.append("serie")
+            if dup or it.score < kept[0].score * 0.9:
+                it.reasons.append(_weaker_reason(it, kept[0]) or ("duplikat" if dup else "serie"))
                 continue
             kept.append(it)
         candidates += kept
