@@ -64,3 +64,77 @@ def agreement(items: list[CullItem], labels: dict[int, int]) -> dict[str, float]
     rec = tp / max(tp + fn, 1)
     return {"precision": prec, "recall": rec, "f1": 2 * prec * rec / max(prec + rec, 1e-9),
             "accuracy": (tp + tn) / max(len(items), 1), "kept_by_you": tp + fn, "kept_by_app": tp + fp}
+
+
+def user_labels_from_folder(folder: Path, min_rating: int) -> dict[str, int]:
+    """Deine Auswahl aus XMP-Sidecars: behalten = Sterne >= min_rating."""
+    from ..lightroom.xmp import read_xmp
+
+    out = {}
+    for x in Path(folder).rglob("*.xmp"):
+        try:
+            d = read_xmp(x)
+        except Exception:  # noqa: BLE001
+            continue
+        for ext in (".ARW", ".arw", ".CR3", ".cr3", ".NEF", ".nef", ".DNG", ".dng", ".RAF", ".raf"):
+            p = x.with_suffix(ext)
+            if p.exists():
+                out[str(p.resolve())] = int((d.rating or 0) >= min_rating)
+    return out
+
+
+def user_labels_from_catalog(catalog: Path, min_rating: int) -> dict[str, int]:
+    from ..lightroom.catalog import CatalogReader
+
+    with CatalogReader(catalog) as r:
+        return {str(im.path.resolve()): int(im.pick > 0 or (im.rating or 0) >= min_rating) for im in r.images()}
+
+
+def _register_job():
+    from ..analysis import analyze_shoot, import_folder
+    from ..jobs import JobContext, job
+    from .engine import build_features, cull, load_items
+
+    @job("calibrate_culling")
+    def calibrate_job(ctx: JobContext, profile: str, folders: list[str], catalog: str | None = None,
+                      min_rating: int = 2) -> None:
+        from ..config import load_settings
+
+        db = ctx.db
+        labels: dict[str, int] = {}
+        if catalog:
+            labels.update(user_labels_from_catalog(Path(catalog), min_rating))
+        items: list[CullItem] = []
+        y: list[int] = []
+        paths: dict[int, str] = {}
+        for f in folders:
+            labels.update({k: v for k, v in user_labels_from_folder(Path(f), min_rating).items() if k not in labels})
+            sid = import_folder(db, Path(f), name=f"Kalibrierung: {Path(f).name}")
+            analyze_shoot(ctx, sid)
+            its = load_items(db, sid)
+            for r in db.images(sid):
+                paths[r["id"]] = str(Path(r["path"]).resolve())
+            its = [it for it in its if paths.get(it.image_id) in labels]
+            if not its:
+                continue
+            build_features(its)
+            items += its
+            y += [labels[paths[it.image_id]] for it in its]
+        if len(items) < 20 or sum(y) < 5 or sum(y) > len(y) - 5:
+            raise ValueError(f"Zu wenige gelabelte Bilder für die Kalibrierung ({len(items)}, davon {sum(y)} behalten)")
+        cs = load_settings().culling
+        cs.keep_ratio = sum(y) / len(y)
+        before = agreement(cull([CullItem(i.image_id, i.t, i.a, i.emb, i.phash) for i in items], cs),
+                           {i.image_id: v for i, v in zip(items, y)})
+        model = fit(items, y)
+        after = agreement(cull([CullItem(i.image_id, i.t, i.a, i.emb, i.phash) for i in items], cs, model),
+                          {i.image_id: v for i, v in zip(items, y)})
+        model.save(profile)
+        report = {"n": len(items), "kept_by_you": int(sum(y)), "keep_ratio": cs.keep_ratio,
+                  "heuristik": before, "kalibriert": after,
+                  "gewichte": dict(zip(FEATURE_NAMES, model.weights))}
+        (profiles_dir() / profile / "culling_report.json").write_text(json.dumps(report, indent=2), "utf-8")
+        ctx.progress(message=f"Culling kalibriert: F1 {before['f1']:.2f} -> {after['f1']:.2f} (in-sample)")
+
+
+_register_job()
