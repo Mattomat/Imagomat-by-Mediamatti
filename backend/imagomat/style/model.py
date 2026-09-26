@@ -18,7 +18,9 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import os
 import pickle
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -91,6 +93,31 @@ class Prediction:
     preset: str
     has_crop_prob: float
     crop_area: float
+
+
+def gbdt_factory():
+    """Gradient-Boosting-Modell wählen.
+
+    macOS: scikit-learn statt LightGBM. LightGBM (Homebrew-libomp) und PyTorch (eigene libomp)
+    im selben Prozess führen dort zu Abstürzen (Segmentation fault).
+    IMAGOMAT_GBDT=lightgbm|sklearn|off überschreibt die Wahl.
+    """
+    choice = os.environ.get("IMAGOMAT_GBDT") or ("sklearn" if sys.platform == "darwin" else "lightgbm")
+    if choice == "off":
+        return None
+    if choice == "lightgbm":
+        try:
+            import lightgbm as lgb
+
+            return lambda: lgb.LGBMRegressor(n_estimators=250, learning_rate=0.05, num_leaves=15,
+                                             min_child_samples=8, subsample=0.8, subsample_freq=1,
+                                             colsample_bytree=0.8, reg_lambda=1.0, verbose=-1)
+        except (ImportError, OSError):
+            log.warning("LightGBM nicht nutzbar, verwende scikit-learn")
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    return lambda: HistGradientBoostingRegressor(max_iter=250, learning_rate=0.05, max_leaf_nodes=15,
+                                                 min_samples_leaf=8, l2_regularization=1.0)
 
 
 class StyleModel:
@@ -195,20 +222,9 @@ class StyleModel:
         return self
 
     def _fit_gbdt(self, X: np.ndarray, Y: np.ndarray, knn_Y: np.ndarray) -> np.ndarray:
-        try:
-            import lightgbm as lgb
-
-            def make():
-                return lgb.LGBMRegressor(n_estimators=250, learning_rate=0.05, num_leaves=15, min_child_samples=8,
-                                         subsample=0.8, subsample_freq=1, colsample_bytree=0.8, reg_lambda=1.0,
-                                         verbose=-1)
-        except (ImportError, OSError):
-            # z. B. macOS ohne libomp: sklearn als Ersatz (etwas langsamer, gleiche Qualität)
-            log.warning("LightGBM nicht nutzbar, verwende scikit-learn (Tipp: brew install libomp)")
-            from sklearn.ensemble import HistGradientBoostingRegressor
-
-            def make():
-                return HistGradientBoostingRegressor(max_iter=250, learning_rate=0.05, max_leaf_nodes=15)
+        make = gbdt_factory()
+        if make is None:
+            return np.abs(knn_Y - Y).mean(0)
         from sklearn.model_selection import KFold
 
         Xs = (X - self._mu) / self._sd
