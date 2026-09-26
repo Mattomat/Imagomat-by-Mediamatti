@@ -1,4 +1,4 @@
-"""Minimaler DNG-Writer (CFA-Bayer oder LinearRaw) auf Basis von tifffile.
+"""Minimaler DNG-Writer (CFA-Bayer oder LinearRaw), eigener TIFF-Schreiber ohne Abhängigkeiten.
 
 Verwendung:
 - Lokales Denoise: entrauschte, demosaikte Daten als *lineare DNG* ausgeben. Lightroom
@@ -9,11 +9,11 @@ Verwendung:
 from __future__ import annotations
 
 import datetime as _dt
+import struct
 from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
-import tifffile
 
 # sRGB(D65)->XYZ; ColorMatrix in DNG ist XYZ->Kamera
 SRGB_TO_XYZ = np.array([[0.4124564, 0.3575761, 0.1804375],
@@ -36,6 +36,87 @@ def _rational(values: np.ndarray | list[float], denom: int = 1000000) -> list[in
     return out
 
 
+# TIFF-Typen: Code -> (struct-Format pro Wert, Bytes pro Wert)
+_BYTE, _ASCII, _SHORT, _LONG, _RATIONAL, _UNDEF, _SRATIONAL = 1, 2, 3, 4, 5, 7, 10
+
+
+def _encode(typ: int, values) -> tuple[bytes, int]:
+    """-> (Bytes, Anzahl) für einen IFD-Eintrag."""
+    if typ == _ASCII:
+        b = str(values).encode("latin-1", errors="replace") + b"\0"
+        return b, len(b)
+    if typ in (_BYTE, _UNDEF):
+        b = bytes(values)
+        return b, len(b)
+    vals = list(values) if isinstance(values, (list, tuple)) else [values]
+    if typ == _SHORT:
+        return struct.pack(f"<{len(vals)}H", *[int(v) for v in vals]), len(vals)
+    if typ == _LONG:
+        return struct.pack(f"<{len(vals)}I", *[int(v) for v in vals]), len(vals)
+    if typ == _RATIONAL:
+        return struct.pack(f"<{len(vals)}I", *[int(v) for v in vals]), len(vals) // 2
+    if typ == _SRATIONAL:
+        return struct.pack(f"<{len(vals)}i", *[int(v) for v in vals]), len(vals) // 2
+    raise ValueError(typ)
+
+
+class _TiffBuilder:
+    """Minimaler Little-Endian-TIFF-Schreiber (unkomprimiert, ein Streifen pro Bild).
+
+    Eigenes Format statt tifffile, damit die DNG unabhängig von Bibliotheksversionen
+    immer gleich aussieht (LibRaw ist bei DNG-Details empfindlich)."""
+
+    def __init__(self) -> None:
+        self.buf = bytearray(b"II*\0\0\0\0\0")
+
+    def _align(self) -> None:
+        if len(self.buf) % 2:
+            self.buf += b"\0"
+
+    def add_data(self, data: bytes) -> int:
+        self._align()
+        off = len(self.buf)
+        self.buf += data
+        return off
+
+    def add_ifd(self, entries: dict[int, tuple[int, object]], next_ifd: int = 0) -> int:
+        self._align()
+        ifd_off = len(self.buf)
+        tags = sorted(entries)
+        size = 2 + 12 * len(tags) + 4
+        extra = bytearray()
+        body = bytearray(struct.pack("<H", len(tags)))
+        for tag in tags:
+            typ, values = entries[tag]
+            data, count = _encode(typ, values)
+            if len(data) <= 4:
+                body += struct.pack("<HHI", tag, typ, count) + data.ljust(4, b"\0")
+            else:
+                off = ifd_off + size + len(extra)
+                body += struct.pack("<HHII", tag, typ, count, off)
+                extra += data
+                if len(extra) % 2:
+                    extra += b"\0"
+        body += struct.pack("<I", next_ifd)
+        self.buf += body + extra
+        return ifd_off
+
+    def finish(self, first_ifd: int) -> bytes:
+        self.buf[4:8] = struct.pack("<I", first_ifd)
+        return bytes(self.buf)
+
+
+def _image_entries(arr: np.ndarray, offset: int, photometric: int, subfile: int) -> dict[int, tuple[int, object]]:
+    h, w = arr.shape[:2]
+    spp = 1 if arr.ndim == 2 else arr.shape[2]
+    bits = arr.dtype.itemsize * 8
+    return {
+        254: (_LONG, subfile), 256: (_LONG, w), 257: (_LONG, h), 258: (_SHORT, [bits] * spp),
+        259: (_SHORT, 1), 262: (_SHORT, photometric), 273: (_LONG, offset), 277: (_SHORT, spp),
+        278: (_LONG, h), 279: (_LONG, arr.nbytes), 284: (_SHORT, 1),
+    }
+
+
 def write_dng(path: str | Path, data: np.ndarray, *, cfa: bool, color_matrix: np.ndarray | None = None,
               as_shot_neutral: tuple[float, float, float] = (0.5, 1.0, 0.7), black: int = 0,
               white: int = 65535, make: str = "Imagomat", model: str = "Synthetic",
@@ -44,60 +125,52 @@ def write_dng(path: str | Path, data: np.ndarray, *, cfa: bool, color_matrix: np
               capture_time: _dt.datetime | None = None, orientation: int = 1,
               baseline_exposure: float = 0.0, preview: np.ndarray | None = None,
               xmp: bytes | None = None) -> Path:
-    """Schreibt eine DNG.
+    """Schreibt eine DNG 1.4.
 
     data: uint16, bei cfa=True (H, W) im RGGB-Muster, sonst (H, W, 3) linear in Kamerafarben.
     color_matrix: XYZ(D65)->Kamera (3x3). Standard: Kamera = linear sRGB.
+    Mit Vorschau: IFD0 = Vorschau, Rohdaten in einer SubIFD (wie von Adobe geschrieben).
     """
     path = Path(path)
-    data = np.ascontiguousarray(data.astype(np.uint16))
+    raw = np.ascontiguousarray(data.astype("<u2"))
     cm = color_matrix if color_matrix is not None else np.linalg.inv(SRGB_TO_XYZ)
-    extratags: list[tuple] = [
-        (50706, "B", 4, (1, 4, 0, 0), True),                      # DNGVersion
-        (50707, "B", 4, (1, 1, 0, 0), True),                      # DNGBackwardVersion
-        (50708, "s", 0, unique_model or f"{make} {model}", True),  # UniqueCameraModel
-        (50721, "2i", 9, _srational(cm), True),                   # ColorMatrix1 (SRATIONAL)
-        (50778, "H", 1, 21, True),                                # CalibrationIlluminant1 = D65
-        (50728, "2I", 3, _rational(as_shot_neutral), True),       # AsShotNeutral
-        (50714, "H", 1, int(black), True),                        # BlackLevel
-        (50717, "H", 1, int(white), True),                        # WhiteLevel
-        (50730, "2i", 1, _srational([baseline_exposure], 100), True),  # BaselineExposure
-        (271, "s", 0, make, True),
-        (272, "s", 0, model, True),
-        (274, "H", 1, int(orientation), True),
-    ]
-    if iso:
-        extratags.append((34855, "H", 1, int(iso), True))
-    if exposure_time:
-        extratags.append((33434, "2I", 1, _rational([exposure_time]), True))
-    if fnumber:
-        extratags.append((33437, "2I", 1, _rational([fnumber]), True))
-    if focal_length:
-        extratags.append((37386, "2I", 1, _rational([focal_length]), True))
     dt = (capture_time or _dt.datetime.now()).strftime("%Y:%m:%d %H:%M:%S")
-    extratags.append((36867, "s", 0, dt, True))                   # DateTimeOriginal
-    extratags.append((306, "s", 0, dt, True))
+    meta: dict[int, tuple[int, object]] = {
+        271: (_ASCII, make), 272: (_ASCII, model), 274: (_SHORT, int(orientation)), 306: (_ASCII, dt),
+        36867: (_ASCII, dt),
+        50706: (_BYTE, (1, 4, 0, 0)), 50707: (_BYTE, (1, 1, 0, 0)),
+        50708: (_ASCII, unique_model or f"{make} {model}"),
+        50721: (_SRATIONAL, _srational(cm)), 50778: (_SHORT, 21),
+        50728: (_RATIONAL, _rational(as_shot_neutral)),
+        50730: (_SRATIONAL, _srational([baseline_exposure], 100)),
+    }
+    if iso:
+        meta[34855] = (_SHORT, min(int(iso), 65535))
+    if exposure_time:
+        meta[33434] = (_RATIONAL, _rational([exposure_time]))
+    if fnumber:
+        meta[33437] = (_RATIONAL, _rational([fnumber]))
+    if focal_length:
+        meta[37386] = (_RATIONAL, _rational([focal_length]))
     if xmp:
-        extratags.append((700, "B", len(xmp), xmp, True))           # XMLPacket (eingebettetes XMP)
+        meta[700] = (_BYTE, xmp)
+    raw_tags: dict[int, tuple[int, object]] = {50714: (_SHORT, int(black)), 50717: (_SHORT, int(white))}
     if cfa:
-        extratags += [
-            (33421, "H", 2, (2, 2), True),                        # CFARepeatPatternDim
-            (33422, "B", 4, (0, 1, 1, 2), True),                  # CFAPattern RGGB
-            (50710, "B", 3, (0, 1, 2), True),                     # CFAPlaneColor
-            (50711, "H", 1, 1, True),                             # CFALayout
-        ]
+        raw_tags.update({33421: (_SHORT, (2, 2)), 33422: (_BYTE, (0, 1, 1, 2)), 50710: (_BYTE, (0, 1, 2)),
+                         50711: (_SHORT, 1)})
         photometric = 32803
     else:
-        photometric = 34892                                       # LinearRaw
-    with tifffile.TiffWriter(path, bigtiff=False) as tw:
-        if preview is not None:
-            # IFD0: kleine Vorschau (NewSubFileType=1), Rohdaten im zweiten IFD
-            tw.write(np.ascontiguousarray(preview.astype(np.uint8)), photometric="rgb", subfiletype=1,
-                     extratags=extratags, metadata=None)
-            tw.write(data, photometric=photometric, subfiletype=0, metadata=None,
-                     extratags=[t for t in extratags if t[0] in (33421, 33422, 50710, 50711, 50714, 50717)])
-        else:
-            tw.write(data, photometric=photometric, subfiletype=0, extratags=extratags, metadata=None)
+        photometric = 34892                                        # LinearRaw
+    tb = _TiffBuilder()
+    raw_off = tb.add_data(raw.tobytes())
+    if preview is not None:
+        prev = np.ascontiguousarray(preview.astype(np.uint8))
+        prev_off = tb.add_data(prev.tobytes())
+        sub = tb.add_ifd({**_image_entries(raw, raw_off, photometric, 0), **raw_tags})
+        ifd0 = tb.add_ifd({**_image_entries(prev, prev_off, 2, 1), **meta, 330: (_LONG, sub)})
+    else:
+        ifd0 = tb.add_ifd({**_image_entries(raw, raw_off, photometric, 0), **raw_tags, **meta})
+    path.write_bytes(tb.finish(ifd0))
     return path
 
 

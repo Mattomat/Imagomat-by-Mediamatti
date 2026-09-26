@@ -202,7 +202,9 @@ class StyleModel:
                 return lgb.LGBMRegressor(n_estimators=250, learning_rate=0.05, num_leaves=15, min_child_samples=8,
                                          subsample=0.8, subsample_freq=1, colsample_bytree=0.8, reg_lambda=1.0,
                                          verbose=-1)
-        except ImportError:
+        except (ImportError, OSError):
+            # z. B. macOS ohne libomp: sklearn als Ersatz (etwas langsamer, gleiche Qualität)
+            log.warning("LightGBM nicht nutzbar, verwende scikit-learn (Tipp: brew install libomp)")
             from sklearn.ensemble import HistGradientBoostingRegressor
 
             def make():

@@ -19,7 +19,7 @@ if ! command -v brew >/dev/null; then
   echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
   exit 1
 fi
-for pkg in exiftool node uv; do
+for pkg in exiftool node uv libomp; do
   brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg" || echo "  Warnung: $pkg konnte nicht installiert werden"
 done
 xcode-select -p >/dev/null 2>&1 || { echo "Xcode-Kommandozeilentools fehlen: xcode-select --install"; exit 1; }

@@ -16,7 +16,6 @@ dependencies = [
   "scipy>=1.11",
   "lightgbm>=4.3",
   "lxml>=5",
-  "tifffile>=2024.1",
   "imagehash>=4.3",
   "fastapi>=0.110",
   "uvicorn[standard]>=0.29",
