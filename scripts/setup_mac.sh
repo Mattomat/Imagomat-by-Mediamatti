@@ -10,6 +10,10 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
 echo "==> Homebrew-Pakete"
+# Homebrew ist installiert, aber noch nicht im PATH (typisch direkt nach der Installation)
+if ! command -v brew >/dev/null && [ -x /opt/homebrew/bin/brew ]; then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+fi
 if ! command -v brew >/dev/null; then
   echo "Homebrew fehlt. Zuerst installieren:" >&2
   echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
