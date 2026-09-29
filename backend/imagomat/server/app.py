@@ -238,6 +238,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def submit_job(req: JobReq) -> dict[str, Any]:
         return {"job_id": jobs.submit(req.kind, req.shoot_id, **req.params)}
 
+    @app.post("/api/jobs/{job_id}/finish")
+    def finish_job(job_id: int) -> dict[str, Any]:
+        """Stil-Lernen jetzt abschliessen: mit allen bisher analysierten Bildern das Modell bauen."""
+        j = db.job(job_id)
+        if not j:
+            raise HTTPException(404, "Auftrag nicht gefunden")
+        if j["status"] == "running" and jobs.finish(job_id):
+            return {"job_id": job_id, "finishing": True}
+        if j["kind"] != "train_profile":
+            raise HTTPException(400, "Nur Stil-Lernen kann vorzeitig abgeschlossen werden")
+        jobs.cancel(job_id)
+        params = {**json.loads(j["params"] or "{}"), "cached_only": True}
+        return {"job_id": jobs.submit("train_profile", None, **params), "finishing": True}
+
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: int) -> dict[str, Any]:
         jobs.cancel(job_id)

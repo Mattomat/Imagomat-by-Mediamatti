@@ -85,9 +85,26 @@ def vectorize(feats: list[dict[str, float]]) -> np.ndarray:
 # Trainingsbilder
 # ---------------------------------------------------------------------------
 
-def _cache_key(path: Path) -> str:
+def _cache_key(path: Path, version: str = "v2") -> str:
     st = path.stat()
-    return hashlib.sha1(f"{path}|{st.st_size}|{st.st_mtime_ns}|v2".encode()).hexdigest()
+    return hashlib.sha1(f"{path}|{st.st_size}|{st.st_mtime_ns}|{version}".encode()).hexdigest()
+
+
+def cached_record(path: Path) -> dict[str, Any] | None:
+    """Schon berechnete Merkmale (auch aus älteren Versionen), ohne neu zu rechnen."""
+    path = Path(path)
+    try:
+        keys = [_cache_key(path, "v2"), _cache_key(path, "v1")]
+    except OSError:
+        return None
+    for key in keys:
+        cf = _cache_file(key)
+        if cf.exists():
+            try:
+                return json.loads(cf.read_text("utf-8"))
+            except json.JSONDecodeError:
+                continue
+    return None
 
 
 def _cache_file(key: str) -> Path:

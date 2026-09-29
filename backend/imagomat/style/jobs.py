@@ -18,7 +18,7 @@ from ..jobs import JobContext, job
 from ..lightroom.dialect import Dialect, learn_dialect
 from ..lightroom.xmp import read_xmp
 from .develop import ImageDevelop, develop_items
-from .features import image_record
+from .features import cached_record, image_record
 from .model import Record, StyleModel
 from .sources import analysis_source, TrainingSample, filter_samples, from_catalog, from_folder, load_preset
 
@@ -57,7 +57,8 @@ def load_samples(profile: str) -> list[Record]:
 @job("train_profile")
 def train_profile(ctx: JobContext, name: str, catalog: str | None = None, folders: list[str] | None = None,
                   presets: list[str] | None = None, base_preset: str | None = None, min_rating: int = 0,
-                  only_picked: bool = False, append: bool = False, learn_people: bool = True) -> None:
+                  only_picked: bool = False, append: bool = False, learn_people: bool = True,
+                  cached_only: bool = False) -> None:
     samples: list[TrainingSample] = []
     labels: list[str] = []
     ctx.progress(0, "Trainingsdaten sammeln")
@@ -77,8 +78,14 @@ def train_profile(ctx: JobContext, name: str, catalog: str | None = None, folder
     recs: list[Record] = []
     for i, s in enumerate(good):
         ctx.check()
+        if ctx.finish_requested:
+            cached_only = True          # "Jetzt fertigstellen": nur noch bereits berechnete Bilder nutzen
         try:
-            r = image_record(analysis_source(s.path))
+            src = analysis_source(s.path)
+            r = cached_record(src) if cached_only else image_record(src)
+            if r is None:
+                ctx.progress(i + 1)
+                continue
             a = {**r["analysis"], "orientation": r.get("orientation") or 1}
             recs.append(Record(a, r["exif"], np.asarray(r["embedding"], np.float32), s.crs, s.weight, str(s.path)))
         except Exception as e:  # noqa: BLE001 - einzelne defekte Bilder überspringen

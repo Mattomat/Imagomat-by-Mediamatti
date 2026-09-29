@@ -84,6 +84,11 @@ def test_train_from_xmp_folder_and_develop(tmp_path: Path):
     assert j["status"] == "done", j["error"]
     model = StyleModel.load("Test")
     assert model.n == 48
+    # "Jetzt fertigstellen": nur bereits berechnete Bilder, ohne neu zu rechnen
+    j = jm.run_sync(db.create_job("train_profile", None, {"name": "Schnell", "folders": [str(train)],
+                                                         "cached_only": True, "learn_people": False}))
+    assert j["status"] == "done", j["error"]
+    assert StyleModel.load("Schnell").n == 48
     assert model.templates and model.templates[0].sig.startswith("image:1")
     d = Dialect.load()
     assert d.process_version == "15.4" and d.denoise_amount_key == "EnhanceDenoiseLumaAmount"

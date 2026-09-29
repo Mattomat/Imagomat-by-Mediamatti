@@ -41,6 +41,7 @@ class JobContext:
     job_id: int
     listeners: list[Callable[[dict[str, Any]], None]] = field(default_factory=list)
     _cancel: threading.Event = field(default_factory=threading.Event)
+    _finish: threading.Event = field(default_factory=threading.Event)
     _progress: int = 0
     _total: int = 0
 
@@ -51,6 +52,11 @@ class JobContext:
     def check(self) -> None:
         if self._cancel.is_set():
             raise Cancelled()
+
+    @property
+    def finish_requested(self) -> bool:
+        """"Jetzt fertigstellen": langlaufende Jobs brechen die Sammelphase ab und nutzen das Bisherige."""
+        return self._finish.is_set()
 
     def set_total(self, total: int) -> None:
         self._total = total
@@ -146,6 +152,14 @@ class JobManager:
                     if job_id in q:
                         q.remove(job_id)
             self.db.update_job(job_id, status="cancelled")
+
+    def finish(self, job_id: int) -> bool:
+        """Laufenden Job bitten, mit dem bisher Gesammelten abzuschliessen. False, wenn er nicht läuft."""
+        ctx = self._contexts.get(job_id)
+        if ctx is None:
+            return False
+        ctx._finish.set()
+        return True
 
     def run_sync(self, job_id: int) -> dict[str, Any] | None:
         """Führt einen Job im aufrufenden Thread aus (CLI, Tests)."""

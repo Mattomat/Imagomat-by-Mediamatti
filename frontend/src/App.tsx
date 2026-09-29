@@ -101,6 +101,14 @@ export default function App() {
             <div key={j.id} className="act">
               <div className="act-msg">{j.message || "Arbeite …"}</div>
               <div className="bar"><div style={{ width: `${j.total ? Math.round((100 * j.progress) / j.total) : 5}%` }} /></div>
+              {j.kind === "train_profile" && (
+                <button className="link small" title="Mit den bisher analysierten Bildern den Stil jetzt erstellen"
+                  onClick={async () => {
+                    await api.post(`/api/jobs/${j.id}/finish`, {});
+                    toast("Stil wird mit den bisher analysierten Bildern fertiggestellt");
+                    refreshJobs();
+                  }}>Jetzt fertigstellen</button>
+              )}
             </div>
           ))}
           {running.length === 0 && failed && (
