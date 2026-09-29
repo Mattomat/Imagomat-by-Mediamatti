@@ -35,10 +35,15 @@ REASONS_DE = {
     "duplikat": "Duplikat",
     "serie": "Nicht das beste Bild der Serie",
     "strenge": "Unter der Auswahlgrenze",
+    "kein_moment": "Kein Action-Moment",
+    "unlesbar": "Datei nicht lesbar",
+    "szene": "Nicht das beste Bild der Spielszene",
 }
 
-FEATURE_NAMES = ["sharp", "motion", "exposure", "eyes_open", "yaw", "face_size", "aesthetic", "subject_size",
-                 "clip_hi", "clip_lo", "cut", "has_face"]
+LEGACY_FEATURES = ["sharp", "motion", "exposure", "eyes_open", "yaw", "face_size", "aesthetic", "subject_size",
+                   "clip_hi", "clip_lo", "cut", "has_face"]
+FEATURE_NAMES = LEGACY_FEATURES + ["action"]
+SPORT_SCENES = ("sport_day", "sport_floodlight", "sport_indoor", "concert_stage", "concert_club")
 
 
 @dataclass
@@ -102,6 +107,18 @@ def build_features(items: list[CullItem]) -> None:
             "has_face": float(bool(mf)),
             "median": float(a.get("median", 0.4)),
         }
+    # Action-Moment: innerhalb des Shoots rangnormiert (robust gegen unterschiedliche Quellen)
+    has_action = [it for it in items if it.a.get("action") is not None]
+    if has_action:
+        ar = _rank([float(it.a["action"]) for it in has_action])
+        for it, r in zip(has_action, ar):
+            it.feats["action"] = float(0.6 * r + 0.4 * float(it.a["action"]))
+            it.feats["has_action"] = 1.0
+    for it in items:
+        it.feats.setdefault("action", 0.5)
+        it.feats.setdefault("has_action", 0.0)
+        sc = it.a.get("scene") or {}
+        it.feats["sport"] = float(sum(sc.get(k, 0.0) for k in SPORT_SCENES)) if sc else 0.5
     # Ästhetik-Ersatz, wenn kein Modell: Motivgrösse + Schärfe + Belichtung
     for it in items:
         if np.isnan(it.feats["aesthetic"]):
@@ -166,9 +183,40 @@ def _weaker_reason(it: CullItem, best: CullItem) -> str | None:
     return None
 
 
-def select(items: list[CullItem], cs: CullingSettings) -> None:
+def action_weight(items: list[CullItem], cs: CullingSettings) -> float:
+    """Wie stark Action-Momente zählen: nur bei Sport/Konzert, im Highlight-Modus stärker."""
+    if not items or not any(it.feats.get("has_action") for it in items):
+        return 0.0
+    base = cs.highlights_action_weight if cs.highlights else cs.action_weight
+    sport = float(np.median([it.feats.get("sport", 0.5) for it in items]))
+    return float(base * min(1.0, max(0.0, (sport - 0.15) / 0.35)))
+
+
+def detect_scenes(items: list[CullItem], cs: CullingSettings, max_len: float = 15.0) -> None:
+    """Highlight-Modus: Serien zu Spielszenen zusammenfassen (kurze Pausen, max. 15 s)."""
+    sid = 0
+    start = prev_t = 0.0
+    prev_series: int | None = None
+    for it in items:
+        if prev_series is None:
+            new = True
+        elif it.series == prev_series:
+            new = False  # eine Serie wird nie geteilt
+        else:
+            new = it.t - prev_t > cs.moment_gap_seconds or it.t - start > max_len
+        if new:
+            sid += 1
+            start = it.t
+        prev_t, prev_series = it.t, it.series
+        it.series = sid
+
+
+def select(items: list[CullItem], cs: CullingSettings, w_action: float = 0.0) -> None:
     n = len(items)
-    target = max(1, int(round(cs.keep_ratio * n)))
+    ratio = min(cs.keep_ratio, cs.highlights_ratio) if cs.highlights else cs.keep_ratio
+    target = max(1, int(round(ratio * n)))
+    if cs.max_keep:
+        target = max(1, min(target, int(cs.max_keep)))
     by_series: dict[int, list[CullItem]] = {}
     for it in items:
         by_series.setdefault(it.series, []).append(it)
@@ -183,6 +231,9 @@ def select(items: list[CullItem], cs: CullingSettings) -> None:
                 it.best = True
                 kept.append(it)
                 continue
+            if cs.highlights:
+                it.reasons.append(_weaker_reason(it, kept[0]) or "szene")
+                continue
             dup = any((it.emb is not None and k.emb is not None and float(it.emb @ k.emb) > cs.duplicate_similarity)
                       or _phash_dist(it.phash, k.phash) <= 6 for k in kept)
             if dup or it.score < kept[0].score * 0.9:
@@ -190,6 +241,13 @@ def select(items: list[CullItem], cs: CullingSettings) -> None:
                 continue
             kept.append(it)
         candidates += kept
+    if cs.highlights and w_action > 0.1:
+        # Nur echte Momente: Action deutlich über dem Shoot-Durchschnitt
+        moment = [it for it in candidates if it.feats.get("action", 0.5) >= 0.55]
+        for it in candidates:
+            if it not in moment:
+                it.reasons.append("kein_moment")
+        candidates = moment
     # Serien-Beste zuerst, dann nach Score
     candidates.sort(key=lambda x: (-(x.score + (0.05 if x.best else 0.0))))
     for it in candidates[:target]:
@@ -231,26 +289,44 @@ def load_items(db: Database, shoot_id: int) -> list[CullItem]:
 
 def cull(items: list[CullItem], cs: CullingSettings, model: Any | None = None) -> list[CullItem]:
     build_features(items)
+    w = action_weight(items, cs)
     for it in items:
-        it.hard = hard_reasons(it.feats, cs)
+        it.hard = ["unlesbar"] if it.a.get("read_error") or "sharpness" not in it.a else hard_reasons(it.feats, cs)
         if model is not None:
-            it.score = float(model.predict(it.feats))
+            tech = float(model.predict(it.feats))
         else:
-            it.score = heuristic_score(it.feats, cs.weights)
+            tech = heuristic_score(it.feats, cs.weights)
+        it.feats["technical"] = tech
+        it.score = (1.0 - w) * tech + w * it.feats["action"]
     detect_series(items, cs)
-    select(items, cs)
+    if cs.highlights:
+        detect_scenes(items, cs)
+    select(items, cs, w)
     return items
 
 
 @job("cull")
-def cull_shoot(ctx: JobContext, shoot_id: int, keep_ratio: float | None = None) -> None:
+def cull_shoot(ctx: JobContext, shoot_id: int, keep_ratio: float | None = None, highlights: bool | None = None,
+               max_keep: int | None = None) -> None:
     from .calibrate import CullingModel
 
     db = ctx.db
     s = load_settings()
     cs = s.culling
-    if keep_ratio is not None:
-        cs.keep_ratio = float(keep_ratio)
+    shoot_settings = db.shoot_settings(shoot_id)
+    # Einstellungen pro Shoot merken, damit ein erneutes Culling dieselbe Auswahl-Art nutzt
+    culling_opts = {**shoot_settings.get("culling", {}),
+                    **{k: v for k, v in (("keep_ratio", keep_ratio), ("highlights", highlights),
+                                         ("max_keep", max_keep)) if v is not None}}
+    if max_keep == 0:
+        culling_opts.pop("max_keep", None)
+    if culling_opts != shoot_settings.get("culling", {}):
+        db.set_shoot_settings(shoot_id, {**shoot_settings, "culling": culling_opts})
+    if culling_opts.get("keep_ratio") is not None:
+        cs.keep_ratio = float(culling_opts["keep_ratio"])
+    cs.highlights = bool(culling_opts.get("highlights", cs.highlights))
+    if culling_opts.get("max_keep"):
+        cs.max_keep = int(culling_opts["max_keep"])
     items = load_items(db, shoot_id)
     ctx.set_total(len(items))
     shoot = db.one("SELECT profile FROM shoots WHERE id=?", (shoot_id,))

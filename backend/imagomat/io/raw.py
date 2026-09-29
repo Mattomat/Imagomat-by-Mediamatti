@@ -9,6 +9,11 @@
 
 from __future__ import annotations
 
+import logging
+import shutil
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,6 +25,7 @@ from PIL import Image, ImageOps
 from ..config import RAW_EXTENSIONS
 from .color import SRGB_TO_XYZ, multipliers_to_temp_tint
 
+log = logging.getLogger(__name__)
 _FLIP_TO_EXIF = {0: 1, 3: 3, 5: 8, 6: 6}
 
 
@@ -106,6 +112,78 @@ def load_preview(path: str | Path, max_side: int = 2048) -> tuple[np.ndarray, in
             im = ImageOps.exif_transpose(im).convert("RGB")
             im.thumbnail((max_side, max_side))
             return np.asarray(im), orientation
+    try:
+        img, orientation = _libraw_preview(path)
+    except (rawpy.LibRawError, OSError, ValueError) as e:
+        log.info("LibRaw kann %s nicht öffnen (%s), nutze Ersatz", path.name, e)
+        img, orientation = fallback_preview(path, max_side, str(e))
+    h, w = img.shape[:2]
+    scale = max_side / max(h, w)
+    if scale < 1:
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    return np.ascontiguousarray(img), orientation
+
+
+class RawReadError(RuntimeError):
+    """Datei konnte auf keinem Weg gelesen werden."""
+
+
+def fallback_preview(path: Path, max_side: int = 2048, reason: str = "") -> tuple[np.ndarray, int]:
+    """Ersatz, wenn LibRaw eine Datei nicht kennt (z. B. neue Kamera, JPEG-XL-DNG aus Lightroom):
+    1. eingebettete JPEG-Vorschau direkt aus der Datei,
+    2. macOS: Apples RAW-Engine über ``sips``,
+    3. ExifTool (PreviewImage/JpgFromRaw)."""
+    from .tiffmeta import embedded_jpegs
+
+    blobs, orientation = embedded_jpegs(path)
+    for b in blobs:
+        arr = cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR)
+        if arr is not None and max(arr.shape[:2]) >= 640:
+            img = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+            return orient(img, orientation), orientation
+    img = _sips_preview(path, max_side)
+    if img is not None:
+        return img, orientation      # sips liefert bereits gedreht
+    img = _exiftool_preview(path)
+    if img is not None:
+        return orient(img, orientation), orientation
+    raise RawReadError(f"{path.name}: Datei kann nicht gelesen werden ({reason or 'unbekanntes Format'})")
+
+
+def _sips_preview(path: Path, max_side: int) -> np.ndarray | None:
+    if sys.platform != "darwin" or not shutil.which("sips"):
+        return None
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "p.jpg"
+        try:
+            subprocess.run(["sips", "-s", "format", "jpeg", "-Z", str(max_side), str(path), "--out", str(out)],
+                           capture_output=True, timeout=60, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if not out.exists():
+            return None
+        arr = cv2.imread(str(out), cv2.IMREAD_COLOR)
+    return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB) if arr is not None else None
+
+
+def _exiftool_preview(path: Path) -> np.ndarray | None:
+    exe = shutil.which("exiftool") or next((p for p in ("/opt/homebrew/bin/exiftool", "/usr/local/bin/exiftool")
+                                            if Path(p).exists()), None)
+    if not exe:
+        return None
+    for tag in ("-JpgFromRaw", "-PreviewImage"):
+        try:
+            r = subprocess.run([exe, "-b", tag, str(path)], capture_output=True, timeout=60, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if len(r.stdout) > 1000:
+            arr = cv2.imdecode(np.frombuffer(r.stdout, np.uint8), cv2.IMREAD_COLOR)
+            if arr is not None:
+                return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+    return None
+
+
+def _libraw_preview(path: Path) -> tuple[np.ndarray, int]:
     with rawpy.imread(str(path)) as r:
         orientation = _FLIP_TO_EXIF.get(r.sizes.flip, 1)
         img = None
@@ -124,11 +202,7 @@ def load_preview(path: str | Path, max_side: int = 2048) -> tuple[np.ndarray, in
             img = None
         if img is None:
             img = r.postprocess(half_size=True, use_camera_wb=True, output_bps=8, no_auto_bright=False)
-    h, w = img.shape[:2]
-    scale = max_side / max(h, w)
-    if scale < 1:
-        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-    return np.ascontiguousarray(img), orientation
+    return img, orientation
 
 
 def _binned(r: rawpy.RawPy) -> np.ndarray:
@@ -179,6 +253,22 @@ def decode(path: str | Path, half_size: bool = True, oriented: bool = True) -> t
                             output_bps=16, user_flip=0, highlight_mode=rawpy.HighlightMode.Clip)
     lin = rgb.astype(np.float32) / 65535.0
     return (orient(lin, info.orientation) if oriented else lin), info
+
+
+def decode_any(path: str | Path, half_size: bool = True) -> tuple[np.ndarray, RawInfo]:
+    """Wie ``decode``, fällt aber auf die (linearisierte) Vorschau zurück, wenn LibRaw die Datei
+    nicht öffnen kann. Dann ist die Vorschau bereits weissabgeglichen und gedreht (Näherung)."""
+    try:
+        return decode(path, half_size=half_size)
+    except (rawpy.LibRawError, OSError, ValueError) as e:
+        log.info("Rendering über Vorschau für %s (%s)", Path(path).name, e)
+        img, _ = load_preview(path, 2048 if half_size else 8192)
+        x = img.astype(np.float32) / 255.0
+        lin = np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4).astype(np.float32)
+        info = RawInfo(width=img.shape[1], height=img.shape[0], orientation=1,
+                       xyz_to_cam=np.linalg.inv(SRGB_TO_XYZ), camera_wb=np.ones(3), black=0.0, white=1.0,
+                       extra={"from_preview": True})
+        return lin, info
 
 
 def estimate_noise(path: str | Path) -> dict[str, float]:

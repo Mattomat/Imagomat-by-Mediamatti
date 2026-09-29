@@ -45,6 +45,9 @@ def _run(db: Database, kind: str, shoot_id: int | None = None, **params) -> dict
 
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    from .logs import setup_logging
+
+    setup_logging()
     ap = argparse.ArgumentParser(prog="imagomat", description="Lokale AI-Foto-Workflow-App")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -57,6 +60,8 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--profile")
     r.add_argument("--preset")
     r.add_argument("--keep", type=float)
+    r.add_argument("--highlights", action="store_true", help="Nur die besten Momente (ein Bild pro Spielszene)")
+    r.add_argument("--max", type=int, help="Höchstens so viele Bilder behalten")
     r.add_argument("--teams", nargs="*", default=[])
     r.add_argument("--export")
     r.add_argument("--formats", nargs="*", default=["xmp"])
@@ -105,12 +110,12 @@ def main(argv: list[str] | None = None) -> None:
     if a.cmd == "run":
         sid = import_folder(db, Path(a.folder), a.name, a.profile)
         if a.teams:
-            with db.tx() as cx:
-                cx.execute("UPDATE shoots SET settings=? WHERE id=?", (json.dumps({"teams": a.teams}), sid))
+            db.update_shoot_settings(sid, teams=a.teams)
         export = None
         if a.export:
             export = {"target": a.export, "formats": a.formats, "copy_mode": a.copy_mode, "template": a.template}
-        _run(db, "pipeline", sid, keep_ratio=a.keep, profile=a.profile, preset=a.preset, export=export)
+        _run(db, "pipeline", sid, keep_ratio=a.keep, profile=a.profile, preset=a.preset, export=export,
+             highlights=a.highlights or None, max_keep=a.max)
         print(f"Shoot {sid} verarbeitet." + (f" Export: {a.export}" if a.export else ""))
     elif a.cmd == "train":
         _run(db, "train_profile", None, name=a.name, catalog=a.catalog, folders=a.folder, presets=a.preset_file,

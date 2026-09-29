@@ -163,7 +163,7 @@ class JobManager:
         except Cancelled:
             self.db.update_job(job_id, status="cancelled", message="abgebrochen")
         except Exception as e:  # noqa: BLE001
-            log.exception("job %s failed", job_id)
+            log.exception("Job %s (%s) fehlgeschlagen", job_id, j["kind"])
             self.db.update_job(job_id, status="failed", error=f"{e}\n{traceback.format_exc()}")
         finally:
             self._contexts.pop(job_id, None)

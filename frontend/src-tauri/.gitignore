@@ -1,1 +1,3 @@
 bin/uv
+target/
+Cargo.lock

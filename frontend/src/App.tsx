@@ -104,8 +104,8 @@ export default function App() {
             </div>
           ))}
           {running.length === 0 && failed && (
-            <div className="act error" title={failed.error ?? ""} onClick={() => toast(failed.error?.split("\n")[0] ?? "Fehler", "error")}>
-              Letzte Aufgabe fehlgeschlagen – Details
+            <div className="act error" title={failed.error ?? ""} onClick={() => { toast(failed.error?.split("\n")[0] ?? "Fehler", "error"); setPage({ name: "settings" } as Page); }}>
+              Letzte Aufgabe fehlgeschlagen – Protokoll
             </div>
           )}
         </div>

@@ -96,3 +96,84 @@ def read_tiff_exif(path: str | Path, max_bytes: int = 4 << 20) -> dict[str, Any]
     out: dict[str, Any] = {}
     _parse_ifd(tiff, bo, ifd0, out)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Eingebettete JPEG-Vorschauen (Ersatz, wenn LibRaw eine Datei nicht öffnen kann)
+# ---------------------------------------------------------------------------
+
+_CFA_OR_LINEAR = (32803, 34892)   # Photometric: Bayer-Rohdaten bzw. LinearRaw (keine Vorschau)
+
+
+def _ifd_entries(data, bo: str, off: int) -> tuple[dict[int, Any], int]:
+    """Einträge eines IFD (Tag -> Wert) und Offset des nächsten IFD."""
+    if off <= 0 or off + 2 > len(data):
+        return {}, 0
+    (n,) = struct.unpack(bo + "H", data[off:off + 2])
+    if n > 1000:
+        return {}, 0
+    out: dict[int, Any] = {}
+    for i in range(n):
+        e = off + 2 + 12 * i
+        if e + 12 > len(data):
+            break
+        tag, typ, count = struct.unpack(bo + "HHI", data[e:e + 8])
+        if tag in (0x0103, 0x0106, 0x0111, 0x0117, 0x0201, 0x0202, 0x014A, 0x0112, 0x00FE):
+            try:
+                out[tag] = _read_value(data, bo, typ, count, data[e + 8:e + 12])
+            except struct.error:
+                pass
+    nxt_at = off + 2 + 12 * n
+    nxt = struct.unpack(bo + "I", data[nxt_at:nxt_at + 4])[0] if nxt_at + 4 <= len(data) else 0
+    return out, nxt
+
+
+def embedded_jpegs(path: str | Path) -> tuple[list[bytes], int]:
+    """Alle eingebetteten JPEGs (grösste zuerst) und die EXIF-Orientierung aus IFD0."""
+    import mmap
+
+    try:
+        f = open(path, "rb")
+    except OSError:
+        return [], 1
+    with f:
+        try:
+            data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        except (ValueError, OSError):
+            return [], 1
+        with data:
+            head = data[:8]
+            if head[:2] == b"II":
+                bo = "<"
+            elif head[:2] == b"MM":
+                bo = ">"
+            else:
+                return [], 1
+            ifd0 = struct.unpack(bo + "I", head[4:8])[0]
+            todo, seen, spans = [ifd0], set(), []
+            orientation = 1
+            while todo and len(seen) < 32:
+                off = todo.pop()
+                if off in seen:
+                    continue
+                seen.add(off)
+                e, nxt = _ifd_entries(data, bo, off)
+                if off == ifd0:
+                    orientation = int(e.get(0x0112) or 1)
+                if nxt:
+                    todo.append(nxt)
+                subs = e.get(0x014A)
+                if subs:
+                    todo += list(subs) if isinstance(subs, tuple) else [subs]
+                if e.get(0x0201) and e.get(0x0202):
+                    spans.append((int(e[0x0201]), int(e[0x0202])))
+                elif e.get(0x0103) in (6, 7) and e.get(0x0106) not in _CFA_OR_LINEAR:
+                    so, sc = e.get(0x0111), e.get(0x0117)
+                    if isinstance(so, int) and isinstance(sc, int):
+                        spans.append((so, sc))
+            blobs = []
+            for so, sc in spans:
+                if 0 < so < len(data) and sc > 1000 and data[so:so + 2] == b"\xff\xd8":
+                    blobs.append(bytes(data[so:so + sc]))
+    blobs.sort(key=len, reverse=True)
+    return blobs, orientation

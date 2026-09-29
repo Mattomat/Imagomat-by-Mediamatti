@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AppCtx } from "../App";
 import { api } from "../api";
+import LogPanel from "../components/LogPanel";
 import { More, Segmented } from "../ui";
 
 type S = {
@@ -58,6 +59,8 @@ export default function SettingsView({ ctx }: { ctx: AppCtx }) {
           <input type="checkbox" className="switch" checked={s.develop.shoot_consistency > 0} onChange={(e) => set("develop", { shoot_consistency: e.target.checked ? 0.6 : 0 })} />
         </div>
       </div>
+
+      <LogPanel toast={ctx.toast} />
 
       <More label="Erweitert">
         <div className="card">

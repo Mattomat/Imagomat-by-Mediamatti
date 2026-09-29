@@ -238,6 +238,20 @@ class Database:
         return self.query("SELECT * FROM images WHERE shoot_id=? ORDER BY capture_time, filename", (shoot_id,))
 
     # ---- Analyse ---------------------------------------------------------
+    def shoot_settings(self, shoot_id: int) -> dict[str, Any]:
+        row = self.one("SELECT settings FROM shoots WHERE id=?", (shoot_id,))
+        try:
+            return json.loads(row["settings"] or "{}") if row else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def set_shoot_settings(self, shoot_id: int, settings: dict[str, Any]) -> None:
+        with self.tx() as c:
+            c.execute("UPDATE shoots SET settings=? WHERE id=?", (json.dumps(settings, ensure_ascii=False), shoot_id))
+
+    def update_shoot_settings(self, shoot_id: int, **values: Any) -> None:
+        self.set_shoot_settings(shoot_id, {**self.shoot_settings(shoot_id), **values})
+
     def get_analysis(self, image_id: int) -> dict[str, Any]:
         row = self.one("SELECT data FROM analysis WHERE image_id=?", (image_id,))
         return json.loads(row["data"]) if row else {}

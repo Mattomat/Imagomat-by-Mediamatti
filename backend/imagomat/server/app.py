@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from .. import pipeline  # noqa: F401  (registriert alle Jobs)
 from ..analysis import import_folder, load_cached_preview, load_masks
 from ..config import Settings, cache_dir, load_settings, save_settings
 from ..culling.engine import REASONS_DE
+from ..vision.action import MOMENTS_DE
 from ..db import Database
 from ..io import raw as raw_io
 from ..jobs import JobManager
@@ -51,6 +53,8 @@ class ImportReq(BaseModel):
     preset: str | None = None
     teams: list[str] = []
     keep_ratio: float | None = None
+    highlights: bool | None = None
+    max_keep: int | None = None
     run: bool = True
 
 
@@ -159,8 +163,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
         from ..vision.faces import get_backend
         from ..vision.models import torch_device
 
+        # Das grosse CLIP-Modell wird erst bei der ersten Analyse geladen, nicht hier (sonst hängt der Start)
+        embedder = get_embedder().name if get_embedder.cache_info().currsize else "lazy"
         return {"version": __version__, "device": torch_device(), "ocr": ocr.available(),
-                "face_backend": get_backend().name, "embedder": get_embedder().name}
+                "face_backend": get_backend().name, "embedder": embedder}
 
     @app.get("/api/settings")
     def get_settings() -> dict[str, Any]:
@@ -171,6 +177,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
         s = Settings.from_dict({**load_settings().to_dict(), **body})
         save_settings(s)
         return s.to_dict()
+
+    @app.get("/api/logs")
+    def logs() -> dict[str, Any]:
+        """Protokoll für Einstellungen › Protokoll (zum Kopieren bei Problemen)."""
+        from ..logs import log_file, logs_dir, tail
+
+        failed = [dict(r) for r in db.query(
+            "SELECT id, kind, shoot_id, error, message, updated_at FROM jobs WHERE status='failed' "
+            "ORDER BY updated_at DESC LIMIT 10")]
+        for f in failed:
+            f["error"] = (f["error"] or "")[-4000:]
+        return {"dir": str(logs_dir()), "version": __version__, "platform": sys.platform,
+                "failed_jobs": failed, "log": tail(log_file(), 400),
+                "setup": tail(logs_dir() / "setup.log", 60), "backend": tail(logs_dir() / "backend.log", 80)}
 
     @app.get("/api/licenses")
     def licenses() -> list[dict[str, Any]]:
@@ -263,10 +283,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(400, f"Ordner nicht gefunden: {folder}")
         sid = import_folder(db, folder, req.name, req.profile)
         if req.teams:
-            with db.tx() as c:
-                c.execute("UPDATE shoots SET settings=? WHERE id=?", (json.dumps({"teams": req.teams}), sid))
+            db.update_shoot_settings(sid, teams=req.teams)
         job_id = jobs.submit("pipeline", sid, keep_ratio=req.keep_ratio, profile=req.profile,
-                             preset=req.preset) if req.run else None
+                             preset=req.preset, highlights=req.highlights,
+                             max_keep=req.max_keep) if req.run else None
         return {"shoot_id": sid, "job_id": job_id}
 
     @app.patch("/api/shoots/{sid}")
@@ -276,8 +296,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 c.execute("UPDATE shoots SET name=? WHERE id=?", (req.name, sid))
             if req.profile is not None:
                 c.execute("UPDATE shoots SET profile=? WHERE id=?", (req.profile or None, sid))
-            if req.teams is not None:
-                c.execute("UPDATE shoots SET settings=? WHERE id=?", (json.dumps({"teams": req.teams}), sid))
+        if req.teams is not None:
+            db.update_shoot_settings(sid, teams=req.teams)
         return dict(db.one("SELECT * FROM shoots WHERE id=?", (sid,)))
 
     @app.post("/api/shoots/{sid}/run/{kind}")
@@ -312,6 +332,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "manual": bool(r["manual"]), "confidence": r["confidence"], "denoise": r["denoise"],
                 "people": people.get(r["id"], []), "notes": a.get("develop_notes", []), "preset": a.get("preset"),
                 "faces": a.get("face_count", 0),
+                "moment": MOMENTS_DE.get(a.get("moment") or ""), "action": a.get("action"),
             })
         return out
 
@@ -370,7 +391,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             z = np.load(lin_cache)
             lin, xyz, wb, orient = z["lin"].astype(np.float32), z["xyz"], z["wb"], int(z["orient"])
         else:
-            lin, info = raw_io.decode(path, half_size=True)
+            lin, info = raw_io.decode_any(path, half_size=True)
             h, w = lin.shape[:2]
             s = 2048 / max(h, w)
             if s < 1:
@@ -550,4 +571,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 def main(host: str = "127.0.0.1", port: int = 8765) -> None:
     import uvicorn
 
+    from ..logs import setup_logging
+
+    setup_logging()
     uvicorn.run(create_app(), host=host, port=port, log_level="info")

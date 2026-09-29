@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppCtx } from "../App";
 import { api, ImageItem, pickFolder, reveal, Shoot, waitForJob } from "../api";
+import { SELECTION_HINT, SELECTION_PARAMS, SELECTIONS, Selection, selectionFromSettings } from "../selection";
 import { Modal, More, Progress } from "../ui";
 
 type Tab = "keep" | "reject" | "check";
@@ -51,6 +52,20 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     return i.decision === "keep" && i.confidence !== null && i.confidence < 0.35;
   }), [items, tab, person]);
   const cur = shown[Math.min(sel, Math.max(0, shown.length - 1))];
+
+  const selection = selectionFromSettings(shoot?.settings);
+  const recull = async (s: Selection) => {
+    try {
+      const r = await api.post<{ job_id: number }>(`/api/shoots/${id}/run/cull`, SELECTION_PARAMS[s]);
+      ctx.refreshJobs();
+      await waitForJob(r.job_id);
+      load();
+      setSel(0);
+      ctx.toast(`Auswahl: ${SELECTIONS.find(([k]) => k === s)?.[1]}`);
+    } catch (e) {
+      ctx.toast(String((e as Error).message), "error");
+    }
+  };
 
   const patch = async (i: ImageItem, body: Partial<Pick<ImageItem, "decision" | "rating">>) => {
     await api.patch(`/api/images/${i.id}/culling`, body);
@@ -117,6 +132,10 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
             <button className={tab === "check" ? "on" : ""} onClick={() => { setTab("check"); setSel(0); }}>Prüfen <b>{counts.check}</b></button>
           )}
         </div>
+        <select className="person-filter" value={selection} disabled={running} title={SELECTION_HINT[selection]}
+          onChange={(e) => recull(e.target.value as Selection)}>
+          {SELECTIONS.map(([k, label]) => <option key={k} value={k}>Auswahl: {label}</option>)}
+        </select>
         {people.length > 0 && (
           <select className="person-filter" value={person} onChange={(e) => { setPerson(e.target.value); setSel(0); }}>
             <option value="">Alle Personen</option>
@@ -138,6 +157,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
                   ? <span className="stars">{"★".repeat(i.rating ?? 0)}</span>
                   : <span className="why">{i.reasons[0] ?? "aussortiert"}</span>}
                 {i.best && i.decision === "keep" && <span className="tag">Top</span>}
+                {i.moment && i.decision === "keep" && <span className="tag moment">{i.moment}</span>}
                 {i.people.length > 0 && <span className="who">{i.people.join(", ")}</span>}
               </div>
             </div>
@@ -153,6 +173,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
           <div className="loupe-bar">
             <span className="fname">{cur.filename}</span>
             {cur.decision === "reject" && <span className="why">Aussortiert: {cur.reasons.join(", ")}</span>}
+            {cur.moment && <span className="tag moment">{cur.moment}</span>}
             {cur.people.length > 0 && <span className="who">{cur.people.join(", ")}</span>}
             <span className="spacer" />
             <button onClick={() => patch(cur, { decision: "keep" })} className={cur.decision === "keep" ? "on" : ""}>Behalten</button>

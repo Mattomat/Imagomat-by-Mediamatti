@@ -76,6 +76,8 @@ export interface ImageItem {
   people: string[];
   notes: string[];
   preset: string | null;
+  moment: string | null;
+  action: number | null;
 }
 
 export interface Preset {

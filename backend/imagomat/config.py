@@ -65,6 +65,14 @@ class CullingSettings:
     label_denoise: str | None = "Lila"
     label_review: str | None = "Gelb"         # unsichere Vorhersagen
     eyes_closed_threshold: float = 0.22       # Eye-Aspect-Ratio
+    # Action-Momente (Zweikampf, Schuss, Jubel ...): Anteil am Score bei Sport/Konzert, 0 = nur Technik
+    action_weight: float = 0.35
+    # "Nur Highlights": sehr streng, ein Bild pro Spielszene, nur echte Action-Momente
+    highlights: bool = False
+    highlights_ratio: float = 0.05
+    highlights_action_weight: float = 0.65
+    moment_gap_seconds: float = 4.0     # Bilder innerhalb dieses Abstands = dieselbe Spielszene
+    max_keep: int | None = None         # höchstens so viele Bilder behalten (None = nur Prozent)
     weights: dict[str, float] = field(default_factory=lambda: {
         "sharpness": 0.30, "face_quality": 0.25, "exposure": 0.15, "aesthetic": 0.20, "composition": 0.10,
     })
@@ -118,6 +126,7 @@ class Settings:
     embedding_backend: str = "auto"     # auto | clip | dinov2 | classical
     segmentation_backend: str = "auto"  # auto | birefnet | classical
     ocr_backend: str = "auto"           # auto | vision | easyocr | none
+    action_backend: str = "auto"        # auto (Pose nur mit GPU) | pose | clip | none
     workers: int = max(2, (os.cpu_count() or 4) - 2)
     default_profile: str | None = None
 

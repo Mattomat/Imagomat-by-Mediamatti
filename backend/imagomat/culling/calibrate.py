@@ -9,13 +9,13 @@ Beispielen und erklärbar (Gewicht pro Merkmal).
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from ..config import profiles_dir
-from .engine import FEATURE_NAMES, CullItem
+from .engine import FEATURE_NAMES, LEGACY_FEATURES, CullItem
 
 
 @dataclass
@@ -24,9 +24,10 @@ class CullingModel:
     bias: float
     mean: list[float]
     std: list[float]
+    features: list[str] = field(default_factory=lambda: list(LEGACY_FEATURES))  # ältere Modelle ohne "action"
 
     def predict(self, feats: dict[str, float]) -> float:
-        x = (np.array([feats.get(k, 0.0) for k in FEATURE_NAMES]) - self.mean) / self.std
+        x = (np.array([feats.get(k, 0.0) for k in self.features]) - self.mean) / self.std
         return float(1 / (1 + np.exp(-(x @ np.array(self.weights) + self.bias))))
 
     def save(self, profile: str) -> Path:
@@ -51,7 +52,8 @@ def fit(items: list[CullItem], labels: list[int]) -> CullingModel:
     mean, std = X.mean(0), X.std(0) + 1e-6
     clf = LogisticRegression(C=0.5, class_weight="balanced", max_iter=500)
     clf.fit((X - mean) / std, y)
-    return CullingModel(clf.coef_[0].tolist(), float(clf.intercept_[0]), mean.tolist(), std.tolist())
+    return CullingModel(clf.coef_[0].tolist(), float(clf.intercept_[0]), mean.tolist(), std.tolist(),
+                        list(FEATURE_NAMES))
 
 
 def agreement(items: list[CullItem], labels: dict[int, int]) -> dict[str, float]:
@@ -132,7 +134,7 @@ def _register_job():
         model.save(profile)
         report = {"n": len(items), "kept_by_you": int(sum(y)), "keep_ratio": cs.keep_ratio,
                   "heuristik": before, "kalibriert": after,
-                  "gewichte": dict(zip(FEATURE_NAMES, model.weights))}
+                  "gewichte": dict(zip(model.features, model.weights))}
         (profiles_dir() / profile / "culling_report.json").write_text(json.dumps(report, indent=2), "utf-8")
         ctx.progress(message=f"Culling kalibriert: F1 {before['f1']:.2f} -> {after['f1']:.2f} (in-sample)")
 

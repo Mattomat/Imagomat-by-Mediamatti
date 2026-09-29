@@ -29,6 +29,7 @@ import numpy as np
 from ..analysis import load_masks
 from ..config import load_settings
 from ..culling.engine import REASONS_DE
+from ..vision.action import MOMENTS_DE
 from ..db import Database
 from ..io import raw as raw_io
 from ..jobs import JobContext, job
@@ -110,6 +111,8 @@ def _items(db: Database, shoot_id: int, include_rejected: bool) -> list[ExportIt
             it.keywords.append(f"{kw.culling_root}|Behalten")
             if it.is_best:
                 it.keywords.append(f"{kw.culling_root}|Bestes der Serie")
+            if a.get("moment") in MOMENTS_DE:
+                it.keywords.append(f"Imagomat|Moment|{MOMENTS_DE[a['moment']]}")
         if it.denoise:
             it.keywords.append(kw.denoise_keyword)
             if s.denoise.mode == "mark" and not it.label:
@@ -215,7 +218,7 @@ def export_jpeg(items: list[ExportItem], target: Path, long_side: int = 2048, ct
             continue
         try:
             if raw_io.is_raw(it.src):
-                lin, info = raw_io.decode(it.src, half_size=True)
+                lin, info = raw_io.decode_any(it.src, half_size=True)
                 masks = load_masks(it.image_id)
                 seg = {"subject": masks[0], "sky": masks[1]} if masks else {}
                 img = render(lin, info.xyz_to_cam, info.camera_wb, it.crs, info.orientation, seg, long_side)

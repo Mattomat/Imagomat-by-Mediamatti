@@ -92,6 +92,9 @@ main { overflow: hidden; position: relative; }
 .chip { border-radius: 16px; padding: 5px 12px; font-size: 13px; }
 .chip.on { border-color: var(--accent); color: var(--accent); }
 .tag { background: rgba(240, 180, 60, 0.15); color: var(--accent); border-radius: 6px; padding: 1px 7px; font-size: 11px; font-weight: 600; }
+.tag.moment { background: rgba(90, 170, 255, 0.16); color: #7cc0ff; }
+.max-keep { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.max-keep input { width: 64px; padding: 4px 6px; }
 .more { margin-top: 12px; }
 .more-body { margin-top: 6px; }
 
@@ -222,3 +225,6 @@ table.list td { border-bottom: 1px solid var(--line); padding: 7px 4px; font-siz
 @media (max-width: 1100px) {
   .action-cards { grid-template-columns: 1fr; }
 }
+.logpanel .row { display: flex; gap: 8px; }
+.logtext { max-height: 320px; overflow: auto; background: rgba(0, 0, 0, 0.35); padding: 10px; border-radius: 8px; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-all; margin-top: 10px; }
+.failed-job { color: #ff8a80; font-size: 12px; margin-top: 6px; }

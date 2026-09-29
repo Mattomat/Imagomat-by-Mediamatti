@@ -57,7 +57,19 @@ fn emit(app: &AppHandle, stage: &str, message: &str, progress: f32, done: bool, 
     if let Some(state) = app.try_state::<AppState>() {
         *state.last.lock().unwrap() = evt.clone();
     }
+    log_setup(&format!("[{stage}] {message}"));
     let _ = app.emit("setup", evt);
+}
+
+/// Einrichtungsprotokoll in ~/Library/Application Support/Imagomat/logs/setup.log
+fn log_setup(line: &str) {
+    use std::io::Write;
+    let dir = data_root().join("logs");
+    if fs::create_dir_all(&dir).is_ok() {
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(dir.join("setup.log")) {
+            let _ = writeln!(f, "{line}");
+        }
+    }
 }
 
 #[tauri::command]

@@ -32,6 +32,7 @@ from .vision.segmentation import body_boxes, segment
 
 log = logging.getLogger(__name__)
 STEP_PREVIEW, STEP_METRICS, STEP_FACES, STEP_EMBED = "preview", "metrics", "faces", "embed"
+STEP_ACTION = "action"
 PREVIEW_SIDE = 2048
 
 
@@ -224,6 +225,33 @@ def _stage2_embed(db: Database, rows: list[Any], imgs: list[np.ndarray]) -> None
         db.mark_step(row["id"], STEP_EMBED)
 
 
+def _stage3_action(db: Database, rows: list[Any], imgs: list[np.ndarray]) -> None:
+    """Action-Momente: CLIP aus dem gespeicherten Embedding + Pose (falls GPU) + Ersatz."""
+    from .vision import action
+
+    emb = get_embedder()
+    pose = action.get_pose_detector()
+    analyses = [db.get_analysis(r["id"]) for r in rows]
+    clips: list[tuple[float, str | None] | None] = [None] * len(rows)
+    if emb.name == "clip":
+        stored = db.embeddings([r["id"] for r, a in zip(rows, analyses) if a.get("embedder") == "clip"])
+        vecs = [stored.get(r["id"]) for r in rows]
+        idx = [i for i, v in enumerate(vecs) if v is not None]
+        if idx:
+            res = action.clip_action(emb, np.stack([vecs[i] for i in idx]))
+            for i, c in zip(idx, res):
+                clips[i] = c
+    poses: list[Any] = [None] * len(rows)
+    if pose is not None:
+        try:
+            poses = pose.analyze(imgs)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Pose-Erkennung fehlgeschlagen: %s", e)
+    for r, a, c, p in zip(rows, analyses, clips, poses):
+        db.update_analysis(r["id"], action.combine(a, c, p))
+        db.mark_step(r["id"], STEP_ACTION)
+
+
 # ---------------------------------------------------------------------------
 # Job
 # ---------------------------------------------------------------------------
@@ -232,21 +260,24 @@ def _stage2_embed(db: Database, rows: list[Any], imgs: list[np.ndarray]) -> None
 def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
     db = ctx.db
     rows = db.images(shoot_id)
-    total = len(rows) * 2
+    total = len(rows) * 3
     ctx.set_total(total)
     done = 0
     todo1 = [r for r in rows if force or not db.step_done(r["id"], STEP_METRICS)]
+    failed = 0
     done += len(rows) - len(todo1)
     ctx.progress(done, "Vorschauen und Metriken")
     workers = load_settings().workers
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(_stage1, db, r) for r in todo1]
-        for f in futures:
+        futures = [(r, ex.submit(_stage1, db, r)) for r in todo1]
+        for r, f in futures:
             ctx.check()
             try:
                 f.result()
-            except Exception as e:  # noqa: BLE001
-                log.warning("Analyse fehlgeschlagen: %s", e)
+            except Exception as e:  # noqa: BLE001 - eine defekte Datei soll den Shoot nicht stoppen
+                log.warning("Analyse fehlgeschlagen für %s: %s", r["filename"], e, exc_info=True)
+                db.update_analysis(r["id"], {"read_error": str(e)[:300]})
+                failed += 1
             done += 1
             ctx.progress(done, "Vorschauen und Metriken")
     rows = db.images(shoot_id)
@@ -254,13 +285,23 @@ def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
     done += len(rows) - len(todo2)
     batch_rows: list[Any] = []
     batch_imgs: list[np.ndarray] = []
+    readable = {r["id"] for r in rows if db.step_done(r["id"], STEP_METRICS)}
     for r in todo2:
         ctx.check()
-        img = load_cached_preview(r)
-        if force or not db.step_done(r["id"], STEP_FACES):
-            bodies = _stage2_faces(db, r, img)
-            _stage2_numbers(db, r, img, bodies)
-        if force or not db.step_done(r["id"], STEP_EMBED):
+        if r["id"] not in readable:
+            done += 1
+            continue
+        img = None
+        try:
+            img = load_cached_preview(r)
+            if force or not db.step_done(r["id"], STEP_FACES):
+                bodies = _stage2_faces(db, r, img)
+                _stage2_numbers(db, r, img, bodies)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Gesichter/Motiv fehlgeschlagen für %s: %s", r["filename"], e, exc_info=True)
+            db.update_analysis(r["id"], {"content_error": str(e)[:300]})
+            db.mark_step(r["id"], STEP_FACES)
+        if img is not None and (force or not db.step_done(r["id"], STEP_EMBED)):
             small = cv2.resize(img, (448, int(448 * img.shape[0] / img.shape[1])), interpolation=cv2.INTER_AREA)
             batch_rows.append(r)
             batch_imgs.append(small)
@@ -271,3 +312,23 @@ def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
         ctx.progress(done, "Gesichter, Motiv, Embeddings")
     if batch_rows:
         _stage2_embed(db, batch_rows, batch_imgs)
+    # Stufe 3: Action-Momente (braucht Embeddings und Gesichter)
+    rows = db.images(shoot_id)
+    todo3 = [r for r in rows if r["id"] in readable and (force or not db.step_done(r["id"], STEP_ACTION))]
+    done += len(rows) - len(todo3)
+    for i in range(0, len(todo3), 8):
+        ctx.check()
+        chunk = todo3[i:i + 8]
+        try:
+            _stage3_action(db, chunk, [load_cached_preview(r) for r in chunk])
+        except Exception as e:  # noqa: BLE001 - Action-Momente sind optional
+            log.warning("Action-Momente fehlgeschlagen: %s", e, exc_info=True)
+            for r in chunk:
+                db.mark_step(r["id"], STEP_ACTION)
+        done += len(chunk)
+        ctx.progress(done, "Action-Momente")
+    if failed:
+        ctx.progress(done, f"{failed} von {len(rows)} Dateien konnten nicht gelesen werden")
+        if failed == len(rows):
+            first = db.get_analysis(rows[0]["id"]).get("read_error", "")
+            raise RuntimeError(f"Keine der {len(rows)} Dateien konnte gelesen werden. Erster Fehler: {first}")

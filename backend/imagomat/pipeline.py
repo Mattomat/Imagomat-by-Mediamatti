@@ -18,11 +18,12 @@ STAGES = ["analyze", "cull", "people", "develop", "export"]
 
 @job("pipeline")
 def run_pipeline(ctx: JobContext, shoot_id: int, keep_ratio: float | None = None, profile: str | None = None,
-                 preset: str | None = None, export: dict[str, Any] | None = None) -> None:
+                 preset: str | None = None, export: dict[str, Any] | None = None, highlights: bool | None = None,
+                 max_keep: int | None = None) -> None:
     ctx.progress(0, "1/4 Analyse")
     analysis.analyze_shoot(ctx, shoot_id)
     ctx.progress(0, "2/4 Culling")
-    engine.cull_shoot(ctx, shoot_id, keep_ratio)
+    engine.cull_shoot(ctx, shoot_id, keep_ratio, highlights, max_keep)
     ctx.progress(0, "3/4 Personen")
     clustering.people_job(ctx, shoot_id)
     ctx.progress(0, "4/4 Entwicklung")

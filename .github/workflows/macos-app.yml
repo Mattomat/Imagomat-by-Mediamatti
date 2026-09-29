@@ -30,6 +30,23 @@ jobs:
         env:
           IMAGOMAT_OFFLINE: "1"
         run: .venv/bin/python -X faulthandler -m pytest -q
+      - name: Echte Kamera-RAWs (Sony A7 IV u. a.)
+        working-directory: backend
+        run: |
+          mkdir -p /tmp/raws
+          for cam in "Sony/ILCE-7M4" "Sony/ILCE-7M3" "Sony/ILCE-1"; do
+            url="https://raw.pixls.us/data/$cam/"
+            for f in $(curl -sfL "$url" | grep -oiE 'href="[^"]+\.(arw)"' | sed -E 's/href="//;s/"$//' | head -n 2); do
+              case "$f" in http*) src="$f" ;; *) src="$url$f" ;; esac
+              curl -sfL -o "/tmp/raws/$(basename "$f")" "$src" || true
+            done
+          done
+          ls -la /tmp/raws
+          if ls /tmp/raws/* >/dev/null 2>&1; then
+            .venv/bin/python ../scripts/ci_real_raw.py /tmp/raws/*
+          else
+            echo "Keine Beispiel-RAWs erreichbar – übersprungen"
+          fi
 
   app:
     name: DMG bauen
@@ -57,6 +74,16 @@ jobs:
         run: |
           npm ci
           npm run tauri build -- --bundles app,dmg
+      - name: Signatur prüfen (sonst meldet macOS "beschädigt")
+        run: |
+          APP=frontend/src-tauri/target/release/bundle/macos/Imagomat.app
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv "$APP" 2>&1 | head -n 8
+          DMG=$(ls frontend/src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)
+          MNT=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
+          codesign --verify --deep --strict --verbose=2 "$MNT/Imagomat.app"
+          hdiutil detach "$MNT"
       - name: DMG hochladen
         uses: actions/upload-artifact@v4
         with:
@@ -73,6 +100,9 @@ jobs:
               echo; echo "Backend läuft nach $((i*5)) s"
               curl -sf http://127.0.0.1:8765/api/licenses | head -c 400; echo
               osascript -e 'quit app "Imagomat"' || true
+              echo "--- Einrichtung (Auszug) ---"
+              grep -v "^\[KI-Pakete" ~/Library/Application\ Support/Imagomat/logs/setup.log | tail -n 40 || true
+              grep -i "übersprungen\|error" ~/Library/Application\ Support/Imagomat/logs/setup.log | tail -n 20 || true
               exit 0
             fi
             sleep 5
@@ -80,6 +110,13 @@ jobs:
           echo "Backend nicht erreichbar"; ls -la ~/Library/Application\ Support/Imagomat/ || true
           tail -n 80 ~/Library/Application\ Support/Imagomat/logs/backend.log || true
           exit 1
+      - name: KI-Modelle in der App-Umgebung prüfen (CLIP, Pose)
+        timeout-minutes: 20
+        continue-on-error: true
+        run: |
+          PY="$HOME/Library/Application Support/Imagomat/runtime/venv/bin/python"
+          "$PY" scripts/ci_model_check.py
+          tail -n 40 ~/Library/Application\ Support/Imagomat/logs/backend.log || true
       - name: Release (bei Tag v*)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

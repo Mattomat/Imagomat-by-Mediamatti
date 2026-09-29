@@ -1,20 +1,16 @@
 import { useEffect, useState } from "react";
 import type { AppCtx } from "../App";
 import { api, IS_APP, Overview, pickFolder, Shoot } from "../api";
+import { SELECTION_HINT, SELECTION_PARAMS, SELECTIONS, Selection } from "../selection";
 import { Segmented } from "../ui";
-
-const STRICTNESS: [number, string][] = [
-  [0.35, "Locker"],
-  [0.2, "Normal"],
-  [0.1, "Streng"],
-];
 
 export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: ((p: string[]) => void) | null) => void }) {
   const [ov, setOv] = useState<Overview | null>(null);
   const [shoots, setShoots] = useState<Shoot[]>([]);
   const [folder, setFolder] = useState("");
   const [profile, setProfile] = useState<string>("");
-  const [keep, setKeep] = useState(0.2);
+  const [sel, setSel] = useState<Selection>("normal");
+  const [maxKeep, setMaxKeep] = useState("");
   const [teams, setTeams] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -36,7 +32,8 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
     setBusy(true);
     try {
       const r = await api.post<{ shoot_id: number }>("/api/shoots/import", {
-        folder, profile: profile || undefined, keep_ratio: keep, teams,
+        folder, profile: profile || undefined, teams, ...SELECTION_PARAMS[sel],
+        max_keep: maxKeep ? Math.max(1, parseInt(maxKeep, 10)) : undefined,
       });
       ctx.refreshJobs();
       ctx.go({ name: "shoot", id: r.shoot_id });
@@ -85,8 +82,13 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
         </div>
         <div className="opt">
           <label>Auswahl</label>
-          <Segmented value={keep} options={STRICTNESS} onChange={setKeep} />
-          <div className="hint">{keep === 0.35 ? "behält ca. 35 %" : keep === 0.2 ? "behält ca. 20 %" : "behält ca. 10 %"}</div>
+          <Segmented value={sel} options={SELECTIONS} onChange={setSel} />
+          <div className="hint">{SELECTION_HINT[sel]}</div>
+          <div className="max-keep">
+            höchstens
+            <input type="number" min={1} placeholder="–" value={maxKeep} onChange={(e) => setMaxKeep(e.target.value)} />
+            Bilder <span className="muted">(leer = nur Prozent)</span>
+          </div>
         </div>
         {ov && ov.teams.length > 0 && (
           <div className="opt">
