@@ -18,28 +18,30 @@ Alles läuft lokal, RAW-Originale werden nie verändert, alle Bearbeitungen sind
 | Review | Raster mit Filtern (Sterne, Personen, Grund, unsicher), Lupe, Vorher/Nachher, Tastatur (Pfeile, 0–5, X, P, Enter, `\`, Y) |
 | Export | A: RAW + XMP · B: Lightroom-Katalog (experimentell) · C: Galerie-JPEGs · Log (CSV/JSON) · Lightroom-Plugin |
 
-## Schnellstart (Mac)
+## Installation (Mac-App)
+
+1. **Imagomat.dmg** herunterladen: [Releases](https://github.com/Mattomat/Imagomat-by-Mediamatti/releases)
+   (oder den neuesten Build unter *Actions › Mac-App › Artifacts*).
+2. DMG öffnen und **Imagomat** in den Ordner *Programme* ziehen.
+3. Die App ist nicht von Apple signiert. Beim ersten Öffnen deshalb:
+   *Systemeinstellungen › Datenschutz & Sicherheit › „Dennoch öffnen“*
+   (oder im Terminal einmalig `xattr -dr com.apple.quarantine /Applications/Imagomat.app`).
+4. Beim ersten Start richtet Imagomat seine KI-Bausteine ein (einmalig 5–10 Minuten, Internet nötig).
+
+Danach:
+- **Mein Stil › Stil lernen**: Imagomat findet deinen Lightroom-Katalog selbst. Ein Klick lernt deinen
+  Bearbeitungsstil und übernimmt dabei alle in Lightroom benannten Personen.
+- **Personen**: Kader als CSV wählen (wird sofort gespeichert) oder einen Ordner mit fertigen JPGs,
+  dann werden alle darin benannten Personen auf einmal gelernt.
+- **Start**: Ordner oder Speicherkarte reinziehen, **Los**, danach **Nach Lightroom**.
+
+### Für Entwickler (ohne App)
 
 ```bash
-git clone https://github.com/Mattomat/Imagomat-by-Mediamatti.git
-cd Imagomat-by-Mediamatti
-scripts/setup_mac.sh                 # Homebrew-Pakete, Python-Umgebung, Tests, Frontend
-cd backend && source .venv/bin/activate
-imagomat serve                       # -> http://127.0.0.1:8765
+git clone https://github.com/Mattomat/Imagomat-by-Mediamatti.git ~/Imagomat
+cd ~/Imagomat && ./scripts/setup_mac.sh
+cd backend && source .venv/bin/activate && imagomat serve     # -> http://127.0.0.1:8765
 ```
-
-Kommandozeile:
-
-```bash
-imagomat train "Sport Nacht" --catalog ~/Pictures/Lightroom/Lightroom\ Catalog.lrcat --min-rating 2
-imagomat roster "FC Winterthur 1. Mannschaft" --csv kader.csv
-imagomat run /Volumes/Untitled/DCIM --profile "Sport Nacht" --keep 0.2 \
-    --teams "FC Winterthur 1. Mannschaft" --export ~/Export/FCW-GCZ --formats xmp jpeg
-imagomat feedback 3 --profile "Sport Nacht"     # nach Korrekturen in Lightroom
-```
-
-Danach in Lightroom: Exportordner importieren (oder Plugin *Imagomat-Export importieren*),
-alle auswählen › **Foto › Entwicklungseinstellungen › KI-Einstellungen aktualisieren**.
 
 ## Stand und ehrliche Einschränkungen
 

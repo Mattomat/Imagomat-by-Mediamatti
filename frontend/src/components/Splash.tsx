@@ -66,6 +66,9 @@ export default function Splash({ onReady }: { onReady: () => void }) {
             {waited > 20 && !window.__TAURI_INTERNALS__ && (
               <p className="hint">Läuft der Server? Im Terminal: <code>imagomat serve</code></p>
             )}
+            {waited > 60 && window.__TAURI_INTERNALS__ && (
+              <p className="hint">Dauert ungewöhnlich lange. Protokoll: ~/Library/Application Support/Imagomat/logs/backend.log</p>
+            )}
           </>
         )}
       </div>
