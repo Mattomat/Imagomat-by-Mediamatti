@@ -127,6 +127,8 @@ class Settings:
     segmentation_backend: str = "auto"  # auto | birefnet | classical
     ocr_backend: str = "auto"           # auto | vision | easyocr | none
     action_backend: str = "auto"        # auto (Pose nur mit GPU) | pose | clip | none
+    # Wörter auf Trikots, die nie ein Spielername sind (Sponsoren); weitere erkennt Imagomat selbst
+    ignored_shirt_words: list[str] = field(default_factory=lambda: ["KELLER", "INIT"])
     workers: int = max(2, (os.cpu_count() or 4) - 2)
     default_profile: str | None = None
 

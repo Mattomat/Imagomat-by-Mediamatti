@@ -58,7 +58,7 @@ def exemplars(db: Database) -> tuple[np.ndarray, np.ndarray]:
     """Bestätigte Gesichter aller Personen (Embeddings, Person-IDs)."""
     rows = db.query(
         "SELECT person_id, embedding FROM faces WHERE person_id IS NOT NULL AND embedding IS NOT NULL "
-        "AND assigned_by IN ('manual','number','confirmed') ORDER BY id DESC")
+        "AND assigned_by IN ('manual','confirmed') ORDER BY id DESC")   # nur sichere Beispiele, nie Trikot
     per: dict[int, list[np.ndarray]] = {}
     for r in rows:
         lst = per.setdefault(r["person_id"], [])

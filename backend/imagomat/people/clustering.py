@@ -125,7 +125,45 @@ class ShirtResolver:
         return near.pop() if len(near) == 1 else None
 
 
-MAX_AUTO_YAW = 55.0       # Gesichter von der Seite/hinten nicht automatisch benennen (unsicher)
+def plausible_back_names(texts, ignored: set[str]) -> set[int]:
+    """Welche gelesenen Wörter sind Spielernamen (Rücken) und keine Sponsoren?
+
+    - der Name steht auf dem Rücken direkt über/unter der Rückennummer (Brust-Sponsoren nicht)
+    - ein Wort, das bei drei oder mehr verschiedenen Nummern auftaucht, ist ein Sponsor
+    - Wörter aus der Ignorier-Liste (Einstellungen) zählen nie
+    Rückgabe: IDs der Zeilen in ``numbers``, die als Name gelten dürfen."""
+    by_img: dict[int, list] = {}
+    for n in texts:
+        if n["bbox"] and not str(n["text"]).startswith("#"):
+            by_img.setdefault(n["image_id"], []).append(n)
+    near: dict[int, tuple[str, set[str]]] = {}
+    word_numbers: dict[str, set[str]] = {}
+    word_images: dict[str, set[int]] = {}
+    for img, rows in by_img.items():
+        nums = [(str(r["text"]), json.loads(r["bbox"])) for r in rows if not str(r["text"]).startswith("@")]
+        for r in rows:
+            t = str(r["text"])
+            if not t.startswith("@") or t[1:].upper() in ignored:
+                continue
+            wb = json.loads(r["bbox"])
+            close = set()
+            for num, nb in nums:
+                nh = max(nb[3] - nb[1], 1e-3)
+                overlap = min(wb[2], nb[2]) - max(wb[0], nb[0])
+                gap = max(nb[1] - wb[3], wb[1] - nb[3], 0.0)       # vertikaler Abstand
+                if overlap > -0.5 * nh and gap <= 1.5 * nh:
+                    close.add(num)
+            if close:
+                word = t[1:].upper()
+                near[r["id"]] = (word, close)
+                word_numbers.setdefault(word, set()).update(close)
+                word_images.setdefault(word, set()).add(img)
+    sponsors = {w for w, nums in word_numbers.items()
+                if len(nums) >= 3 or (len(nums) >= 2 and len(word_images[w]) >= 5)}
+    return {rid for rid, (word, _nums) in near.items() if word not in sponsors}
+
+
+MAX_AUTO_YAW = 55.0      # Gesichter von der Seite/hinten nicht automatisch benennen (unsicher)
 MIN_AUTO_FACE = 0.035     # zu kleine Gesichter ebenso
 FRONTAL_YAW = 35.0        # "klar von vorne": dann gewinnt das Gesicht gegen die Rückennummer
 
@@ -166,13 +204,20 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
     for f in db.query("SELECT f.* FROM faces f JOIN images i ON i.id=f.image_id WHERE i.shoot_id=?", (shoot_id,)):
         by_image.setdefault(f["image_id"], []).append(f)
     texts = db.query("SELECT n.* FROM numbers n JOIN images i ON i.id=n.image_id WHERE i.shoot_id=?", (shoot_id,))
+    from ..config import load_settings
+
+    ignored = {w.strip().upper() for w in load_settings().ignored_shirt_words if w.strip()}
+    back_names = plausible_back_names(texts, ignored)
     # Belege pro Bild und Person sammeln: Nummer und/oder Name auf dem Trikot (+ Position)
     evidence: dict[tuple[int, int], dict] = {}
     for n in texts:
         text = str(n["text"])
         if text.startswith("#") or not n["bbox"]:
             continue                      # manuell hinzugefügte Personen bleiben unangetastet
-        pid = resolver.name(text[1:]) if text.startswith("@") else resolver.number(text)
+        if text.startswith("@") and n["id"] not in back_names:
+            pid = None                    # Sponsor oder Wort ohne Rückennummer -> kein Name
+        else:
+            pid = resolver.name(text[1:]) if text.startswith("@") else resolver.number(text)
         with db.tx() as c:
             c.execute("UPDATE numbers SET person_id=? WHERE id=?", (pid, n["id"]))
         if pid is None:
@@ -187,7 +232,6 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
     for (image_id, pid), e in evidence.items():
         img_faces = by_image.get(image_id, [])
         boxes = body_boxes([tuple(json.loads(f["bbox"])) for f in img_faces], 1.5)
-        strong = e["kinds"] == {"name", "number"}        # Nummer UND Name zeigen dieselbe Person
         for f, (x0, y0, x1, y1) in zip(img_faces, boxes):
             if not any(x0 <= cx <= x1 and y0 <= cy <= y1 for cx, cy in e["centers"]):
                 continue
@@ -195,14 +239,12 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
                 break
             face_pid = f["person_id"]
             if face_pid not in (None, pid) and f["assigned_by"] == "auto":
-                # Immer gegenprüfen: Gesicht und Trikot widersprechen sich -> unter "Prüfen" zeigen
-                keep_face = _frontal(f) and not strong
+                # Ein erkanntes Gesicht ist stärker als das Trikot. Widerspruch trotzdem melden ("Prüfen").
                 checks.setdefault(image_id, []).append({
                     "face_id": f["id"], "face_person_id": face_pid, "face_person": names.get(face_pid),
                     "shirt_person_id": pid, "shirt_person": names.get(pid), "shirt": sorted(e["kinds"]),
-                    "chosen": "face" if keep_face else "shirt"})
-                if keep_face:
-                    break
+                    "chosen": "face"})
+                break
             with db.tx() as c:
                 c.execute("UPDATE faces SET person_id=?, assigned_by='number' WHERE id=?", (pid, f["id"]))
             via_shirt += 1

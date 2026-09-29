@@ -1,5 +1,6 @@
 """Rückennummern und Trikotnamen schlagen die Gesichtserkennung."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -66,7 +67,28 @@ def test_frontal_face_wins_over_number(tmp_path: Path):
     assert check["chosen"] == "face"
 
 
-def test_number_and_name_together_beat_frontal_face(tmp_path: Path):
+def test_sponsor_words_are_not_names(tmp_path: Path):
+    from imagomat.people.clustering import plausible_back_names
+
+    rows, rid = [], 0
+
+    def add(img, text, box):
+        nonlocal rid
+        rid += 1
+        rows.append({"id": rid, "image_id": img, "text": text, "bbox": json.dumps(box)})
+        return rid
+
+    ok = add(1, "@MALUVUNU", [0.2, 0.30, 0.3, 0.33]); add(1, "37", [0.2, 0.34, 0.3, 0.44])
+    front = add(2, "@SCHMID", [0.5, 0.30, 0.6, 0.33])                      # ohne Nummer (Brust)
+    spons = [add(i, "@BAUMANN", [0.2, 0.30, 0.3, 0.33]) for i in (3, 4, 5)]
+    for i, num in zip((3, 4, 5), ("7", "9", "11")):
+        add(i, num, [0.2, 0.34, 0.3, 0.44])                                 # gleiches Wort, 3 Nummern
+    ign = add(6, "@KELLER", [0.2, 0.30, 0.3, 0.33]); add(6, "20", [0.2, 0.34, 0.3, 0.44])
+    got = plausible_back_names(rows, {"KELLER"})
+    assert ok in got and front not in got and ign not in got and not set(spons) & got
+
+
+def test_face_beats_number_and_name(tmp_path: Path):
     db, sid, iid, maluvunu, kehrer = _setup(tmp_path)
     with db.tx() as c:
         c.execute("UPDATE faces SET yaw=5 WHERE image_id=?", (iid,))
@@ -77,8 +99,8 @@ def test_number_and_name_together_beat_frontal_face(tmp_path: Path):
     db.update_shoot_settings(sid, teams=["FCW Herren"])
     assert JobManager(db).run_sync(db.create_job("people", sid, {}))["status"] == "done"
     face = db.one("SELECT person_id FROM faces WHERE image_id=?", (iid,))
-    assert face["person_id"] == maluvunu
-    assert db.get_analysis(iid)["people_check"][0]["chosen"] == "shirt"
+    assert face["person_id"] == kehrer                     # Gesicht ist stärker als das Trikot
+    assert db.get_analysis(iid)["people_check"][0]["chosen"] == "face"
 
 
 def test_shirt_name_resolves_without_team(tmp_path: Path):

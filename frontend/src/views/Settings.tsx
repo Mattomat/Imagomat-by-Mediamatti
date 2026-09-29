@@ -11,6 +11,7 @@ type S = {
   develop: { auto_straighten: boolean; auto_crop: boolean; write_masks: boolean; ai_masks: boolean; shoot_consistency: number };
   device: string;
   face_backend: string;
+  ignored_shirt_words: string[];
 };
 
 export default function SettingsView({ ctx }: { ctx: AppCtx }) {
@@ -80,6 +81,12 @@ export default function SettingsView({ ctx }: { ctx: AppCtx }) {
             <div><b>Stichwort für Personen</b></div>
             <input className="narrow" value={s.keywords.people_root} onChange={(e) => setS({ ...s, keywords: { ...s.keywords, people_root: e.target.value } })}
               onBlur={() => save(s)} />
+          </div>
+          <div className="setting">
+            <div><b>Sponsoren auf Trikots ignorieren</b><div className="hint">diese Wörter sind nie ein Spielername (weitere erkennt Imagomat selbst)</div></div>
+            <input className="narrow" value={(s.ignored_shirt_words ?? []).join(", ")}
+              onChange={(e) => setS({ ...s, ignored_shirt_words: e.target.value.split(",").map((w) => w.trim()).filter(Boolean) })}
+              onBlur={() => save(s)} placeholder="z. B. KELLER, INIT" />
           </div>
           <div className="setting">
             <div><b>Gesichtserkennung</b><div className="hint">InsightFace ist am genauesten, aber nur privat nutzbar</div></div>
