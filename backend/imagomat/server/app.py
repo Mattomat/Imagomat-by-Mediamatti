@@ -131,7 +131,7 @@ def find_catalogs(limit: int = 10) -> list[str]:
 
 def create_app(db_path: str | None = None) -> FastAPI:
     db = Database(db_path)
-    jobs = JobManager(db)
+    jobs = JobManager(db, recover=True)
     loop_holder: dict[str, asyncio.AbstractEventLoop] = {}
 
     @asynccontextmanager

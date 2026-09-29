@@ -79,7 +79,7 @@ class JobContext:
 class JobManager:
     """Führt Jobs nacheinander in einem Hintergrund-Thread aus."""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, recover: bool = False):
         self.db = db
         self._queue: list[int] = []
         self._cv = threading.Condition()
@@ -87,9 +87,11 @@ class JobManager:
         self.listeners: list[Callable[[dict[str, Any]], None]] = []
         self._thread: threading.Thread | None = None
         self._stop = False
-        # Beim Start: unterbrochene Jobs als pausiert markieren.
-        with db.tx() as c:
-            c.execute("UPDATE jobs SET status='paused' WHERE status IN ('running','queued')")
+        # Beim Start der App: unterbrochene Jobs als pausiert markieren. Nicht im Terminal-Aufruf,
+        # sonst würden laufende Jobs der geöffneten App fälschlich als pausiert gelten.
+        if recover:
+            with db.tx() as c:
+                c.execute("UPDATE jobs SET status='paused' WHERE status IN ('running','queued')")
 
     def start(self) -> None:
         if self._thread is None:
