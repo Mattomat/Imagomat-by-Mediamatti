@@ -33,6 +33,25 @@ class TrainingSample:
     weight: float = 1.0
 
 
+_DERIVED = re.compile(r"-(Enhanced|Verbessert|Am[ée]lior[ée]|Migliorat[ao]|Mejorad[ao])(-[A-Za-z]{2,3})*(-\d+)?$",
+                      re.IGNORECASE)
+
+
+def analysis_source(path: Path) -> Path:
+    """Für von Lightroom erzeugte Dateien (Entrauschen/Superauflösung, z. B. ``DSC01234-Verbessert-RR.dng``)
+    das Original-RAW zurückgeben. Die DNG enthält bereits entrauschte, lineare Daten bzw. eine bearbeitete
+    Vorschau: ihre Helligkeit passt nicht zu frischen RAWs, und der Stil würde zu dunkel/hell gelernt."""
+    path = Path(path)
+    stem = _DERIVED.sub("", path.stem)
+    if stem == path.stem:
+        return path
+    for ext in (".ARW", ".arw", ".CR3", ".cr3", ".NEF", ".nef", ".RAF", ".raf", ".DNG", ".dng", ".ORF", ".RW2"):
+        cand = path.with_name(stem + ext)
+        if cand.exists() and cand != path:
+            return cand
+    return path
+
+
 def process_version_ok(crs: dict[str, Any]) -> bool:
     pv = to_number(str(crs.get("ProcessVersion", "11.0")).split()[0])
     return pv is None or pv >= 6.7

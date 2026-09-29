@@ -20,7 +20,7 @@ from ..lightroom.xmp import read_xmp
 from .develop import ImageDevelop, develop_items
 from .features import image_record
 from .model import Record, StyleModel
-from .sources import TrainingSample, filter_samples, from_catalog, from_folder, load_preset
+from .sources import analysis_source, TrainingSample, filter_samples, from_catalog, from_folder, load_preset
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def train_profile(ctx: JobContext, name: str, catalog: str | None = None, folder
     for i, s in enumerate(good):
         ctx.check()
         try:
-            r = image_record(s.path)
+            r = image_record(analysis_source(s.path))
             a = {**r["analysis"], "orientation": r.get("orientation") or 1}
             recs.append(Record(a, r["exif"], np.asarray(r["embedding"], np.float32), s.crs, s.weight, str(s.path)))
         except Exception as e:  # noqa: BLE001 - einzelne defekte Bilder überspringen

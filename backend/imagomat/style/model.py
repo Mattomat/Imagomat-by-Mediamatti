@@ -40,17 +40,45 @@ PRIOR_N0 = 12.0
 EXP_J = TARGETS.index("Exposure2012")
 
 
-def exposure_reference(a: dict[str, Any]) -> float:
-    """Gemessene Szenenhelligkeit (log2, linear). Belichtung wird als Ausgabehelligkeit
-    (= Referenz + Belichtung) gelernt: die ist bei den meisten Fotografen fast konstant."""
+def exposure_reference(a: dict[str, Any], mode: str = "linear") -> float:
+    """Gemessene Szenenhelligkeit (log2). Belichtung wird als Ausgabehelligkeit
+    (= Referenz + Belichtung) gelernt: die ist bei den meisten Fotografen fast konstant.
+
+    mode="preview" (neue Stile): aus der eingebetteten Kamera-Vorschau. Die gibt es bei jeder RAW,
+    auch wenn LibRaw die Kamera nicht kennt, deshalb sind alle Bilder gleich gemessen.
+    mode="linear" (ältere Stile): aus den linearen RAW-Daten."""
     from .presets import measured_log
 
+    med = max(float(a.get("median") or 0.4), 0.01)
+    if mode == "preview":
+        ref = 2.2 * float(np.log2(med))
+        subj = a.get("face_luma") or a.get("subject_luma")
+        if subj:
+            ref += 0.5 * float(np.clip(2.2 * np.log2(max(float(subj), 1e-3) / med), -3, 3))
+        return ref
     m = measured_log(a, 0.5)
     if m is not None:
         return float(m)
-    med = max(float(a.get("median") or 0.4), 0.02)
     return 2.2 * float(np.log2(med)) - 3.0
+
+
 PCA_DIMS = 24
+
+# Nur diese Einstellungen dürfen vom ähnlichsten Trainingsbild übernommen werden (Profil, Objektiv,
+# Schärfen/Rauschen, Körnung, Kalibrierung ...). Alles Bildspezifische (Retusche, Spiegelungen/Personen
+# entfernen, Perspektive, Upright, ältere Pinsel usw.) bleibt weg: auf ein anderes Bild übertragen
+# erzeugt das Geisterbilder und verzerrte Fotos.
+SAFE_EXTRA_PREFIXES = (
+    "CameraProfile", "Look", "LensProfile", "LensManualDistortion", "AutoLateralCA", "Defringe", "Grain",
+    "Sharpen", "ColorNoiseReduction", "LuminanceNoiseReduction", "LuminanceSmoothing", "PostCropVignette",
+    "VignetteAmount", "VignetteMidpoint", "ColorGrade", "SplitToning", "ToneCurvePV2012", "ToneCurveName",
+    "HueAdjustment", "SaturationAdjustment", "LuminanceAdjustment", "RedHue", "RedSaturation", "GreenHue",
+    "GreenSaturation", "BlueHue", "BlueSaturation", "ShadowTint", "ConvertToGrayscale", "OverrideLookVignette",
+)
+
+
+def safe_extras(crs: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in crs.items() if k.startswith(SAFE_EXTRA_PREFIXES) and k not in LEARNED_KEYS}
 # Diese Schlüssel werden vom Modell erzeugt und nie vom Nachbarn kopiert
 LEARNED_KEYS = set(DIRECT) | {
     "WhiteBalance", "Temperature", "Tint", "ToneCurvePV2012", "ToneCurveName2012", "SplitToningShadowHue",
@@ -193,13 +221,13 @@ class StyleModel:
         self._w = np.array([r.weight for r in records], dtype=float)
         Y = np.array([[encode(r.crs, r.analysis.get("as_shot_temp"), r.analysis.get("as_shot_tint"),
                               denoise_key)[t] for t in TARGETS] for r in records], dtype=float)
-        self._ref = np.array([exposure_reference(r.analysis) for r in records])
+        self.ref_mode = "linear"
+        self._ref = np.array([exposure_reference(r.analysis, self.ref_mode) for r in records])
         Y[:, EXP_J] += self._ref
         self._Y = Y
         self._ystd = Y.std(0) + 1e-6
         self._const = {t: float(np.median(Y[:, j])) for j, t in enumerate(TARGETS) if Y[:, j].std() < 1e-6}
-        self._extras = [{k: v for k, v in r.crs.items() if k not in LEARNED_KEYS and not k.startswith("Enhance")}
-                        for r in records]
+        self._extras = [safe_extras(r.crs) for r in records]
         self._paths = [r.path for r in records]
         self._crop = np.array([[
             (from_lightroom_crop(r.crs) or {}).get("crop_aspect_rel", 1.0)] for r in records])
@@ -301,19 +329,21 @@ class StyleModel:
         # Preset-Prior
         key = preset_key or self.base_preset or choose_preset(rec.analysis.get("scene"))
         prior = apply_preset(PRESETS[key], {**rec.analysis, "iso": rec.exif.get("iso")}, ds)
-        ref = exposure_reference(rec.analysis)
+        ref = exposure_reference(rec.analysis, getattr(self, "ref_mode", "linear"))
         prior = {**prior, "Exposure2012": prior.get("Exposure2012", 0.0) + ref}
         wm = self.n / (self.n + PRIOR_N0)
         for t in TARGETS:
             if t not in self._const:
                 out[t] = wm * out[t] + (1 - wm) * prior.get(t, out[t])
-        out["Exposure2012"] = float(np.clip(out["Exposure2012"] - ref, -5, 5))
+        # Nie dunkler/heller als du es je gemacht hast (Bereich deiner eigenen Belichtungen, 2.-98. Perzentil)
+        lo, hi = self._exposure_range()
+        out["Exposure2012"] = float(np.clip(out["Exposure2012"] - ref, lo, hi))
         # Unsicherheit
         spread = np.sqrt(w @ (self._Y[idx] - knn) ** 2) / self._ystd
         key_t = [TARGETS.index(t) for t in ("Exposure2012", "wb_dmired", "Contrast2012", "Highlights2012")]
         conf = float(np.exp(-np.mean(spread[key_t])) * min(1.0, float(self._Z[idx[0]] @ z) + 0.2))
         # Übrige Einstellungen vom ähnlichsten Bild
-        extras = {k: v for k, v in self._extras[idx[0]].items()}
+        extras = safe_extras(self._extras[idx[0]])     # auch für ältere, schon gelernte Stile
         extras.update(self.look_override)
         # Masken
         masks = []
@@ -334,6 +364,15 @@ class StyleModel:
         area = float(w @ self._Y[idx, TARGETS.index("crop_area")])
         return Prediction(out, extras, masks, conf, [(self._paths[i], float(wi)) for i, wi in zip(idx, w)], key,
                           has_crop, area)
+
+    def _exposure_range(self) -> tuple[float, float]:
+        cached = getattr(self, "_exp_range", None)
+        if cached is None:
+            ev = self._Y[:, EXP_J] - self._ref
+            lo, hi = np.percentile(ev, [2, 98]) if len(ev) >= 10 else (-5.0, 5.0)
+            cached = (float(lo) - 0.3, float(hi) + 0.3)
+            self._exp_range = cached
+        return cached
 
     # ------------------------------------------------------------------
     def save(self) -> Path:

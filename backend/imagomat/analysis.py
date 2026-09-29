@@ -120,6 +120,7 @@ def compute_metrics(path: Path) -> tuple[np.ndarray, dict[str, Any], int, int | 
 
 
 _UNSUPPORTED_SEEN: set[str] = set()
+PREVIEW_TO_RAW_EV = 0.8
 
 
 def _note_unsupported(path: Path, err: Exception) -> None:
@@ -143,6 +144,11 @@ def preview_linear_stats(img: np.ndarray, path: Path) -> dict[str, Any]:
     x = x.astype(np.float32) / 255.0
     lin = np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
     out: dict[str, Any] = dict(quality.linear_stats(lin))
+    # Auf die Skala echter RAW-Daten bringen: dort liegt Mittelgrau ca. 3.2 EV unter dem Weisspunkt,
+    # in der (sRGB-)Vorschau bei 0.18 (-2.5 EV). Ohne Angleich würden solche Bilder zu dunkel entwickelt.
+    for k in list(out):
+        if k.startswith("lin_log_"):
+            out[k] = float(out[k]) - PREVIEW_TO_RAW_EV
     out["raw_source"] = "preview"
     iso = read_tiff_exif(path).get("ISO")
     if isinstance(iso, (int, float)) and iso > 0:
