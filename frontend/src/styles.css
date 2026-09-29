@@ -109,7 +109,7 @@ main { overflow: hidden; position: relative; }
 .dz-small { color: var(--muted); margin-top: 8px; font-size: 13px; word-break: break-all; }
 .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px 28px; margin-top: 22px; }
 .opt label { margin-top: 0; }
-.shoot-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }
+.shoot-cards { display: grid; grid-auto-rows: max-content; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }
 .shoot-card { padding: 0; overflow: hidden; text-align: left; background: var(--panel); border-radius: var(--radius); }
 .shoot-card .cover { height: 130px; background: #0b0b0d; }
 .shoot-card .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -133,8 +133,9 @@ main { overflow: hidden; position: relative; }
 .tabs button.on { background: var(--panel2); color: var(--text); }
 .tabs b { margin-left: 6px; font-weight: 600; opacity: 0.8; }
 .person-filter { width: auto; }
-.grid { flex: 1; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; padding: 6px 28px 20px; align-content: start; }
-.thumb { border-radius: 10px; overflow: hidden; background: var(--panel); border: 2px solid transparent; cursor: pointer; }
+.grid { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); grid-auto-rows: max-content; gap: 14px; padding: 6px 28px 20px; align-content: start; }
+/* min-height: WebKit (Mac-App) quetscht sonst bei vielen Bildern die Zeilen zusammen und schneidet die Kacheln ab */
+.thumb { border-radius: 10px; overflow: hidden; background: var(--panel); border: 2px solid transparent; cursor: pointer; min-height: 184px; }
 .thumb.sel { border-color: var(--accent); }
 .thumb img { width: 100%; height: 150px; object-fit: contain; background: #0b0b0d; display: block; }
 .thumb-foot { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 12px; min-height: 32px; }
@@ -174,12 +175,12 @@ main { overflow: hidden; position: relative; }
 .section-head { display: flex; align-items: center; gap: 14px; margin-top: 30px; margin-bottom: 12px; }
 .section-head h2 { margin: 0; }
 .section-head select { width: auto; margin-left: auto; }
-.who-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.who-list { display: grid; grid-auto-rows: max-content; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
 .who-card { background: var(--panel); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .who-card .faces { display: flex; gap: 4px; }
 .who-card .faces img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
 .who-count { color: var(--muted); font-size: 12px; }
-.person-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.person-grid { display: grid; grid-auto-rows: max-content; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .person-card { position: relative; background: var(--panel); border-radius: 12px; padding: 14px 10px; text-align: center; }
 .person-card .ghost { position: absolute; top: 4px; right: 4px; opacity: 0; }
 .person-card:hover .ghost { opacity: 1; }
@@ -243,7 +244,7 @@ table.list td { border-bottom: 1px solid var(--line); padding: 7px 4px; font-siz
 .pd-fields .row { display: flex; gap: 8px; }
 .pd-fields .row input.narrow { flex: 0 0 72px; width: 72px; }
 .pd-fields .row input:not(.narrow) { flex: 1; }
-.pd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.pd-grid { display: grid; grid-auto-rows: max-content; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
 .pd-thumb { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: var(--panel2); cursor: pointer; }
 .pd-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .pd-thumb:hover { outline: 2px solid var(--accent); }
