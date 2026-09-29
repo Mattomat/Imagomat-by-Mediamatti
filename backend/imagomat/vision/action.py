@@ -59,6 +59,11 @@ ACTION_PROMPTS: dict[tuple[str, bool], list[str]] = {
     ("performance", True): ["a singer passionately singing into a microphone", "a guitarist playing an intense solo",
                             "a musician jumping high on stage", "a drummer hitting the drums with energy"],
     ("publikum", True): ["an excited crowd at a concert with hands in the air"],
+    ("alltag", False): ["people eating at a table", "food and cake on a table", "a close-up of a bottle or a cup",
+                        "a team group photo, everyone posing and smiling at the camera",
+                        "children posing for a photo", "fans signing autographs", "people talking and laughing",
+                        "a large group of people standing on a football field for a team photo",
+                        "a portrait of a person looking at the camera", "a stadium from the outside"],
     ("ruhig", False): ["football players standing around on the pitch", "a soccer player walking slowly",
                        "players waiting before a free kick", "a player standing still, seen from behind",
                        "the substitutes bench", "a wide shot of the football pitch with small players far away",
@@ -120,7 +125,9 @@ def clip_action(embedder: Any, embs: np.ndarray) -> list[tuple[float, str | None
         prob = dict(zip(names, p.tolist()))
         pos = sum(prob.get(k, 0.0) for k in POSITIVE)
         best = max(POSITIVE, key=lambda k: prob.get(k, 0.0))
-        out.append((float(pos), best if prob.get(best, 0.0) >= 0.2 else None))
+        # Nur eindeutige Momente benennen (sonst bekommt jedes Kuchenfoto "Zweikampf")
+        sure = pos >= 0.55 and prob.get(best, 0.0) >= 0.35
+        out.append((float(pos), best if sure else None))
     return out
 
 
@@ -283,13 +290,19 @@ def combine(a: dict[str, Any], clip: tuple[float, str | None] | None, pose: Pose
         out["pose"] = pose.to_dict()
         out["action_pose"] = round(pose.score, 4)
         parts.append((0.45, pose.score))
-        if moment is None or (pose.moment == "zweikampf" and pose.duel > 0.7):
-            moment = pose.moment or moment
+        # Pose allein ist unsicher (zwei Spieler nebeneinander auf einem Gruppenfoto sehen aus wie ein
+        # Zweikampf). Ohne CLIP nur eindeutige Posen (Schuss) benennen.
+        if clip is None and pose.moment == "schuss" and pose.kick > 0.8:
+            moment = "schuss"
     if parts:
         out["action"] = round(sum(w * v for w, v in parts) / sum(w for w, _ in parts), 4)
         out["action_source"] = "+".join(n for n, x in (("clip", clip), ("pose", pose)) if x is not None)
     else:
         out["action"] = round(classical_action(a), 4)
         out["action_source"] = "classical"
+    sc = a.get("scene") or {}
+    sporty = sum(v for k, v in sc.items() if k.startswith(("sport", "concert"))) if sc else 1.0
+    if sporty < 0.4 or out["action"] < 0.5:
+        moment = None
     out["moment"] = moment if moment in MOMENTS_DE else None
     return out

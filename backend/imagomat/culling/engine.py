@@ -211,6 +211,17 @@ def detect_scenes(items: list[CullItem], cs: CullingSettings, max_len: float = 1
         it.series = sid
 
 
+def near_duplicate(a: CullItem, b: CullItem, window: float = 900.0) -> bool:
+    """Gleiches Motiv innerhalb von 15 Minuten (CLIP-Ähnlichkeit oder Bild-Hash)."""
+    if abs(a.t - b.t) > window:
+        return False
+    if _phash_dist(a.phash, b.phash) <= 12:
+        return True
+    if a.emb is not None and b.emb is not None and len(a.emb) == len(b.emb) and len(a.emb) >= 512:
+        return float(a.emb @ b.emb) >= 0.93          # nur für CLIP-Embeddings verlässlich
+    return False
+
+
 def select(items: list[CullItem], cs: CullingSettings, w_action: float = 0.0) -> None:
     n = len(items)
     ratio = min(cs.keep_ratio, cs.highlights_ratio) if cs.highlights else cs.keep_ratio
@@ -248,12 +259,20 @@ def select(items: list[CullItem], cs: CullingSettings, w_action: float = 0.0) ->
             if it not in moment:
                 it.reasons.append("kein_moment")
         candidates = moment
-    # Serien-Beste zuerst, dann nach Score
+    # Serien-Beste zuerst, dann nach Score. Dabei keine Beinahe-Duplikate über Seriengrenzen hinweg:
+    # dasselbe Motiv (Kuchen, Gruppenfoto ...) ein paar Sekunden später zählt nicht als neues Bild.
     candidates.sort(key=lambda x: (-(x.score + (0.05 if x.best else 0.0))))
-    for it in candidates[:target]:
+    kept: list[CullItem] = []
+    for it in candidates:
+        if len(kept) >= target:
+            it.reasons.append("strenge")
+            continue
+        twin = next((k for k in kept if near_duplicate(it, k)), None)
+        if twin is not None:
+            it.reasons.append("duplikat")
+            continue
         it.keep = True
-    for it in candidates[target:]:
-        it.reasons.append("strenge")
+        kept.append(it)
     for it in items:
         it.reasons = it.hard + [r for r in it.reasons if r not in it.hard]
 
@@ -327,6 +346,9 @@ def cull_shoot(ctx: JobContext, shoot_id: int, keep_ratio: float | None = None, 
     cs.highlights = bool(culling_opts.get("highlights", cs.highlights))
     if culling_opts.get("max_keep"):
         cs.max_keep = int(culling_opts["max_keep"])
+    from ..analysis import ensure_action
+
+    ensure_action(ctx, shoot_id)
     items = load_items(db, shoot_id)
     ctx.set_total(len(items))
     shoot = db.one("SELECT profile FROM shoots WHERE id=?", (shoot_id,))

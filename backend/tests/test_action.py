@@ -90,3 +90,24 @@ def test_max_keep_and_no_action_for_portraits():
 
     build_features(items)
     assert action_weight(items, CullingSettings()) == 0.0
+
+
+def test_moment_only_when_sure_and_sporty():
+    assert combine({"scene": {"event": 0.8, "sport_day": 0.2}}, (0.9, "zweikampf"), None)["moment"] is None
+    assert combine({"scene": {"sport_day": 0.9}}, (0.9, "zweikampf"), None)["moment"] == "zweikampf"
+    from imagomat.vision.action import PoseResult
+
+    duel_only = PoseResult(2, 0.9, 0.0, 0.0, 0.0)
+    assert combine({"scene": {"sport_day": 0.9}}, None, duel_only)["moment"] is None
+
+
+def test_near_duplicates_not_kept_twice():
+    from imagomat.culling.engine import CullItem
+
+    items = _items(12)
+    for i, it in enumerate(items):
+        it.t = i * 60.0                      # jede Minute ein Bild -> eigene Serien
+        it.phash = "f" * 16 if i < 6 else format(i * 12345678901, "016x")[:16]
+    out = cull(items, CullingSettings(keep_ratio=0.5))
+    kept_same = [it for it in out if it.keep and it.phash == "f" * 16]
+    assert len(kept_same) == 1

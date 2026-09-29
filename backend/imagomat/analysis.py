@@ -33,6 +33,7 @@ from .vision.segmentation import body_boxes, segment
 log = logging.getLogger(__name__)
 STEP_PREVIEW, STEP_METRICS, STEP_FACES, STEP_EMBED = "preview", "metrics", "faces", "embed"
 STEP_ACTION = "action"
+ACTION_VERSION = 2     # erhöht, wenn sich die Moment-Erkennung ändert -> wird neu berechnet
 PREVIEW_SIDE = 2048
 
 
@@ -290,7 +291,24 @@ def _stage3_action(db: Database, rows: list[Any], imgs: list[np.ndarray]) -> Non
             log.warning("Pose-Erkennung fehlgeschlagen: %s", e)
     for r, a, c, p in zip(rows, analyses, clips, poses):
         db.update_analysis(r["id"], action.combine(a, c, p))
-        db.mark_step(r["id"], STEP_ACTION)
+        db.mark_step(r["id"], STEP_ACTION, ACTION_VERSION)
+
+
+def ensure_action(ctx: JobContext, shoot_id: int) -> None:
+    """Action-Momente für Bilder nachrechnen, die noch eine ältere Version haben (schnell)."""
+    db = ctx.db
+    rows = [r for r in db.images(shoot_id)
+            if db.step_done(r["id"], STEP_METRICS) and not db.step_done(r["id"], STEP_ACTION, ACTION_VERSION)]
+    for i in range(0, len(rows), 8):
+        ctx.check()
+        chunk = rows[i:i + 8]
+        try:
+            _stage3_action(db, chunk, [load_cached_preview(r) for r in chunk])
+        except Exception as e:  # noqa: BLE001
+            log.warning("Action-Momente fehlgeschlagen: %s", e)
+            for r in chunk:
+                db.mark_step(r["id"], STEP_ACTION, ACTION_VERSION)
+        ctx.progress(message=f"Momente {min(i + 8, len(rows))}/{len(rows)}")
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +373,8 @@ def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
         _stage2_embed(db, batch_rows, batch_imgs)
     # Stufe 3: Action-Momente (braucht Embeddings und Gesichter)
     rows = db.images(shoot_id)
-    todo3 = [r for r in rows if r["id"] in readable and (force or not db.step_done(r["id"], STEP_ACTION))]
+    todo3 = [r for r in rows if r["id"] in readable
+             and (force or not db.step_done(r["id"], STEP_ACTION, ACTION_VERSION))]
     done += len(rows) - len(todo3)
     for i in range(0, len(todo3), 8):
         ctx.check()
@@ -365,7 +384,7 @@ def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
         except Exception as e:  # noqa: BLE001 - Action-Momente sind optional
             log.warning("Action-Momente fehlgeschlagen: %s", e, exc_info=True)
             for r in chunk:
-                db.mark_step(r["id"], STEP_ACTION)
+                db.mark_step(r["id"], STEP_ACTION, ACTION_VERSION)
         done += len(chunk)
         ctx.progress(done, "Action-Momente")
     if failed:
