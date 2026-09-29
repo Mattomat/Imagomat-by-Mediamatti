@@ -23,7 +23,7 @@ import pickle
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -170,7 +170,8 @@ class StyleModel:
         return idx, w / max(w.sum(), 1e-12)
 
     # ------------------------------------------------------------------
-    def fit(self, records: list[Record], denoise_key: str | None = None) -> "StyleModel":
+    def fit(self, records: list[Record], denoise_key: str | None = None,
+            progress: Callable[[str], None] | None = None) -> "StyleModel":
         from ..vision.geometry import from_lightroom_crop
 
         if len(records) < 3:
@@ -212,16 +213,19 @@ class StyleModel:
         self._gbdt = {}
         mae_model = mae_knn.copy()
         if self.n >= 40:
-            mae_model = self._fit_gbdt(X, Y, knn_Y)
+            mae_model = self._fit_gbdt(X, Y, knn_Y, progress)
         self.metrics = {
             "n": self.n,
             "mae_knn": {t: float(v) for t, v in zip(TARGETS, mae_knn)},
             "mae_model": {t: float(v) for t, v in zip(TARGETS, mae_model)},
         }
+        if progress:
+            progress("Masken lernen")
         self._fit_masks(records)
         return self
 
-    def _fit_gbdt(self, X: np.ndarray, Y: np.ndarray, knn_Y: np.ndarray) -> np.ndarray:
+    def _fit_gbdt(self, X: np.ndarray, Y: np.ndarray, knn_Y: np.ndarray,
+                  progress: Callable[[str], None] | None = None) -> np.ndarray:
         make = gbdt_factory()
         if make is None:
             return np.abs(knn_Y - Y).mean(0)
@@ -229,8 +233,11 @@ class StyleModel:
 
         Xs = (X - self._mu) / self._sd
         mae = np.zeros(Y.shape[1])
-        kf = KFold(n_splits=min(5, max(2, self.n // 20)), shuffle=True, random_state=0)
+        # 3 Falten reichen für die Entscheidung GBDT vs. kNN (5 Falten kosten bei 84 Zielen spürbar Zeit)
+        kf = KFold(n_splits=min(3, max(2, self.n // 20)), shuffle=True, random_state=0)
         for j, t in enumerate(TARGETS):
+            if progress:
+                progress(f"Trainiere Modell: Regler {j + 1}/{len(TARGETS)}")
             if t in self._const:
                 continue
             A = np.column_stack([Xs, knn_Y[:, j]])

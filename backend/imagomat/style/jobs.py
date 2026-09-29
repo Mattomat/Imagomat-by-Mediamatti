@@ -89,7 +89,8 @@ def train_profile(ctx: JobContext, name: str, catalog: str | None = None, folder
     _append_samples(name, recs)
     all_recs = load_samples(name)
     ctx.progress(len(good), f"Trainiere Modell mit {len(all_recs)} Bildern")
-    model = StyleModel(name, base_preset).fit(all_recs, dialect.denoise_amount_key)
+    model = StyleModel(name, base_preset).fit(all_recs, dialect.denoise_amount_key,
+                                              progress=lambda m: ctx.progress(message=m))
     for p in presets or []:
         model.look_override.update({k: v for k, v in load_preset(Path(p)).items()
                                     if k in ("CameraProfile", "Look", "ProfileName")})
