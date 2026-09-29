@@ -85,7 +85,12 @@ class ClipEmbedder:
         self.torch = torch
         self.device = torch_device()
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(model, pretrained=pretrained)
-        self.model = self.model.to(self.device).eval()
+        try:
+            self.model = self.model.to(self.device).eval()
+        except RuntimeError as e:  # z. B. MPS in virtuellen Maschinen nicht nutzbar
+            log.warning("CLIP auf %s nicht möglich (%s), nutze CPU", self.device, e)
+            self.device = "cpu"
+            self.model = self.model.to("cpu").eval()
         self.tokenizer = open_clip.get_tokenizer(model)
         self.dim = int(self.model.visual.output_dim)
         self._scene_keys: list[str] = []

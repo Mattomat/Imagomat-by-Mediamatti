@@ -156,6 +156,9 @@ class PoseDetector:
             self.model.to(self.device)
             self._run([np.zeros((64, 96, 3), np.uint8)])
         except Exception as e:  # noqa: BLE001 - manche Operatoren fehlen auf MPS
+            if getattr(load_settings(), "action_backend", "auto") != "pose":
+                # Auf der CPU dauert Pose mehrere Sekunden pro Bild: dann lieber nur CLIP
+                raise RuntimeError(f"Pose auf {self.device} nicht möglich ({e}); ohne GPU zu langsam") from e
             log.info("Pose auf %s nicht möglich (%s), nutze CPU", self.device, e)
             self.device = "cpu"
             self.model.to("cpu")
@@ -166,7 +169,7 @@ class PoseDetector:
             xs = [torch.from_numpy(im).permute(2, 0, 1).float().div(255).to(self.device) for im in images]
             return [{k: v.cpu().numpy() for k, v in o.items()} for o in self.model(xs)]
 
-    def analyze(self, images: list[np.ndarray], side: int = 640) -> list[PoseResult]:
+    def analyze(self, images: list[np.ndarray], side: int = 576) -> list[PoseResult]:
         import cv2
 
         small = []
