@@ -19,6 +19,7 @@ from .models import has_module
 
 log = logging.getLogger(__name__)
 _NUM = re.compile(r"^\d{1,2}$")
+_WORD = re.compile(r"^[A-Za-zÀ-ÿ'\-]{3,}$")
 
 
 @dataclass
@@ -91,6 +92,36 @@ def find_numbers(img: np.ndarray, min_height: float = 0.012, min_conf: float = 0
         if not _NUM.match(t) or conf < min_conf or (box[3] - box[1]) < min_height:
             continue
         hits.append(NumberHit(t.lstrip("0") or "0", conf, box))
+    return hits
+
+
+def read_shirts(img: np.ndarray, min_height: float = 0.010, min_conf: float = 0.4) -> list[NumberHit]:
+    """Rückennummern UND Namen auf Trikots (z. B. "37" und "MALUVUNU").
+
+    Namen werden als ``@NAME`` zurückgegeben, damit sie sich von Nummern unterscheiden."""
+    ocr = _backend()
+    if ocr is None:
+        return []
+    try:
+        results = ocr(img)
+    except Exception as e:  # noqa: BLE001 - OCR darf die Analyse nie abbrechen
+        log.warning("OCR fehlgeschlagen: %s", e)
+        return []
+    return parse_shirt_text(results, min_height, min_conf)
+
+
+def parse_shirt_text(results, min_height: float = 0.010, min_conf: float = 0.4) -> list[NumberHit]:
+    hits = []
+    for text, conf, box in results:
+        if conf < min_conf or (box[3] - box[1]) < min_height:
+            continue
+        for tok in text.replace("#", " ").replace(".", " ").split():
+            t = tok.strip()
+            digits = t.replace("O", "0").replace("o", "0").replace("I", "1").replace("l", "1")
+            if _NUM.match(digits):
+                hits.append(NumberHit(digits.lstrip("0") or "0", conf, box))
+            elif _WORD.match(t) and t.upper() == t:        # Trikotnamen sind in Grossbuchstaben
+                hits.append(NumberHit("@" + t.upper(), conf, box))
     return hits
 
 

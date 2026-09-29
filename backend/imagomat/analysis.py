@@ -33,6 +33,8 @@ from .vision.segmentation import body_boxes, segment
 log = logging.getLogger(__name__)
 STEP_PREVIEW, STEP_METRICS, STEP_FACES, STEP_EMBED = "preview", "metrics", "faces", "embed"
 STEP_ACTION = "action"
+STEP_OCR = "ocr"
+OCR_VERSION = 2        # 2: Rückennummern + Trikotnamen
 METRICS_VERSION = 2    # 2: Apples RAW-Engine/DNG Converter für unbekannte Kameras, Vorschau auf RAW-Skala
 ACTION_VERSION = 2     # erhöht, wenn sich die Moment-Erkennung ändert -> wird neu berechnet
 PREVIEW_SIDE = 2048
@@ -261,13 +263,35 @@ def _stage2_numbers(db: Database, row: Any, img: np.ndarray, bodies: list[tuple[
 
     if not ocr.available():
         return
-    hits = ocr.find_numbers(img)
+    hits = ocr.read_shirts(img)
     with db.tx() as c:
-        c.execute("DELETE FROM numbers WHERE image_id=? AND person_id IS NULL", (row["id"],))
+        c.execute("DELETE FROM numbers WHERE image_id=?", (row["id"],))
         for h in hits:
             c.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
                       (row["id"], h.text, h.confidence, dumps(list(h.bbox))))
-    db.update_analysis(row["id"], {"numbers": [h.text for h in hits]})
+    db.update_analysis(row["id"], {"numbers": [h.text for h in hits if not h.text.startswith("@")],
+                                   "shirt_names": [h.text[1:] for h in hits if h.text.startswith("@")]})
+    db.mark_step(row["id"], STEP_OCR, OCR_VERSION)
+
+
+def ensure_ocr(ctx: JobContext, shoot_id: int) -> None:
+    """Trikot-Texte für Bilder nachlesen, die mit einer älteren Version analysiert wurden."""
+    from .vision import ocr
+
+    if not ocr.available():
+        return
+    db = ctx.db
+    rows = [r for r in db.images(shoot_id) if db.step_done(r["id"], STEP_METRICS, METRICS_VERSION)
+            and not db.step_done(r["id"], STEP_OCR, OCR_VERSION)]
+    for i, r in enumerate(rows):
+        ctx.check()
+        try:
+            _stage2_numbers(db, r, load_cached_preview(r), [])
+        except Exception as e:  # noqa: BLE001
+            log.warning("Trikot-Texte fehlgeschlagen für %s: %s", r["filename"], e)
+            db.mark_step(r["id"], STEP_OCR, OCR_VERSION)
+        if i % 20 == 0:
+            ctx.progress(message=f"Rückennummern lesen {i + 1}/{len(rows)}")
 
 
 def _stage2_embed(db: Database, rows: list[Any], imgs: list[np.ndarray]) -> None:
