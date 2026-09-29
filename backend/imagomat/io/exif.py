@@ -1,4 +1,4 @@
-"""EXIF lesen: bevorzugt ExifTool (alle Formate inkl. CR3, Sub-Sekunden), sonst exifread.
+"""EXIF lesen: bevorzugt ExifTool (alle Formate inkl. CR3), sonst eigener TIFF-Leser (+ exifread).
 
 Sub-Sekunden sind für Sport-Serien wichtig (10 bis 30 Bilder/s): Ohne sie fallen alle
 Bilder einer Sekunde auf denselben Zeitstempel.
@@ -93,10 +93,25 @@ def read_exif_exiftool(paths: list[Path]) -> dict[str, dict[str, Any]]:
 
 
 def read_exif_fallback(path: Path) -> dict[str, Any]:
+    """Ohne ExifTool: eigener TIFF/EXIF-Leser, ergänzt durch exifread (falls installiert)."""
+    from .tiffmeta import read_tiff_exif
+
+    d: dict[str, Any] = read_tiff_exif(path)
+    if not d.get("DateTimeOriginal") or not d.get("ISO"):
+        d = {**_exifread_tags(path), **d}
+    n = _normalize(d)
+    if n["capture_time"] is None:
+        n["capture_time"] = path.stat().st_mtime
+    return n
+
+
+def _exifread_tags(path: Path) -> dict[str, Any]:
     d: dict[str, Any] = {}
     try:
         import exifread
-
+    except ImportError:
+        return d
+    try:
         with open(path, "rb") as f:
             tags = exifread.process_file(f, details=False)
         m = {
@@ -107,22 +122,20 @@ def read_exif_fallback(path: Path) -> dict[str, Any]:
         }
         for k, t in m.items():
             v = tags.get(t) or tags.get(t.replace("EXIF ", "Image "))
-            if v is not None:
-                vals = getattr(v, "values", None)
-                if k == "Orientation" and vals:
-                    d[k] = vals[0]
-                elif vals and not isinstance(vals, str) and hasattr(vals[0], "num"):
-                    d[k] = vals[0].num / vals[0].den if vals[0].den else None
-                elif vals and not isinstance(vals, str):
-                    d[k] = vals[0]
-                else:
-                    d[k] = str(v)
+            if v is None:
+                continue
+            vals = getattr(v, "values", None)
+            if k == "Orientation" and vals:
+                d[k] = vals[0]
+            elif vals and not isinstance(vals, str) and hasattr(vals[0], "num"):
+                d[k] = vals[0].num / vals[0].den if vals[0].den else None
+            elif vals and not isinstance(vals, str):
+                d[k] = vals[0]
+            else:
+                d[k] = str(v)
     except Exception:  # noqa: BLE001 - exifread wirft bei unbekannten Formaten beliebige Fehler
         pass
-    n = _normalize(d)
-    if n["capture_time"] is None:
-        n["capture_time"] = path.stat().st_mtime
-    return n
+    return d
 
 
 def read_exif(paths: list[Path]) -> dict[str, dict[str, Any]]:

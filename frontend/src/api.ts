@@ -5,7 +5,8 @@ declare global {
   }
 }
 
-export const BASE = window.__TAURI_INTERNALS__ ? "http://127.0.0.1:8765" : "";
+export const IS_APP = !!window.__TAURI_INTERNALS__;
+export const BASE = IS_APP ? "http://127.0.0.1:8765" : "";
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const r = await fetch(BASE + path, {
@@ -14,10 +15,10 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
-    let msg = `${r.status}`;
+    let msg = `Fehler ${r.status}`;
     try {
       const j = await r.json();
-      msg = j.detail ?? msg;
+      msg = typeof j.detail === "string" ? j.detail : msg;
     } catch {
       /* keine JSON-Antwort */
     }
@@ -35,6 +36,17 @@ export const api = {
   img: (p: string) => BASE + p,
 };
 
+export interface JobInfo {
+  id: number;
+  kind: string;
+  status: string;
+  progress: number;
+  total: number;
+  message: string | null;
+  error?: string | null;
+  shoot_id?: number | null;
+}
+
 export interface Shoot {
   id: number;
   name: string;
@@ -42,7 +54,9 @@ export interface Shoot {
   profile: string | null;
   n: number;
   kept: number | null;
+  cover: number | null;
   settings: string | null;
+  job: JobInfo | null;
 }
 
 export interface ImageItem {
@@ -54,28 +68,14 @@ export interface ImageItem {
   rating: number | null;
   label: string | null;
   reasons: string[];
-  reason_keys: string[];
   series: number | null;
   best: boolean;
-  score: number | null;
   manual: boolean;
   confidence: number | null;
   denoise: number | null;
   people: string[];
   notes: string[];
   preset: string | null;
-  faces: number;
-}
-
-export interface Job {
-  id: number;
-  kind: string;
-  shoot_id: number | null;
-  status: string;
-  progress: number;
-  total: number;
-  message: string | null;
-  error: string | null;
 }
 
 export interface Preset {
@@ -98,7 +98,6 @@ export interface Person {
   name: string;
   team: string | null;
   number: string | null;
-  keyword: string;
 }
 
 export interface Cluster {
@@ -108,6 +107,14 @@ export interface Cluster {
   cluster_id: number | null;
   count: number;
   faces: { id: number; image_id: number; assigned_by: string | null }[];
+}
+
+export interface Overview {
+  persons: number;
+  persons_with_face: number;
+  teams: string[];
+  profiles: Profile[];
+  catalogs: string[];
 }
 
 export type JobEvent = { type: "job"; job_id: number; progress: number; total: number; message: string | null };
@@ -130,21 +137,53 @@ export function connectEvents(onEvent: (e: JobEvent) => void): () => void {
   };
 }
 
-// Ordnerauswahl: in Tauri nativer Dialog, im Browser Texteingabe.
-export async function pickFolder(current?: string): Promise<string | null> {
-  if (window.__TAURI_INTERNALS__) {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const r = await open({ directory: true, multiple: false, defaultPath: current });
-    return typeof r === "string" ? r : null;
+/** Wartet, bis ein Job fertig ist (für Aktionen mit Rückmeldung). */
+export async function waitForJob(id: number, onProgress?: (j: JobInfo) => void): Promise<JobInfo> {
+  for (;;) {
+    const jobs = await api.get<JobInfo[]>("/api/jobs");
+    const j = jobs.find((x) => x.id === id);
+    if (j) {
+      onProgress?.(j);
+      if (["done", "failed", "cancelled"].includes(j.status)) return j;
+    }
+    await new Promise((r) => setTimeout(r, 800));
   }
-  return window.prompt("Ordnerpfad", current ?? "") || null;
 }
 
-export async function pickFile(ext: string[], current?: string): Promise<string | null> {
-  if (window.__TAURI_INTERNALS__) {
+// Ordner-/Dateiauswahl: in der App nativer Dialog, im Browser Texteingabe.
+export async function pickFolder(title = "Ordner wählen"): Promise<string | null> {
+  if (IS_APP) {
     const { open } = await import("@tauri-apps/plugin-dialog");
-    const r = await open({ multiple: false, defaultPath: current, filters: [{ name: ext.join(", "), extensions: ext }] });
+    const r = await open({ directory: true, multiple: false, title });
     return typeof r === "string" ? r : null;
   }
-  return window.prompt(`Dateipfad (${ext.join(", ")})`, current ?? "") || null;
+  return window.prompt(`${title} – Pfad eingeben`) || null;
+}
+
+export async function pickFile(ext: string[], title = "Datei wählen"): Promise<string | null> {
+  if (IS_APP) {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const r = await open({ multiple: false, title, filters: [{ name: ext.join(", "), extensions: ext }] });
+    return typeof r === "string" ? r : null;
+  }
+  return window.prompt(`${title} – Pfad eingeben`) || null;
+}
+
+/** Drag & Drop von Dateien/Ordnern aus dem Finder (nur in der App liefert das Pfade). */
+export async function onFileDrop(handler: (paths: string[]) => void, hover: (on: boolean) => void): Promise<() => void> {
+  if (!IS_APP) return () => undefined;
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return getCurrentWebview().onDragDropEvent((e) => {
+    const p = e.payload;
+    if (p.type === "enter" || p.type === "over") hover(true);
+    else if (p.type === "leave") hover(false);
+    else if (p.type === "drop") {
+      hover(false);
+      handler(p.paths);
+    }
+  });
+}
+
+export async function reveal(path: string) {
+  await api.post("/api/reveal", { path });
 }

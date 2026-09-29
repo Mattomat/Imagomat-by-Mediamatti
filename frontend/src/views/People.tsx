@@ -1,105 +1,195 @@
-import { useEffect, useState } from "react";
-import { api, Cluster, Person, Shoot } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { AppCtx } from "../App";
+import { api, Cluster, IS_APP, JobInfo, Overview, Person, pickFile, pickFolder, Shoot, waitForJob } from "../api";
+import { Progress } from "../ui";
 
-export default function PeopleView({ shoot, tick, onJob }: { shoot: Shoot | null; tick: number; onJob: () => void }) {
-  const [clusters, setClusters] = useState<Cluster[]>([]);
+export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: ((p: string[]) => void) | null) => void }) {
   const [persons, setPersons] = useState<Person[]>([]);
+  const [team, setTeam] = useState("");
+  const [teamFilter, setTeamFilter] = useState("");
+  const [learning, setLearning] = useState<JobInfo | null>(null);
+  const [shoots, setShoots] = useState<Shoot[]>([]);
+  const [shootId, setShootId] = useState<number | null>(null);
+  const [clusters, setClusters] = useState<Cluster[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
-  const [roster, setRoster] = useState({ team: "FC Winterthur 1. Mannschaft", url: "", csv: "" });
-  const [preview, setPreview] = useState<{ name: string; number: string | null }[]>([]);
-  const [sources, setSources] = useState<Record<string, string>>({});
-  const [msg, setMsg] = useState("");
+  const [faceV, setFaceV] = useState(0);
+  const [catalogs, setCatalogs] = useState<string[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
     api.get<Person[]>("/api/persons").then(setPersons);
-    if (shoot) api.get<Cluster[]>(`/api/shoots/${shoot.id}/clusters`).then(setClusters);
+    setFaceV((v) => v + 1);
   };
-  useEffect(load, [shoot, tick]);
+  useEffect(load, [ctx.tick]);
   useEffect(() => {
-    api.get<Record<string, string>>("/api/roster/sources").then(setSources);
+    api.get<Overview>("/api/overview").then((o) => setCatalogs(o.catalogs));
   }, []);
+  useEffect(() => {
+    api.get<Shoot[]>("/api/shoots").then((s) => {
+      setShoots(s);
+      if (s.length && shootId === null) setShootId(s[0].id);
+    });
+  }, [ctx.tick]);
+  useEffect(() => {
+    if (shootId) api.get<Cluster[]>(`/api/shoots/${shootId}/clusters`).then((c) => setClusters(c.filter((x) => !x.person_id)));
+  }, [shootId, ctx.tick]);
 
-  const assign = async (c: Cluster) => {
-    const n = (names[c.key] ?? "").trim();
-    if (!n || !shoot) return;
-    const p = persons.find((x) => x.name === n);
-    const body = p ? { person_id: p.id } : { name: n };
-    if (c.cluster_id !== null && !c.person_id) await api.post(`/api/shoots/${shoot.id}/clusters/${c.cluster_id}/assign`, body);
-    else for (const f of c.faces) await api.post(`/api/faces/${f.id}/assign`, body);
-    load();
-  };
+  const teams = useMemo(() => [...new Set(persons.map((p) => p.team).filter((t): t is string => !!t))].sort(), [persons]);
+  const shownPersons = persons.filter((p) => !teamFilter || p.team === teamFilter);
 
-  const loadRoster = async (save: boolean) => {
-    setMsg("");
+  const importCsvText = async (text: string, fileName: string) => {
+    const teamName = team.trim() || fileName.replace(/\.(csv|txt)$/i, "").replace(/[_-]+/g, " ");
     try {
-      const r = await api.post<{ entries: { name: string; number: string | null }[] }>("/api/roster", {
-        team: roster.team, url: roster.url || undefined, csv: roster.csv || undefined, save,
-      });
-      setPreview(r.entries);
-      setMsg(save ? `${r.entries.length} Personen gespeichert` : `${r.entries.length} Einträge gefunden, bitte prüfen`);
-      if (save) load();
+      const r = await api.post<{ entries: unknown[] }>("/api/roster", { team: teamName, csv: text, save: true });
+      ctx.toast(`${r.entries.length} Personen gespeichert (${teamName})`);
+      load();
     } catch (e) {
-      setMsg(String(e));
+      ctx.toast((e as Error).message, "error");
     }
   };
 
+  const learnFrom = async (body: { folder?: string; files?: string[]; catalog?: string }) => {
+    try {
+      const r = await api.post<{ job_id: number }>("/api/people/learn", { ...body, team: team.trim() || undefined });
+      ctx.refreshJobs();
+      const j = await waitForJob(r.job_id, setLearning);
+      setLearning(null);
+      if (j.status === "done") ctx.toast(j.message ?? "Fertig");
+      else ctx.toast(j.error?.split("\n")[0] ?? "Fehler beim Einlesen", "error");
+      load();
+    } catch (e) {
+      setLearning(null);
+      ctx.toast((e as Error).message, "error");
+    }
+  };
+
+  useEffect(() => {
+    setDrop(async (paths) => {
+      const csv = paths.find((p) => /\.(csv|txt)$/i.test(p));
+      if (csv) {
+        const teamName = team.trim() || csv.split("/").pop()!.replace(/\.\w+$/, "").replace(/[_-]+/g, " ");
+        try {
+          const r = await api.post<{ entries: unknown[] }>("/api/roster", { team: teamName, path: csv, save: true });
+          ctx.toast(`${r.entries.length} Personen gespeichert (${teamName})`);
+          load();
+        } catch (e) {
+          ctx.toast((e as Error).message, "error");
+        }
+        return;
+      }
+      const images = paths.filter((p) => /\.(jpe?g|tiff?|dng|arw|cr3|nef|heic)$/i.test(p));
+      if (images.length) learnFrom({ files: images });
+      else if (paths[0]) learnFrom({ folder: paths[0] });
+    });
+    return () => setDrop(null);
+  }, [setDrop, team]);
+
+  const assignCluster = async (c: Cluster) => {
+    const n = (names[c.key] ?? "").trim();
+    if (!n || !shootId) return;
+    const p = persons.find((x) => x.name.toLowerCase() === n.toLowerCase());
+    const body = p ? { person_id: p.id } : { name: n, team: team.trim() || undefined };
+    if (c.cluster_id !== null) await api.post(`/api/shoots/${shootId}/clusters/${c.cluster_id}/assign`, body);
+    else for (const f of c.faces) await api.post(`/api/faces/${f.id}/assign`, body);
+    setClusters((cs) => cs.filter((x) => x.key !== c.key));
+    ctx.toast(`${n} zugeordnet`);
+    load();
+  };
+
   return (
-    <div className="page two-col">
-      <section className="card wide">
-        <h2>Gesichter im Shoot</h2>
-        {!shoot && <p>Kein Shoot gewählt.</p>}
-        {shoot && (
-          <p className="hint">
-            Unbekannte Gesichter sind nach Ähnlichkeit gruppiert. Gib einer Gruppe einen Namen: ab dann erkennt Imagomat
-            die Person auch in künftigen Shoots.{" "}
-            <button onClick={() => api.post(`/api/shoots/${shoot.id}/run/people`).then(onJob)}>Neu zuordnen</button>
-          </p>
+    <div className="page people">
+      <h1>Personen</h1>
+      <div className="action-cards">
+        <div className="action-card main">
+          <div className="ac-title">Aus Lightroom übernehmen</div>
+          <div className="ac-text">Alle Personen, die du in Lightroom schon benannt hast, auf einmal lernen.</div>
+          {learning ? (
+            <Progress value={learning.total ? learning.progress / learning.total : 0.05} label={learning.message ?? "Lerne Personen …"} />
+          ) : (
+            <>
+              {catalogs.length > 0 && (
+                <button className="primary" onClick={() => learnFrom({ catalog: catalogs[0] })} title={catalogs[0]}>
+                  Übernehmen aus „{catalogs[0].split("/").pop()}“
+                </button>
+              )}
+              <button className={catalogs.length ? "link" : "primary"} onClick={async () => {
+                const f = await pickFile(["lrcat"], "Lightroom-Katalog wählen");
+                if (f) learnFrom({ catalog: f });
+              }}>{catalogs.length ? "anderen Katalog wählen" : "Katalog wählen …"}</button>
+            </>
+          )}
+        </div>
+        <div className="action-card">
+          <div className="ac-title">Aus fertigen Bildern</div>
+          <div className="ac-text">
+            Einen ganzen Ordner mit fertigen JPGs (oder RAW + XMP) wählen{IS_APP ? " oder hierher ziehen" : ""}.
+            Namen kommen aus Stichwörtern, Gesichtern oder dem Dateinamen, alle auf einmal.
+          </div>
+          <button disabled={!!learning} onClick={async () => { const f = await pickFolder("Ordner mit fertigen Bildern"); if (f) learnFrom({ folder: f }); }}>Ordner wählen …</button>
+        </div>
+        <div className="action-card">
+          <div className="ac-title">Kader (CSV)</div>
+          <div className="ac-text">Name und Rückennummer, z. B. <code>Max Muster;7</code>. Wird sofort gespeichert.</div>
+          <input ref={fileRef} type="file" accept=".csv,.txt" hidden onChange={async (e) => {
+            const f = e.target.files?.[0];
+            if (f) await importCsvText(await f.text(), f.name);
+            e.target.value = "";
+          }} />
+          <button onClick={() => fileRef.current?.click()}>CSV wählen …</button>
+        </div>
+      </div>
+      <div className="team-row">
+        <label>Team für neue Personen</label>
+        <input list="teams" value={team} placeholder="z. B. FC Winterthur Frauen" onChange={(e) => setTeam(e.target.value)} />
+        <datalist id="teams">{teams.map((t) => <option key={t} value={t} />)}</datalist>
+      </div>
+
+      {clusters.length > 0 && (
+        <>
+          <div className="section-head">
+            <h2>Wer ist das?</h2>
+            <select value={shootId ?? ""} onChange={(e) => setShootId(+e.target.value)}>
+              {shoots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <datalist id="persons">{persons.map((p) => <option key={p.id} value={p.name} />)}</datalist>
+          <div className="who-list">
+            {clusters.slice(0, 20).map((c) => (
+              <div key={c.key} className="who-card">
+                <div className="faces">{c.faces.slice(0, 5).map((f) => <img key={f.id} src={api.img(`/api/faces/${f.id}/crop`)} />)}</div>
+                <div className="who-count">{c.count} Bilder</div>
+                <input list="persons" placeholder="Name eingeben, Enter" value={names[c.key] ?? ""}
+                  onChange={(e) => setNames({ ...names, [c.key]: e.target.value })}
+                  onKeyDown={(e) => e.key === "Enter" && assignCluster(c)} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="section-head">
+        <h2>Bekannte Personen ({persons.length})</h2>
+        {teams.length > 1 && (
+          <select value={teamFilter} onChange={(e) => setTeamFilter(e.target.value)}>
+            <option value="">Alle Teams</option>
+            {teams.map((t) => <option key={t}>{t}</option>)}
+          </select>
         )}
-        <datalist id="persons">{persons.map((p) => <option key={p.id} value={p.name} />)}</datalist>
-        {clusters.map((c) => (
-          <div key={c.key} className="cluster">
-            <div className="faces">
-              {c.faces.map((f) => (
-                <img key={f.id} src={api.img(`/api/faces/${f.id}/crop`)} title={f.assigned_by ?? "unbestätigt"} />
-              ))}
+      </div>
+      {persons.length === 0 && <div className="empty">Noch keine Personen. Importiere einen Kader oder ziehe benannte Bilder hierher.</div>}
+      <div className="person-grid">
+        {shownPersons.map((p) => (
+          <div key={p.id} className="person-card">
+            <div className="avatar">
+              <img src={api.img(`/api/persons/${p.id}/face?v=${faceV}`)} onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
+              <span>{p.number ?? p.name.split(" ").map((x) => x[0]).join("").slice(0, 2)}</span>
             </div>
-            <div className="assign">
-              <b>{c.name ?? (c.cluster_id !== null ? `Gruppe ${c.cluster_id + 1}` : "Einzelgesichter")}</b> · {c.count}×
-              <input list="persons" placeholder="Name" value={names[c.key] ?? ""} onChange={(e) => setNames({ ...names, [c.key]: e.target.value })} />
-              <button onClick={() => assign(c)}>Zuordnen</button>
-            </div>
+            <div className="p-name">{p.name}</div>
+            <div className="p-team">{p.number ? `#${p.number} · ` : ""}{p.team ?? ""}</div>
+            <button className="ghost small" title="Entfernen" onClick={() => api.del(`/api/persons/${p.id}`).then(load)}>✕</button>
           </div>
         ))}
-      </section>
-      <section className="card">
-        <h2>Kader & Rückennummern</h2>
-        <label>Team</label>
-        <input list="teams" value={roster.team} onChange={(e) => setRoster({ ...roster, team: e.target.value })} />
-        <datalist id="teams">{Object.keys(sources).map((t) => <option key={t} value={t} />)}</datalist>
-        <label>Webseite (optional)</label>
-        <input value={roster.url} placeholder={sources[roster.team] ?? "https://…"} onChange={(e) => setRoster({ ...roster, url: e.target.value })} />
-        <label>oder CSV (Name;Nummer)</label>
-        <textarea rows={5} value={roster.csv} onChange={(e) => setRoster({ ...roster, csv: e.target.value })} placeholder={"Max Muster;7\nLuca Beispiel;10"} />
-        <div className="row">
-          <button onClick={() => loadRoster(false)}>Vorschau</button>
-          <button className="primary" onClick={() => loadRoster(true)}>Speichern</button>
-        </div>
-        {msg && <p className="hint">{msg}</p>}
-        {preview.length > 0 && (
-          <table className="list"><tbody>{preview.map((e) => <tr key={e.name}><td>{e.number}</td><td>{e.name}</td></tr>)}</tbody></table>
-        )}
-        <h3>Personen ({persons.length})</h3>
-        <table className="list">
-          <tbody>
-            {persons.map((p) => (
-              <tr key={p.id}>
-                <td>{p.number}</td><td>{p.name}</td><td>{p.team}</td>
-                <td><button onClick={() => api.del(`/api/persons/${p.id}`).then(load)}>✕</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      </div>
     </div>
   );
 }

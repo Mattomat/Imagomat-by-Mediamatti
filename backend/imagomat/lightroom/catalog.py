@@ -164,6 +164,47 @@ class CatalogReader:
             }
         return out
 
+    def named_faces(self) -> dict[Path, list[tuple[str, tuple[float, float, float, float]]]]:
+        """Alle in Lightroom benannten Gesichter: Bildpfad -> [(Name, Box x0 y0 x1 y1 normiert)].
+
+        Lightroom speichert Gesichter in AgLibraryFace (Eckpunkte tl/br) und die Zuordnung zur
+        Personen-Stichwort in AgLibraryKeywordFace. Das Schema wird zur Laufzeit geprüft.
+        """
+        fcols = _columns(self.conn, "AgLibraryFace")
+        kcols = _columns(self.conn, "AgLibraryKeywordFace")
+        if not fcols or not kcols or not {"tl_x", "tl_y", "br_x", "br_y", "image"} <= fcols:
+            return {}
+        tag_col = "tag" if "tag" in kcols else ("keyword" if "keyword" in kcols else None)
+        if tag_col is None:
+            return {}
+        conds = []
+        if "userReject" in kcols:
+            conds.append("IFNULL(kf.userReject, 0) = 0")
+        if "userPick" in kcols:
+            conds.append("IFNULL(kf.userPick, 1) != 0")
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        sql = (
+            "SELECT f.image, f.tl_x, f.tl_y, f.br_x, f.br_y, k.name, fo.pathFromRoot, rf.absolutePath, "
+            "fi.baseName, fi.extension FROM AgLibraryFace f "
+            f"JOIN AgLibraryKeywordFace kf ON kf.face = f.id_local JOIN AgLibraryKeyword k ON k.id_local = kf.{tag_col} "
+            "JOIN Adobe_images i ON i.id_local = f.image JOIN AgLibraryFile fi ON i.rootFile = fi.id_local "
+            "JOIN AgLibraryFolder fo ON fi.folder = fo.id_local JOIN AgLibraryRootFolder rf ON fo.rootFolder = rf.id_local"
+            + where
+        )
+        out: dict[Path, list[tuple[str, tuple[float, float, float, float]]]] = {}
+        try:
+            rows = self.conn.execute(sql).fetchall()
+        except sqlite3.DatabaseError:
+            return {}
+        for r in rows:
+            if not r["name"]:
+                continue
+            path = Path(r["absolutePath"] or "") / (r["pathFromRoot"] or "") / f"{r['baseName']}.{r['extension']}"
+            box = (min(r["tl_x"], r["br_x"]), min(r["tl_y"], r["br_y"]), max(r["tl_x"], r["br_x"]),
+                   max(r["tl_y"], r["br_y"]))
+            out.setdefault(path, []).append((r["name"], tuple(float(v) for v in box)))
+        return out
+
     def images(self, include_virtual_copies: bool = False) -> Iterator[CatalogImage]:
         icols = _columns(self.conn, "Adobe_images")
         dcols = _columns(self.conn, "Adobe_imageDevelopSettings")

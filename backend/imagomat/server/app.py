@@ -82,6 +82,7 @@ class TrainReq(BaseModel):
     min_rating: int = 0
     only_picked: bool = False
     append: bool = False
+    learn_people: bool = True
 
 
 class ExportReq(BaseModel):
@@ -97,6 +98,7 @@ class RosterReq(BaseModel):
     team: str
     url: str | None = None
     csv: str | None = None
+    path: str | None = None
     save: bool = False
 
 
@@ -104,6 +106,22 @@ class JobReq(BaseModel):
     kind: str
     shoot_id: int | None = None
     params: dict[str, Any] = {}
+
+
+def find_catalogs(limit: int = 10) -> list[str]:
+    """Lightroom-Kataloge an den üblichen Orten finden (neueste zuerst)."""
+    home = Path.home()
+    found: list[Path] = []
+    for base in (home / "Pictures", home / "Bilder", home / "Documents", home / "Desktop"):
+        if not base.exists():
+            continue
+        for depth in ("*.lrcat", "*/*.lrcat", "*/*/*.lrcat"):
+            try:
+                found += [p for p in base.glob(depth) if not p.name.startswith(".")]
+            except OSError:
+                continue
+    found = sorted(set(found), key=lambda p: p.stat().st_mtime, reverse=True)
+    return [str(p) for p in found[:limit]]
 
 
 def create_app(db_path: str | None = None) -> FastAPI:
@@ -203,10 +221,40 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/shoots")
     def shoots() -> list[dict[str, Any]]:
         rows = db.query(
-            "SELECT s.*, COUNT(i.id) n, SUM(CASE WHEN c.decision='keep' THEN 1 ELSE 0 END) kept "
+            "SELECT s.*, COUNT(i.id) n, SUM(CASE WHEN c.decision='keep' THEN 1 ELSE 0 END) kept, "
+            "MIN(CASE WHEN c.is_series_best=1 AND c.decision='keep' THEN i.id END) cover, MIN(i.id) first_image "
             "FROM shoots s LEFT JOIN images i ON i.shoot_id=s.id LEFT JOIN culling c ON c.image_id=i.id "
-            "WHERE s.name NOT LIKE 'Kalibrierung:%' GROUP BY s.id ORDER BY s.created_at DESC")
-        return [dict(r) for r in rows]
+            "WHERE s.name NOT LIKE 'Kalibrierung:%' AND s.name != '__Referenzbilder__' "
+            "GROUP BY s.id ORDER BY s.created_at DESC")
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["cover"] = d["cover"] or d["first_image"]
+            job = db.one("SELECT id, kind, status, progress, total, message FROM jobs WHERE shoot_id=? "
+                         "ORDER BY id DESC LIMIT 1", (d["id"],))
+            d["job"] = dict(job) if job else None
+            out.append(d)
+        return out
+
+    @app.get("/api/shoots/{sid}")
+    def shoot(sid: int) -> dict[str, Any]:
+        r = next((x for x in shoots() if x["id"] == sid), None)
+        if r is None:
+            raise HTTPException(404)
+        return r
+
+    @app.post("/api/reveal")
+    def reveal(body: dict[str, str]) -> dict[str, Any]:
+        """Ordner im Finder zeigen (nur lokal)."""
+        import subprocess
+        import sys
+
+        path = Path(body["path"]).expanduser()
+        if not path.exists():
+            raise HTTPException(404, "Ordner nicht gefunden")
+        cmd = ["open", str(path)] if sys.platform == "darwin" else ["xdg-open", str(path)]
+        subprocess.Popen(cmd)
+        return {"ok": True}
 
     @app.post("/api/shoots/import")
     def import_shoot(req: ImportReq) -> dict[str, Any]:
@@ -422,7 +470,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/roster")
     def roster_import(req: RosterReq) -> dict[str, Any]:
-        if req.csv:
+        if req.path:
+            entries = roster.parse_csv(Path(req.path).expanduser().read_text("utf-8-sig"), req.team)
+        elif req.csv:
             entries = roster.parse_csv(req.csv, req.team)
         else:
             url = req.url or roster.DEFAULT_SOURCES.get(req.team)
@@ -435,6 +485,28 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if req.save:
             roster.save(db, entries)
         return {"entries": [e.__dict__ for e in entries], "saved": req.save}
+
+    @app.post("/api/people/learn")
+    def people_learn(body: dict[str, Any]) -> dict[str, Any]:
+        """Referenzbilder (bereits benannte JPGs) einlesen."""
+        return {"job_id": jobs.submit("learn_people", None, **body)}
+
+    @app.get("/api/persons/{pid}/face")
+    def person_face(pid: int) -> Response:
+        f = db.one("SELECT id FROM faces WHERE person_id=? ORDER BY (assigned_by IN ('manual','confirmed')) DESC, "
+                   "sharpness DESC LIMIT 1", (pid,))
+        if not f:
+            raise HTTPException(404)
+        return face_crop(f["id"])
+
+    @app.get("/api/overview")
+    def overview() -> dict[str, Any]:
+        n_persons = db.one("SELECT COUNT(*) FROM persons")[0]
+        n_known = db.one("SELECT COUNT(DISTINCT person_id) FROM faces WHERE assigned_by IN "
+                         "('manual','confirmed','number')")[0]
+        teams = [r[0] for r in db.query("SELECT DISTINCT team FROM persons WHERE team IS NOT NULL ORDER BY team")]
+        return {"persons": n_persons, "persons_with_face": n_known, "teams": teams,
+                "profiles": list_profiles(), "catalogs": find_catalogs()}
 
     @app.get("/api/roster/sources")
     def roster_sources() -> dict[str, str]:

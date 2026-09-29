@@ -10,6 +10,7 @@ from .culling import engine
 from .export import exporter
 from .jobs import JobContext, job
 from .people import clustering
+from .people import reference  # noqa: F401  (registriert Job learn_people)
 from .style import jobs as style_jobs
 
 STAGES = ["analyze", "cull", "people", "develop", "export"]

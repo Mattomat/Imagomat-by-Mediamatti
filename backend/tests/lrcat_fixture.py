@@ -24,6 +24,8 @@ CREATE TABLE AgLibraryKeyword (id_local INTEGER PRIMARY KEY, id_global UNIQUE NO
 CREATE TABLE AgLibraryKeywordImage (id_local INTEGER PRIMARY KEY, image INTEGER NOT NULL DEFAULT 0, tag INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE AgLibraryCollection (id_local INTEGER PRIMARY KEY, creationId NOT NULL DEFAULT '', genealogy NOT NULL DEFAULT '', imageCount, name NOT NULL DEFAULT '', parent INTEGER, systemOnly NOT NULL DEFAULT '');
 CREATE TABLE AgLibraryCollectionImage (id_local INTEGER PRIMARY KEY, collection INTEGER NOT NULL DEFAULT 0, image INTEGER NOT NULL DEFAULT 0, pick NOT NULL DEFAULT 0, positionInCollection);
+CREATE TABLE AgLibraryFace (id_local INTEGER PRIMARY KEY, id_global UNIQUE NOT NULL, bl_x, bl_y, br_x, br_y, cluster INTEGER, compatibleVersion, ignored INTEGER, image INTEGER NOT NULL DEFAULT 0, imageOrientation NOT NULL DEFAULT '', orientation, origination INTEGER NOT NULL DEFAULT 0, propertiesCache, regionType NOT NULL DEFAULT 0, skipSuggestion INTEGER, tl_x NOT NULL DEFAULT '', tl_y NOT NULL DEFAULT '', touchCount NOT NULL DEFAULT 0, touchTime NOT NULL DEFAULT -63113817600, tr_x, tr_y);
+CREATE TABLE AgLibraryKeywordFace (id_local INTEGER PRIMARY KEY, face INTEGER NOT NULL DEFAULT 0, keyInstance INTEGER, rankOrder, tag INTEGER NOT NULL DEFAULT 0, userPick INTEGER, userReject INTEGER);
 CREATE TABLE AgLibraryFolderStack (id_local INTEGER PRIMARY KEY, id_global UNIQUE NOT NULL, collapsed INTEGER NOT NULL DEFAULT 0, text NOT NULL DEFAULT '');
 CREATE TABLE AgLibraryFolderStackImage (id_local INTEGER PRIMARY KEY, collapsed INTEGER NOT NULL DEFAULT 0, image INTEGER NOT NULL DEFAULT 0, position NOT NULL DEFAULT '', stack INTEGER NOT NULL DEFAULT 0);
 """

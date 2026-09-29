@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 
 from ..analysis import load_masks
-from ..config import load_settings, profiles_dir
+from ..config import load_settings, profiles_dir, save_settings
 from ..db import Database, blob_to_f32, dumps
 from ..jobs import JobContext, job
 from ..lightroom.dialect import Dialect, learn_dialect
@@ -57,7 +57,7 @@ def load_samples(profile: str) -> list[Record]:
 @job("train_profile")
 def train_profile(ctx: JobContext, name: str, catalog: str | None = None, folders: list[str] | None = None,
                   presets: list[str] | None = None, base_preset: str | None = None, min_rating: int = 0,
-                  only_picked: bool = False, append: bool = False) -> None:
+                  only_picked: bool = False, append: bool = False, learn_people: bool = True) -> None:
     samples: list[TrainingSample] = []
     labels: list[str] = []
     ctx.progress(0, "Trainingsdaten sammeln")
@@ -96,7 +96,20 @@ def train_profile(ctx: JobContext, name: str, catalog: str | None = None, folder
     d = model.save()
     (d / "sources.json").write_text(json.dumps({"catalog": catalog, "folders": folders, "presets": presets,
                                                 "skipped": len(samples) - len(good)}, indent=2), "utf-8")
-    ctx.progress(len(good) + 1, f"Profil '{name}' trainiert ({model.n} Bilder)")
+    st = load_settings()
+    if not st.default_profile:
+        st.default_profile = name
+        save_settings(st)
+    ctx.progress(len(good) + 1, f"Stil '{name}' gelernt aus {model.n} Bildern")
+    if catalog and learn_people:
+        # Personen gleich mitlernen (in Lightroom benannte Gesichter)
+        from ..people.reference import learn_people as _learn
+
+        try:
+            _learn(ctx, catalog=catalog)
+        except Exception as e:  # noqa: BLE001 - Personen sind optional, Stil ist fertig
+            log.warning("Personen aus Katalog nicht gelernt: %s", e)
+        ctx.progress(message=f"Stil '{name}' gelernt aus {model.n} Bildern, Personen übernommen")
 
 
 def shoot_records(db: Database, shoot_id: int, only_keep: bool = True) -> list[ImageDevelop]:
