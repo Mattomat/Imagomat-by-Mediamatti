@@ -71,29 +71,32 @@ def _grade(shadow: tuple[float, float] = (0, 0), mid: tuple[float, float] = (0, 
     return out
 
 
-SUBJECT_POP = MaskRecipe("subject", "Motiv anheben", {"Exposure2012": 0.25, "Clarity2012": 8, "Texture": 6},
-                         "has_subject")
+SUBJECT_POP = MaskRecipe("subject", "Motiv anheben", {"Exposure2012": 0.4, "Clarity2012": 10, "Texture": 8,
+                                                     "Shadows2012": 10}, "has_subject")
 BACKGROUND_CALM = MaskRecipe("background", "Hintergrund beruhigen",
-                             {"Exposure2012": -0.2, "Saturation": -10, "Clarity2012": -5}, "has_subject")
+                             {"Exposure2012": -0.1, "Saturation": -8, "Clarity2012": -5}, "has_subject")
+# Dunkler Verlauf von unten (Rasen/Vordergrund zurücknehmen, lenkt den Blick auf die Spieler)
+BOTTOM_FADE = MaskRecipe("gradient_bottom", "Verlauf unten", {"Exposure2012": -0.45, "Highlights2012": -10,
+                                                             "Saturation": -5}, "always")
 SKY_DEEPEN = MaskRecipe("sky", "Himmel", {"Exposure2012": -0.35, "Highlights2012": -20, "Saturation": 8}, "has_sky")
 
 PRESETS: dict[str, Preset] = {p.key: p for p in [
     Preset("sport_day", "Sport Tag", "Fussball/Outdoor bei Tageslicht: knackig, sattes aber natürliches Grün.",
-           target_log=-2.9, subject_weight=0.6, wb_mode="as_shot",
-           look={"Contrast2012": 15, "Clarity2012": 10, "Texture": 10, "Dehaze": 5, "Vibrance": 15,
+           target_log=-2.6, subject_weight=0.7, wb_mode="as_shot",
+           look={"Contrast2012": 18, "Clarity2012": 10, "Texture": 10, "Dehaze": 5, "Vibrance": 22,
                  "Sharpness": 50, "PostCropVignetteAmount": -10,
                  **_hsl(sat_Green=-12, lum_Green=-8, hue_Green=5, sat_Orange=4, lum_Orange=4, sat_Blue=5)},
-           curve=[-3, -4, -2, 0, 2, 3, 2], masks=[SUBJECT_POP, BACKGROUND_CALM]),
+           curve=[-3, -4, -2, 0, 2, 3, 2], masks=[SUBJECT_POP, BACKGROUND_CALM, BOTTOM_FADE]),
     Preset("sport_floodlight", "Sport Flutlicht", "Stadion bei Nacht: Grünstich weg, Spieler freistellen.",
-           target_log=-3.0, subject_weight=0.7, wb_mode="neutralize", neutralize=0.4, tint_fix=0.5,
-           highlight_protect=1.2, shadow_lift=1.1, denoise_bias=5,
-           look={"Contrast2012": 20, "Clarity2012": 12, "Texture": 10, "Dehaze": 8, "Vibrance": 10,
-                 "Saturation": -5, "Sharpness": 45, "PostCropVignetteAmount": -15,
+           target_log=-2.4, subject_weight=0.85, wb_mode="neutralize", neutralize=0.4, tint_fix=0.5,
+           highlight_protect=1.2, shadow_lift=1.3, denoise_bias=5,
+           look={"Contrast2012": 22, "Clarity2012": 12, "Texture": 10, "Dehaze": 8, "Vibrance": 22,
+                 "Saturation": 0, "Sharpness": 45, "PostCropVignetteAmount": -15,
                  **_hsl(hue_Green=10, sat_Green=-18, lum_Green=-10, sat_Yellow=-10, lum_Orange=5),
                  **_grade(shadow=(215, 8), high=(40, 6))},
-           curve=[-5, -6, -3, 0, 3, 4, 2], masks=[SUBJECT_POP, BACKGROUND_CALM]),
+           curve=[-5, -6, -3, 0, 3, 4, 2], masks=[SUBJECT_POP, BACKGROUND_CALM, BOTTOM_FADE]),
     Preset("sport_indoor", "Sport Halle", "Hallensport: Mischlicht neutralisieren, Hallenboden beruhigen.",
-           target_log=-2.9, subject_weight=0.7, wb_mode="neutralize", neutralize=0.6, tint_fix=0.4,
+           target_log=-2.6, subject_weight=0.8, wb_mode="neutralize", neutralize=0.6, tint_fix=0.4,
            highlight_protect=1.0, shadow_lift=1.0, denoise_bias=5,
            look={"Contrast2012": 15, "Clarity2012": 10, "Texture": 8, "Vibrance": 10, "Sharpness": 45,
                  "PostCropVignetteAmount": -10, **_hsl(sat_Orange=-8, sat_Yellow=-12, lum_Yellow=-5)},

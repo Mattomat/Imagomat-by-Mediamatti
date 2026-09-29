@@ -85,7 +85,11 @@ class KeywordSettings:
     denoise_keyword: str = "Imagomat|Denoise"
     review_keyword: str = "Imagomat|Prüfen"
     write_face_regions: bool = True
-    write_parent_keywords: bool = True
+    write_parent_keywords: bool = False
+    # "name": nur der Name (z. B. "Luca Zuffi"); "team": Personen|Team|Name
+    person_keyword_style: str = "name"
+    # Imagomat-Arbeitsstichwörter (Behalten, Denoise, Prüfen, Moment) mit ausgeben
+    workflow_keywords: bool = False
 
 
 @dataclass

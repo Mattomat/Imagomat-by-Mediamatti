@@ -58,5 +58,5 @@ def test_people_only_pipeline_and_tag_export(tmp_path: Path):
     files = sorted(out.glob("*.jpg"))
     assert len(files) == 3
     kws = parse_xmp(jpegxmp.read_jpeg_xmp(files[0])).keywords
-    assert "Personen|FCW Herren|Elias Maluvunu" in kws
+    assert kws == ["Elias Maluvunu"]
     assert all(p.read_bytes() == b for p, b in originals.items())      # Originale unverändert

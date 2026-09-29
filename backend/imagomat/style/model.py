@@ -221,8 +221,16 @@ class StyleModel:
         self._w = np.array([r.weight for r in records], dtype=float)
         Y = np.array([[encode(r.crs, r.analysis.get("as_shot_temp"), r.analysis.get("as_shot_tint"),
                               denoise_key)[t] for t in TARGETS] for r in records], dtype=float)
-        self.ref_mode = "linear"
+        # Linear messen, wenn (fast) alle Bilder echte RAW-Daten haben; sonst über die Kamera-Vorschau,
+        # die es für jede Kamera gibt und die überall gleich gemessen wird (z. B. Sony A7 V)
+        raw_share = float(np.mean([r.analysis.get("raw_source", "libraw") in ("libraw", "coreimage", "dng_converter")
+                                   and not r.analysis.get("raw_error") for r in records]))
+        self.ref_mode = "linear" if raw_share >= 0.8 else "preview"
         self._ref = np.array([exposure_reference(r.analysis, self.ref_mode) for r in records])
+        # Kontrolle: gewünschte Ausgabehelligkeit, gemessen an der Kamera-Vorschau (+ deine Belichtung)
+        user_ev = np.array([encode(r.crs, r.analysis.get("as_shot_temp"), r.analysis.get("as_shot_tint"),
+                                   denoise_key)["Exposure2012"] for r in records], dtype=float)
+        self._out_prev = np.array([exposure_reference(r.analysis, "preview") for r in records]) + user_ev
         Y[:, EXP_J] += self._ref
         self._Y = Y
         self._ystd = Y.std(0) + 1e-6
@@ -333,11 +341,20 @@ class StyleModel:
         prior = {**prior, "Exposure2012": prior.get("Exposure2012", 0.0) + ref}
         wm = self.n / (self.n + PRIOR_N0)
         for t in TARGETS:
+            if t == "Exposure2012" and self.n >= 40:
+                continue          # Helligkeit kommt aus deinen eigenen Bildern, nicht aus dem Preset
             if t not in self._const:
                 out[t] = wm * out[t] + (1 - wm) * prior.get(t, out[t])
         # Nie dunkler/heller als du es je gemacht hast (Bereich deiner eigenen Belichtungen, 2.-98. Perzentil)
         lo, hi = self._exposure_range()
-        out["Exposure2012"] = float(np.clip(out["Exposure2012"] - ref, lo, hi))
+        exp = float(out["Exposure2012"] - ref)
+        # Gegenprobe über die Kamera-Vorschau: so hell wie deine ähnlichsten Bilder am Ende waren
+        out_prev = getattr(self, "_out_prev", None)
+        if out_prev is not None and len(out_prev) == self.n:
+            est = float(np.median(out_prev[idx])) - exposure_reference(rec.analysis, "preview")
+            if abs(exp - est) > 1.25:            # nur grobe Ausreisser korrigieren
+                exp = est
+        out["Exposure2012"] = float(np.clip(exp, lo, hi))
         # Unsicherheit
         spread = np.sqrt(w @ (self._Y[idx] - knn) ** 2) / self._ystd
         key_t = [TARGETS.index(t) for t in ("Exposure2012", "wb_dmired", "Contrast2012", "Highlights2012")]

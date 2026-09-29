@@ -23,7 +23,7 @@ def test_kader_csv_updates_existing(tmp_path: Path):
     assert len(rows) == 4                                   # keine Duplikate
     assert rows["Aldin Turkes"]["id"] == a and rows["Aldin Turkes"]["number"] == "22"
     assert rows["Aldin Turkes"]["team"] == "FCW Herren"
-    assert rows["Aldin Turkes"]["keyword"].endswith("FCW Herren|Aldin Turkes")
+    assert rows["Aldin Turkes"]["keyword"] == "Aldin Turkes"
     assert rows["Giuliano Foro"]["number"] == "70"
     assert rows["Théo Golliard"]["id"] == t                 # über Namensvariante gefunden
     assert rows["Alex Sirupkurve"]["team"] is None          # Dateiname wird nicht zum Team

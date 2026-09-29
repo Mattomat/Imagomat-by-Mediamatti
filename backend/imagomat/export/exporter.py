@@ -104,21 +104,25 @@ def _items(db: Database, shoot_id: int, include_rejected: bool) -> list[ExportIt
         for p in image_people(db, r["id"]):
             it.keywords.append(p.keyword)
             it.people.append(p.name)
-        if decision == "reject":
+        # Arbeits-Stichwörter (Behalten, Denoise, Prüfen ...) nur auf Wunsch; Standard: nur Personen
+        wf = kw.workflow_keywords
+        if wf and decision == "reject":
             for rs in reasons[:2] or ["strenge"]:
                 it.keywords.append(f"{kw.culling_root}|Aussortiert|{REASONS_DE.get(rs, rs)}")
-        else:
+        elif wf:
             it.keywords.append(f"{kw.culling_root}|Behalten")
             if it.is_best:
                 it.keywords.append(f"{kw.culling_root}|Bestes der Serie")
             if a.get("moment") in MOMENTS_DE:
                 it.keywords.append(f"Imagomat|Moment|{MOMENTS_DE[a['moment']]}")
         if it.denoise:
-            it.keywords.append(kw.denoise_keyword)
+            if wf:
+                it.keywords.append(kw.denoise_keyword)
             if s.denoise.mode == "mark" and not it.label:
                 it.label = dialect.label("purple")
         if it.confidence is not None and it.confidence < LOW_CONFIDENCE and decision == "keep":
-            it.keywords.append(kw.review_keyword)
+            if wf:
+                it.keywords.append(kw.review_keyword)
             if not it.label and s.culling.label_review:
                 it.label = dialect.label("yellow")
         if it.label:

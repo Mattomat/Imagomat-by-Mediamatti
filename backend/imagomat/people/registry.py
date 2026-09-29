@@ -31,8 +31,10 @@ class Person:
 
 
 def keyword_for(name: str, team: str | None) -> str:
-    root = load_settings().keywords.people_root
-    return f"{root}|{team}|{name}" if team else f"{root}|{name}"
+    kw = load_settings().keywords
+    if kw.person_keyword_style == "name":
+        return name
+    return f"{kw.people_root}|{team}|{name}" if team else f"{kw.people_root}|{name}"
 
 
 def upsert_person(db: Database, name: str, team: str | None = None, number: str | None = None) -> int:
@@ -49,7 +51,7 @@ def upsert_person(db: Database, name: str, team: str | None = None, number: str 
 
 
 def persons(db: Database) -> list[Person]:
-    return [Person(r["id"], r["name"], r["team"], r["number"], r["keyword"] or keyword_for(r["name"], r["team"]))
+    return [Person(r["id"], r["name"], r["team"], r["number"], keyword_for(r["name"], r["team"]))
             for r in db.query("SELECT * FROM persons ORDER BY team IS NULL, team, number IS NULL, "
                                 "CAST(number AS INTEGER), name")]
 
@@ -109,8 +111,7 @@ def image_people(db: Database, image_id: int) -> list[Person]:
         "SELECT DISTINCT p.* FROM persons p WHERE p.id IN ("
         " SELECT person_id FROM faces WHERE image_id=? AND person_id IS NOT NULL"
         " UNION SELECT person_id FROM numbers WHERE image_id=? AND person_id IS NOT NULL)", (image_id, image_id))
-    return [Person(r["id"], r["name"], r["team"], r["number"], r["keyword"] or keyword_for(r["name"], r["team"]))
-            for r in rows]
+    return [Person(r["id"], r["name"], r["team"], r["number"], keyword_for(r["name"], r["team"])) for r in rows]
 
 
 def norm_name(name: str) -> str:

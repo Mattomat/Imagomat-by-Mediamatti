@@ -63,6 +63,18 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const selection = selectionFromSettings(shoot?.settings);
   const peopleMode = (() => { try { return JSON.parse(shoot?.settings || "{}").mode === "people"; } catch { return false; } })();
   const [tagging, setTagging] = useState(false);
+  const [style, setStyle] = useState<{ used: string | null; is_preset: boolean; profiles: string[] } | null>(null);
+  useEffect(() => {
+    api.get<{ used: string | null; is_preset: boolean; profiles: string[] }>(`/api/shoots/${id}/style`).then(setStyle).catch(() => undefined);
+  }, [id, ctx.tick]);
+  const redevelop = async (profile: string) => {
+    const r = await api.post<{ job_id: number }>(`/api/shoots/${id}/run/develop`, { profile });
+    ctx.refreshJobs();
+    await waitForJob(r.job_id);
+    ctx.toast(`Neu bearbeitet mit „${profile}“`);
+    load();
+    api.get<{ used: string | null; is_preset: boolean; profiles: string[] }>(`/api/shoots/${id}/style`).then(setStyle);
+  };
   const recull = async (s: Selection) => {
     try {
       const r = await api.post<{ job_id: number }>(`/api/shoots/${id}/run/cull`, SELECTION_PARAMS[s]);
@@ -153,6 +165,21 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         <div>
           <h1>{shoot.name}</h1>
           <div className="muted">{counts.keep} von {items.length} behalten{running ? " · wird noch bearbeitet …" : ""}</div>
+          {!peopleMode && style?.used && (
+            <div className={`style-chip ${style.is_preset ? "warn" : ""}`}>
+              {style.is_preset
+                ? <>Bearbeitet mit Standard-Preset, nicht mit deinem Stil. {style.profiles.length
+                  ? <select value="" onChange={(e) => e.target.value && redevelop(e.target.value)}>
+                      <option value="">Mit meinem Stil neu bearbeiten …</option>
+                      {style.profiles.map((p) => <option key={p}>{p}</option>)}
+                    </select>
+                  : <button className="link" onClick={() => ctx.go({ name: "style" })}>Eigenen Stil lernen →</button>}</>
+                : <>Stil: <b>{style.used}</b> <select value="" onChange={(e) => e.target.value && redevelop(e.target.value)}>
+                    <option value="">ändern …</option>
+                    {style.profiles.map((p) => <option key={p}>{p}</option>)}
+                  </select></>}
+            </div>
+          )}
         </div>
         <div className="tabs">
           <button className={tab === "keep" ? "on" : ""} onClick={() => { setTab("keep"); setSel(0); }}>Behalten <b>{counts.keep}</b></button>
@@ -242,6 +269,7 @@ function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot
   const [mode, setMode] = useState<"hardlink" | "inplace">("hardlink");
   const [withRejected, setWithRejected] = useState(false);
   const [openLr, setOpenLr] = useState(stored("imagomat.openLr") !== "0");
+  const [final, setFinal] = useState<string | null>(null);
   const [state, setState] = useState<"form" | "busy" | "done">("form");
   const [progress, setProgress] = useState(0);
 
@@ -249,14 +277,15 @@ function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot
     setState("busy");
     try {
       const formats = ["xmp", ...(jpeg ? ["jpeg"] : [])];
-      const r = await api.post<{ job_id: number }>(`/api/shoots/${shoot.id}/export`, {
+      const r = await api.post<{ job_id: number; target: string }>(`/api/shoots/${shoot.id}/export`, {
         target: mode === "inplace" ? shoot.folder : target, formats, copy_mode: mode, include_rejected: withRejected,
       });
+      setFinal(r.target);
       ctx.refreshJobs();
       const j = await waitForJob(r.job_id, (x) => setProgress(x.total ? x.progress / x.total : 0));
       if (j.status !== "done") throw new Error(j.error?.split("\n")[0] ?? "Export fehlgeschlagen");
       setState("done");
-      if (openLr && IS_APP) openInLightroom(mode === "inplace" ? shoot.folder : target);
+      if (openLr && IS_APP) openInLightroom(r.target);
     } catch (e) {
       ctx.toast((e as Error).message, "error");
       setState("form");
@@ -270,7 +299,7 @@ function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot
     }
   };
 
-  const dest = mode === "inplace" ? shoot.folder : target;
+  const dest = final ?? (mode === "inplace" ? shoot.folder : target);
   return (
     <Modal title="Nach Lightroom" onClose={onClose}>
       {state === "form" && (

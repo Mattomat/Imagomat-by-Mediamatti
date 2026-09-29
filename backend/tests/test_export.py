@@ -40,7 +40,7 @@ def test_full_pipeline_export(tmp_path: Path):
     assert all(p.read_bytes() == b for p, b in originals.items())
     xmps = sorted(out.glob("*.xmp"))
     assert len(xmps) == 8
-    kept = [x for x in xmps if "Imagomat|Culling|Behalten" in read_xmp(x).keywords]
+    kept = [x for x in xmps if read_xmp(x).crs]              # behaltene Bilder tragen die Entwicklung
     n_keep = db.one("SELECT COUNT(*) FROM culling WHERE decision='keep'")[0]
     assert len(kept) == n_keep >= 2          # Strenge ist Obergrenze: Unscharfes bleibt draussen
     d = read_xmp(kept[0])
@@ -49,7 +49,7 @@ def test_full_pipeline_export(tmp_path: Path):
     rejected = [x for x in xmps if x not in kept]
     assert all(read_xmp(x).rating == 1 and not read_xmp(x).crs for x in rejected)
     first = read_xmp(out / (src[0].stem + ".xmp"))
-    assert "Personen|FC Winterthur|Max Muster" in first.keywords
+    assert first.keywords == ["Max Muster"]                 # nur der Name, keine Arbeits-Stichwörter
     rows = list(csv.DictReader(open(out / "imagomat-log.csv", encoding="utf-8-sig"), delimiter=";"))
     assert len(rows) == 8 and any(r["gruende"] for r in rows if r["entscheidung"] == "aussortiert")
     manifest = json.loads((out / "imagomat.json").read_text())

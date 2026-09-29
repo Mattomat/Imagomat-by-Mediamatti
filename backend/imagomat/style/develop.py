@@ -145,8 +145,13 @@ def _preset_masks(it: ImageDevelop, dialect: Dialect) -> list[dict[str, Any]]:
     for r in PRESETS[it.preset].masks if it.preset in PRESETS else []:
         ok = {"always": True, "has_subject": (a.get("subject_fraction") or 0) > 0.02,
               "has_sky": (a.get("sky_fraction") or 0) > 0.05, "has_face": (a.get("face_count") or 0) > 0}[r.condition]
-        if ok:
-            out.append(mk.correction(r.name, r.local, [mk.ai_component(r.kind, dialect, r.name)]))
+        if not ok:
+            continue
+        if r.kind == "gradient_bottom":
+            comp = mk.gradient_component((0.5, 0.55), (0.5, 1.0), it.orientation, r.name)
+        else:
+            comp = mk.ai_component(r.kind, dialect, r.name)
+        out.append(mk.correction(r.name, r.local, [comp]))
     return out
 
 

@@ -146,6 +146,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         loop_holder["loop"] = asyncio.get_running_loop()
         jobs.start()
+        # Unterbrochenes Lernen (z. B. durch ein App-Update) automatisch fortsetzen; bereits
+        # berechnete Merkmale liegen im Cache, es geht also schnell weiter.
+        from ..jobs import LEARN_KINDS
+
+        latest: dict[tuple[str, str], int] = {}
+        for j in db.query("SELECT id, kind, params FROM jobs WHERE status='paused' AND updated_at > ? ORDER BY id",
+                          (time.time() - 7 * 86400,)):
+            if j["kind"] in LEARN_KINDS:
+                name = str(json.loads(j["params"] or "{}").get("name", ""))
+                latest[(j["kind"], name)] = j["id"]          # pro Stil nur den neuesten Auftrag
+        for jid in latest.values():
+            jobs.resume(jid)
         yield
         jobs.stop()
 
@@ -315,6 +327,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(400, "unbekannter Schritt")
         return {"job_id": jobs.submit(kind, sid, **(body or {}))}
 
+    @app.get("/api/shoots/{sid}/style")
+    def shoot_style(sid: int) -> dict[str, Any]:
+        """Womit wurde der Shoot bearbeitet? (eigener Stil oder mitgeliefertes Preset)"""
+        rows = db.query("SELECT e.profile, COUNT(*) n FROM edits e JOIN images i ON i.id=e.image_id "
+                        "WHERE i.shoot_id=? GROUP BY e.profile ORDER BY n DESC", (sid,))
+        used = rows[0]["profile"] if rows else None
+        from ..style.model import list_profiles
+
+        return {"used": used, "is_preset": bool(used and used.startswith("preset:")),
+                "profiles": [p["name"] for p in list_profiles()], "default": load_settings().default_profile}
+
     @app.get("/api/shoots/{sid}/images")
     def shoot_images(sid: int) -> list[dict[str, Any]]:
         rows = db.query(
@@ -348,7 +371,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/shoots/{sid}/export")
     def export(sid: int, req: ExportReq) -> dict[str, Any]:
-        return {"job_id": jobs.submit("export", sid, **req.model_dump())}
+        params = req.model_dump()
+        if req.copy_mode != "inplace":
+            # Nie in einen Ordner mit einem früheren Export schreiben: Lightroom würde sonst auch die
+            # alten (evtl. aussortierten) Bilder wieder importieren
+            tgt = Path(req.target).expanduser()
+            base, i = tgt, 2
+            while tgt.exists() and any(tgt.iterdir()):
+                tgt = base.with_name(f"{base.name} ({i})")
+                i += 1
+            params["target"] = str(tgt)
+        return {"job_id": jobs.submit("export", sid, **params), "target": params["target"]}
 
     @app.post("/api/shoots/{sid}/tag-export")
     def tag_export(sid: int, body: dict[str, Any]) -> dict[str, Any]:
