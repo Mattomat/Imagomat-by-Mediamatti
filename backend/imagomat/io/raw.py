@@ -115,7 +115,7 @@ def load_preview(path: str | Path, max_side: int = 2048) -> tuple[np.ndarray, in
     try:
         img, orientation = _libraw_preview(path)
     except (rawpy.LibRawError, OSError, ValueError) as e:
-        log.info("LibRaw kann %s nicht öffnen (%s), nutze Ersatz", path.name, e)
+        log.debug("LibRaw kann %s nicht öffnen (%s), nutze Ersatz", path.name, e)
         img, orientation = fallback_preview(path, max_side, str(e))
     h, w = img.shape[:2]
     scale = max_side / max(h, w)

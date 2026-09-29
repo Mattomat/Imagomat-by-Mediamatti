@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -185,7 +186,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         failed = [dict(r) for r in db.query(
             "SELECT id, kind, shoot_id, error, message, updated_at FROM jobs WHERE status='failed' "
-            "ORDER BY updated_at DESC LIMIT 10")]
+            "AND updated_at > ? ORDER BY updated_at DESC LIMIT 10", (time.time() - 86400,))]
         for f in failed:
             f["error"] = (f["error"] or "")[-4000:]
         return {"dir": str(logs_dir()), "version": __version__, "platform": sys.platform,
@@ -574,4 +575,4 @@ def main(host: str = "127.0.0.1", port: int = 8765) -> None:
     from ..logs import setup_logging
 
     setup_logging()
-    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+    uvicorn.run(create_app(), host=host, port=port, log_level="info", access_log=False)

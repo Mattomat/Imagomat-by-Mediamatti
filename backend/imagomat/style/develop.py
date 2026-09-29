@@ -164,7 +164,7 @@ def build_settings(it: ImageDevelop, settings: Settings, dialect: Dialect) -> No
     # Denoise
     amount = int(round(it.targets.get("denoise", 0)))
     if settings.denoise.always and amount < settings.denoise.min_amount:
-        amount = settings.denoise.min_amount if a.get("noise_sigma_mid") is not None else 0
+        amount = settings.denoise.min_amount
     it.denoise = amount if amount > 0 else None
     for k in list(crs):
         if k.startswith("EnhanceDenoise"):

@@ -111,11 +111,46 @@ def compute_metrics(path: Path) -> tuple[np.ndarray, dict[str, Any], int, int | 
             width, height = info.width, info.height
             data.update({f"noise_{k}": v for k, v in raw_io.estimate_noise(path).items()})
         except Exception as e:  # noqa: BLE001 - defekte RAWs sollen den Shoot nicht stoppen
-            log.warning("RAW-Analyse fehlgeschlagen für %s: %s", path.name, e)
             data["raw_error"] = str(e)
+            data.update(preview_linear_stats(img, path))
+            _note_unsupported(path, e)
     data["orientation"] = orientation
     ph = str(imagehash.phash(Image.fromarray(img).resize((256, int(256 * img.shape[0] / img.shape[1])))))
     return img, data, orientation, width, height, ph
+
+
+_UNSUPPORTED_SEEN: set[str] = set()
+
+
+def _note_unsupported(path: Path, err: Exception) -> None:
+    """Einmal pro Kameramodell protokollieren, statt für jedes Bild (sonst ist das Protokoll voll)."""
+    from .io.tiffmeta import read_tiff_exif
+
+    ex = read_tiff_exif(path)
+    model = f"{ex.get('Make', '')} {ex.get('Model', '')}".strip() or path.suffix.upper()
+    if model in _UNSUPPORTED_SEEN:
+        return
+    _UNSUPPORTED_SEEN.add(model)
+    log.warning("LibRaw kennt die Kamera %s nicht (%s, z. B. %s). Imagomat nutzt die eingebettete Vorschau; "
+                "Weissabgleich und Rauschen werden geschätzt.", model, err, path.name)
+
+
+def preview_linear_stats(img: np.ndarray, path: Path) -> dict[str, Any]:
+    """Ersatz-Statistik, wenn LibRaw die RAW nicht lesen kann: linearisierte Vorschau + Rauschen aus ISO."""
+    from .io.tiffmeta import read_tiff_exif
+
+    x = cv2.resize(img, (512, int(512 * img.shape[0] / img.shape[1])), interpolation=cv2.INTER_AREA)
+    x = x.astype(np.float32) / 255.0
+    lin = np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+    out: dict[str, Any] = dict(quality.linear_stats(lin))
+    out["raw_source"] = "preview"
+    iso = read_tiff_exif(path).get("ISO")
+    if isinstance(iso, (int, float)) and iso > 0:
+        # Vollformat-Näherung: SNR bei 18 % Grau ~100 bei ISO 100, fällt mit Wurzel(ISO)
+        sigma = 0.0018 * (float(iso) / 100.0) ** 0.5
+        out.update({"noise_sigma_mid": sigma, "noise_sigma_shadow": sigma * 0.75, "noise_snr_mid": 0.18 / sigma,
+                    "noise_a": sigma ** 2 / 0.18, "noise_b": 1e-8, "noise_source": "iso"})
+    return out
 
 
 def _stage1(db: Database, row: Any) -> None:
