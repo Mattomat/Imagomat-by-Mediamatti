@@ -24,31 +24,24 @@ from .registry import MATCH_THRESHOLD, exemplars, match
 log = logging.getLogger(__name__)
 
 
-def cluster_embeddings(embs: np.ndarray, min_cluster_size: int = 3) -> np.ndarray:
-    if len(embs) < min_cluster_size:
-        return np.full(len(embs), -1)
-    from sklearn.cluster import HDBSCAN
+def cluster_embeddings(embs: np.ndarray, similarity: float, min_size: int = 2) -> np.ndarray:
+    """Gesichter gruppieren, die sich wirklich ähnlich sind (lieber zu viele kleine Gruppen als eine
+    grosse gemischte). Average-Linkage: ein Gesicht muss im Schnitt allen der Gruppe ähneln, nicht nur
+    einem einzelnen (sonst entstehen Ketten über viele verschiedene Personen)."""
+    n = len(embs)
+    if n < min_size:
+        return np.full(n, -1)
+    from sklearn.cluster import AgglomerativeClustering
 
     X = embs / (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9)
-    return HDBSCAN(min_cluster_size=min_cluster_size, min_samples=2, metric="euclidean",
-                   cluster_selection_epsilon=0.0, allow_single_cluster=True, copy=True).fit_predict(X)
+    labels = AgglomerativeClustering(n_clusters=None, metric="cosine", linkage="average",
+                                     distance_threshold=1.0 - similarity).fit_predict(X)
+    counts = np.bincount(labels)
+    return np.where(counts[labels] >= min_size, labels, -1)
 
 
-def attach_noise(embs: np.ndarray, labels: np.ndarray, threshold: float) -> np.ndarray:
-    """Rauschpunkte dem nächsten Cluster zuordnen, wenn sie ähnlich genug sind."""
-    labels = labels.copy()
-    ids = [c for c in np.unique(labels) if c >= 0]
-    if not ids:
-        return labels
-    X = embs / (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9)
-    cents = np.stack([X[labels == c].mean(0) for c in ids])
-    cents /= np.linalg.norm(cents, axis=1, keepdims=True) + 1e-9
-    for i in np.where(labels < 0)[0]:
-        sims = cents @ X[i]
-        j = int(np.argmax(sims))
-        if sims[j] >= threshold:
-            labels[i] = ids[j]
-    return labels
+# Ähnlichkeit für Gruppen "Wer ist das?": deutlich strenger als fürs Wiedererkennen bekannter Personen
+CLUSTER_SIMILARITY = {"insightface": 0.55, "yunet": 0.52, "haar": 0.985}
 
 
 def shoot_teams(db: Database, shoot_id: int) -> list[str]:
@@ -157,7 +150,7 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
     # 1. Wiedererkennen (nur gut sichtbare Gesichter)
     auto = 0
     for f in faces:
-        if f["assigned_by"] in ("manual", "confirmed") or f["embedding"] is None:
+        if f["assigned_by"] in ("manual", "confirmed", "ignored") or f["embedding"] is None:
             continue
         bb = json.loads(f["bbox"])
         clear = abs(f["yaw"] or 0.0) <= MAX_AUTO_YAW and (bb[3] - bb[1]) >= MIN_AUTO_FACE
@@ -173,36 +166,63 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
     for f in db.query("SELECT f.* FROM faces f JOIN images i ON i.id=f.image_id WHERE i.shoot_id=?", (shoot_id,)):
         by_image.setdefault(f["image_id"], []).append(f)
     texts = db.query("SELECT n.* FROM numbers n JOIN images i ON i.id=n.image_id WHERE i.shoot_id=?", (shoot_id,))
-    via_shirt = 0
+    # Belege pro Bild und Person sammeln: Nummer und/oder Name auf dem Trikot (+ Position)
+    evidence: dict[tuple[int, int], dict] = {}
     for n in texts:
         text = str(n["text"])
+        if text.startswith("#") or not n["bbox"]:
+            continue                      # manuell hinzugefügte Personen bleiben unangetastet
         pid = resolver.name(text[1:]) if text.startswith("@") else resolver.number(text)
         with db.tx() as c:
             c.execute("UPDATE numbers SET person_id=? WHERE id=?", (pid, n["id"]))
         if pid is None:
             continue
         nb = json.loads(n["bbox"])
-        ncx, ncy = (nb[0] + nb[2]) / 2, (nb[1] + nb[3]) / 2
-        img_faces = by_image.get(n["image_id"], [])
+        e = evidence.setdefault((n["image_id"], pid), {"kinds": set(), "centers": []})
+        e["kinds"].add("name" if text.startswith("@") else "number")
+        e["centers"].append(((nb[0] + nb[2]) / 2, (nb[1] + nb[3]) / 2))
+    names = {r["id"]: r["name"] for r in db.query("SELECT id, name FROM persons")}
+    checks: dict[int, list[dict]] = {}
+    via_shirt = 0
+    for (image_id, pid), e in evidence.items():
+        img_faces = by_image.get(image_id, [])
         boxes = body_boxes([tuple(json.loads(f["bbox"])) for f in img_faces], 1.5)
+        strong = e["kinds"] == {"name", "number"}        # Nummer UND Name zeigen dieselbe Person
         for f, (x0, y0, x1, y1) in zip(img_faces, boxes):
-            if x0 <= ncx <= x1 and y0 <= ncy <= y1 and f["assigned_by"] not in ("manual", "confirmed"):
-                if f["person_id"] not in (None, pid) and f["assigned_by"] == "auto" and _frontal(f):
-                    # Klar von vorne erkanntes Gesicht zählt mehr als eine (evtl. verdeckte) Nummer
-                    log.info("Gesicht (%s) und Trikot (%s) widersprechen sich, Gesicht gewinnt", f["person_id"], pid)
-                    break
-                with db.tx() as c:
-                    c.execute("UPDATE faces SET person_id=?, assigned_by='number' WHERE id=?", (pid, f["id"]))
-                via_shirt += 1
+            if not any(x0 <= cx <= x1 and y0 <= cy <= y1 for cx, cy in e["centers"]):
+                continue
+            if f["assigned_by"] in ("manual", "confirmed", "ignored"):
                 break
-    ctx.progress(len(faces) + 1, f"{via_shirt} Personen über Rückennummer/Trikotname")
+            face_pid = f["person_id"]
+            if face_pid not in (None, pid) and f["assigned_by"] == "auto":
+                # Immer gegenprüfen: Gesicht und Trikot widersprechen sich -> unter "Prüfen" zeigen
+                keep_face = _frontal(f) and not strong
+                checks.setdefault(image_id, []).append({
+                    "face_id": f["id"], "face_person_id": face_pid, "face_person": names.get(face_pid),
+                    "shirt_person_id": pid, "shirt_person": names.get(pid), "shirt": sorted(e["kinds"]),
+                    "chosen": "face" if keep_face else "shirt"})
+                if keep_face:
+                    break
+            with db.tx() as c:
+                c.execute("UPDATE faces SET person_id=?, assigned_by='number' WHERE id=?", (pid, f["id"]))
+            via_shirt += 1
+            break
+    for r in db.images(shoot_id):
+        a = db.get_analysis(r["id"])
+        if checks.get(r["id"]) or a.get("people_check"):
+            db.update_analysis(r["id"], {"people_check": checks.get(r["id"], [])})
+    n_checks = sum(len(v) for v in checks.values())
+    ctx.progress(len(faces) + 1, f"{via_shirt} Personen über Rückennummer/Trikotname"
+                 + (f", {n_checks} zum Prüfen" if n_checks else ""))
     # 3. Clustern der unbekannten Gesichter
     rest = db.query(
         "SELECT f.id, f.embedding FROM faces f JOIN images i ON i.id=f.image_id "
-        "WHERE i.shoot_id=? AND f.person_id IS NULL AND f.embedding IS NOT NULL", (shoot_id,))
+        "WHERE i.shoot_id=? AND f.person_id IS NULL AND f.embedding IS NOT NULL "
+        "AND IFNULL(f.assigned_by,'') <> 'ignored'", (shoot_id,))
     if rest:
         embs = np.stack([blob_to_f32(r["embedding"]) for r in rest])
-        labels = attach_noise(embs, cluster_embeddings(embs), thr)
+        sim = (threshold + 0.05) if threshold is not None else CLUSTER_SIMILARITY.get(get_backend().name, 0.55)
+        labels = cluster_embeddings(embs, sim) if len(rest) <= 6000 else np.full(len(rest), -1)
         with db.tx() as c:
             for r, lab in zip(rest, labels):
                 c.execute("UPDATE faces SET cluster_id=? WHERE id=?", (int(lab) if lab >= 0 else None, r["id"]))

@@ -61,6 +61,24 @@ def test_frontal_face_wins_over_number(tmp_path: Path):
     assert JobManager(db).run_sync(db.create_job("people", sid, {}))["status"] == "done"
     face = db.one("SELECT person_id, assigned_by FROM faces WHERE image_id=?", (iid,))
     assert face["person_id"] == kehrer and face["assigned_by"] == "auto"
+    check = db.get_analysis(iid)["people_check"][0]            # Widerspruch wird zum Prüfen gemeldet
+    assert check["face_person_id"] == kehrer and check["shirt_person_id"] == maluvunu
+    assert check["chosen"] == "face"
+
+
+def test_number_and_name_together_beat_frontal_face(tmp_path: Path):
+    db, sid, iid, maluvunu, kehrer = _setup(tmp_path)
+    with db.tx() as c:
+        c.execute("UPDATE faces SET yaw=5 WHERE image_id=?", (iid,))
+        c.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
+                  (iid, "37", 0.9, "[0.22,0.36,0.28,0.44]"))
+        c.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
+                  (iid, "@MALUVUNU", 0.9, "[0.22,0.45,0.29,0.48]"))
+    db.update_shoot_settings(sid, teams=["FCW Herren"])
+    assert JobManager(db).run_sync(db.create_job("people", sid, {}))["status"] == "done"
+    face = db.one("SELECT person_id FROM faces WHERE image_id=?", (iid,))
+    assert face["person_id"] == maluvunu
+    assert db.get_analysis(iid)["people_check"][0]["chosen"] == "shirt"
 
 
 def test_shirt_name_resolves_without_team(tmp_path: Path):

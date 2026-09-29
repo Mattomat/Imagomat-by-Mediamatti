@@ -56,6 +56,7 @@ class ImportReq(BaseModel):
     keep_ratio: float | None = None
     highlights: bool | None = None
     max_keep: int | None = None
+    mode: str | None = None          # "full" (Standard) | "people" (nur Personen, z. B. fertige JPGs)
     run: bool = True
 
 
@@ -294,7 +295,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             db.update_shoot_settings(sid, teams=req.teams)
         job_id = jobs.submit("pipeline", sid, keep_ratio=req.keep_ratio, profile=req.profile,
                              preset=req.preset, highlights=req.highlights,
-                             max_keep=req.max_keep) if req.run else None
+                             max_keep=req.max_keep, mode=req.mode) if req.run else None
         return {"shoot_id": sid, "job_id": job_id}
 
     @app.patch("/api/shoots/{sid}")
@@ -341,12 +342,38 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "people": people.get(r["id"], []), "notes": a.get("develop_notes", []), "preset": a.get("preset"),
                 "faces": a.get("face_count", 0),
                 "moment": MOMENTS_DE.get(a.get("moment") or ""), "action": a.get("action"),
+                "people_check": a.get("people_check", []),
             })
         return out
 
     @app.post("/api/shoots/{sid}/export")
     def export(sid: int, req: ExportReq) -> dict[str, Any]:
         return {"job_id": jobs.submit("export", sid, **req.model_dump())}
+
+    @app.post("/api/shoots/{sid}/tag-export")
+    def tag_export(sid: int, body: dict[str, Any]) -> dict[str, Any]:
+        """Nur Personen: Bilder mit eingebetteten Namen in einen Ordner schreiben."""
+        if not body.get("target"):
+            raise HTTPException(400, "Zielordner fehlt")
+        return {"job_id": jobs.submit("tag_export", sid, target=body["target"],
+                                      only_with_people=bool(body.get("only_with_people"))),
+                "target": body["target"]}
+
+    @app.post("/api/lightroom/open")
+    def lightroom_open(body: dict[str, str]) -> dict[str, Any]:
+        """Ordner an Lightroom Classic übergeben: öffnet den Import-Dialog mit diesem Ordner."""
+        import subprocess
+
+        path = Path(body["path"]).expanduser()
+        if not path.exists():
+            raise HTTPException(404, "Ordner nicht gefunden")
+        if sys.platform != "darwin":
+            raise HTTPException(400, "Nur auf dem Mac verfügbar")
+        for cmd in (["open", "-b", "com.adobe.LightroomClassicCC7", str(path)],
+                    ["open", "-a", "Adobe Lightroom Classic", str(path)]):
+            if subprocess.run(cmd, capture_output=True).returncode == 0:
+                return {"ok": True}
+        raise HTTPException(404, "Lightroom Classic nicht gefunden")
 
     @app.post("/api/shoots/{sid}/social")
     def social(sid: int, req: SocialReq) -> dict[str, Any]:
@@ -502,11 +529,72 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return Response(buf.tobytes(), media_type="image/jpeg")
 
     def _person_from(req: AssignReq) -> int | None:
+        from ..people.registry import find_person
+
         if req.person_id:
             return req.person_id
         if req.name:
-            return upsert_person(db, req.name, req.team, req.number)
+            # Bekannte Person (auch mit anderer Schreibweise/ohne Team) wiederverwenden statt Duplikat
+            return find_person(db, req.name) or upsert_person(db, req.name, req.team, req.number)
         return None
+
+    @app.post("/api/faces/{fid}/uncluster")
+    def uncluster_face(fid: int) -> dict[str, Any]:
+        """Gesicht aus einer Gruppe "Wer ist das?" nehmen (gehört nicht dazu)."""
+        with db.tx() as c:
+            c.execute("UPDATE faces SET cluster_id=NULL WHERE id=?", (fid,))
+        return {"ok": True}
+
+    @app.post("/api/shoots/{sid}/clusters/{cid}/ignore")
+    def ignore_cluster(sid: int, cid: int) -> dict[str, Any]:
+        """Gruppe ausblenden (z. B. Gegner, Zuschauer): wird nicht mehr gefragt."""
+        with db.tx() as c:
+            cur = c.execute("UPDATE faces SET assigned_by='ignored', cluster_id=NULL, person_id=NULL "
+                            "WHERE cluster_id=? AND image_id IN (SELECT id FROM images WHERE shoot_id=?)", (cid, sid))
+        return {"ignored": cur.rowcount}
+
+    @app.get("/api/images/{iid}/faces")
+    def image_faces(iid: int) -> dict[str, Any]:
+        """Gesichter eines Bildes (mit Namen) und Personen ohne Gesicht (Nummer/manuell)."""
+        faces = [{"id": r["id"], "bbox": json.loads(r["bbox"]), "person_id": r["person_id"], "name": r["name"],
+                  "assigned_by": r["assigned_by"]}
+                 for r in db.query("SELECT f.id, f.bbox, f.person_id, f.assigned_by, p.name FROM faces f "
+                                   "LEFT JOIN persons p ON p.id=f.person_id WHERE f.image_id=? "
+                                   "AND IFNULL(f.assigned_by,'') <> 'ignored'", (iid,))]
+        with_face = {f["person_id"] for f in faces if f["person_id"]}
+        others = [{"person_id": r["person_id"], "name": r["name"], "via": r["text"]}
+                  for r in db.query("SELECT DISTINCT n.person_id, n.text, p.name FROM numbers n JOIN persons p "
+                                    "ON p.id=n.person_id WHERE n.image_id=?", (iid,))
+                  if r["person_id"] not in with_face]
+        return {"faces": faces, "others": others}
+
+    @app.post("/api/images/{iid}/people-check")
+    def resolve_people_check(iid: int, body: dict[str, Any]) -> dict[str, Any]:
+        """Widerspruch Gesicht/Trikot entscheiden: gewählte Person wird fest (manuell) zugeordnet."""
+        fid, pid = int(body["face_id"]), int(body["person_id"])
+        assign_face(db, fid, pid, "manual")
+        a = db.get_analysis(iid)
+        db.update_analysis(iid, {"people_check": [c for c in a.get("people_check", []) if c.get("face_id") != fid]})
+        return {"ok": True}
+
+    @app.post("/api/images/{iid}/persons")
+    def add_image_person(iid: int, req: AssignReq) -> dict[str, Any]:
+        """Person manuell zu einem Bild hinzufügen (z. B. von hinten, ohne erkanntes Gesicht)."""
+        pid = _person_from(req)
+        if pid is None:
+            raise HTTPException(400, "Name fehlt")
+        with db.tx() as c:
+            c.execute("INSERT INTO numbers(image_id, text, confidence, bbox, person_id) VALUES(?,?,?,?,?)",
+                      (iid, "#manuell", 1.0, None, pid))
+        return {"person_id": pid}
+
+    @app.delete("/api/images/{iid}/persons/{pid}")
+    def remove_image_person(iid: int, pid: int) -> dict[str, Any]:
+        with db.tx() as c:
+            c.execute("DELETE FROM numbers WHERE image_id=? AND person_id=? AND text='#manuell'", (iid, pid))
+            c.execute("UPDATE numbers SET person_id=NULL WHERE image_id=? AND person_id=?", (iid, pid))
+            c.execute("UPDATE faces SET person_id=NULL, assigned_by=NULL WHERE image_id=? AND person_id=?", (iid, pid))
+        return {"ok": True}
 
     @app.post("/api/shoots/{sid}/clusters/{cid}/assign")
     def assign_c(sid: int, cid: int, req: AssignReq) -> dict[str, Any]:

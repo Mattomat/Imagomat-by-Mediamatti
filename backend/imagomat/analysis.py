@@ -265,7 +265,7 @@ def _stage2_numbers(db: Database, row: Any, img: np.ndarray, bodies: list[tuple[
         return
     hits = ocr.read_shirts(img)
     with db.tx() as c:
-        c.execute("DELETE FROM numbers WHERE image_id=?", (row["id"],))
+        c.execute("DELETE FROM numbers WHERE image_id=? AND text NOT LIKE '#%'", (row["id"],))
         for h in hits:
             c.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
                       (row["id"], h.text, h.confidence, dumps(list(h.bbox))))
@@ -361,7 +361,8 @@ def ensure_action(ctx: JobContext, shoot_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 @job("analyze")
-def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
+def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False, light: bool = False) -> None:
+    """light=True (nur Personen): ohne Bild-KI (CLIP) und Action-Momente, deutlich schneller."""
     db = ctx.db
     rows = db.images(shoot_id)
     total = len(rows) * 3
@@ -385,7 +386,8 @@ def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
             done += 1
             ctx.progress(done, "Vorschauen und Metriken")
     rows = db.images(shoot_id)
-    todo2 = [r for r in rows if force or not (db.step_done(r["id"], STEP_FACES) and db.step_done(r["id"], STEP_EMBED))]
+    todo2 = [r for r in rows if force or not (db.step_done(r["id"], STEP_FACES)
+                                              and (light or db.step_done(r["id"], STEP_EMBED)))]
     done += len(rows) - len(todo2)
     batch_rows: list[Any] = []
     batch_imgs: list[np.ndarray] = []
@@ -405,7 +407,7 @@ def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
             log.warning("Gesichter/Motiv fehlgeschlagen für %s: %s", r["filename"], e, exc_info=True)
             db.update_analysis(r["id"], {"content_error": str(e)[:300]})
             db.mark_step(r["id"], STEP_FACES)
-        if img is not None and (force or not db.step_done(r["id"], STEP_EMBED)):
+        if img is not None and not light and (force or not db.step_done(r["id"], STEP_EMBED)):
             small = cv2.resize(img, (448, int(448 * img.shape[0] / img.shape[1])), interpolation=cv2.INTER_AREA)
             batch_rows.append(r)
             batch_imgs.append(small)
@@ -418,8 +420,8 @@ def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
         _stage2_embed(db, batch_rows, batch_imgs)
     # Stufe 3: Action-Momente (braucht Embeddings und Gesichter)
     rows = db.images(shoot_id)
-    todo3 = [r for r in rows if r["id"] in readable
-             and (force or not db.step_done(r["id"], STEP_ACTION, ACTION_VERSION))]
+    todo3 = [] if light else [r for r in rows if r["id"] in readable
+                              and (force or not db.step_done(r["id"], STEP_ACTION, ACTION_VERSION))]
     done += len(rows) - len(todo3)
     for i in range(0, len(todo3), 8):
         ctx.check()
