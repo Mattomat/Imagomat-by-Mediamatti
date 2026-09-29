@@ -27,6 +27,7 @@ const ML_PACKAGES: &[&str] = &[
     "kornia>=0.7",
     "onnxruntime>=1.18",
     "ocrmac>=1.0",
+    "pyobjc-framework-Quartz>=10.0",
     "insightface>=0.7.3",
 ];
 

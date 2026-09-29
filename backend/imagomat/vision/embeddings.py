@@ -85,6 +85,13 @@ class ClipEmbedder:
 
         self.torch = torch
         self.device = torch_device()
+        # Modell schon heruntergeladen? Dann nicht bei Hugging Face nachfragen (schneller, keine Warnung)
+        import os
+        from pathlib import Path as _P
+
+        hub = _P(os.environ.get("HF_HOME", _P.home() / ".cache" / "huggingface")) / "hub"
+        if any(hub.glob("models--timm--vit_large_patch14_clip_224.openai*")):
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(model, pretrained=pretrained)
         try:
             self.model = self.model.to(self.device).eval()

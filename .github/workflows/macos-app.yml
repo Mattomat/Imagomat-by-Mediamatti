@@ -25,6 +25,7 @@ jobs:
           uv pip install -e ".[dev,scrape]"
           # PyTorch mitinstallieren, damit Konflikte (z. B. OpenMP) auffallen
           uv pip install torch
+          uv pip install "pyobjc-framework-Quartz>=10.0"
       - name: Tests
         working-directory: backend
         env:
@@ -34,7 +35,7 @@ jobs:
         working-directory: backend
         run: |
           mkdir -p /tmp/raws
-          for cam in "Sony/ILCE-7M4" "Sony/ILCE-7M3" "Sony/ILCE-1"; do
+          for cam in "Sony/ILCE-7M5" "Sony/ILCE-7M4" "Sony/ILCE-1"; do
             url="https://raw.pixls.us/data/$cam/"
             for f in $(curl -sfL "$url" | grep -oiE 'href="[^"]+\.(arw)"' | sed -E 's/href="//;s/"$//' | head -n 2); do
               case "$f" in http*) src="$f" ;; *) src="$url$f" ;; esac

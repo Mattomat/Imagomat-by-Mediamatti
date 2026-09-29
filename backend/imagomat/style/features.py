@@ -87,7 +87,7 @@ def vectorize(feats: list[dict[str, float]]) -> np.ndarray:
 
 def _cache_key(path: Path) -> str:
     st = path.stat()
-    return hashlib.sha1(f"{path}|{st.st_size}|{st.st_mtime_ns}|v1".encode()).hexdigest()
+    return hashlib.sha1(f"{path}|{st.st_size}|{st.st_mtime_ns}|v2".encode()).hexdigest()
 
 
 def _cache_file(key: str) -> Path:

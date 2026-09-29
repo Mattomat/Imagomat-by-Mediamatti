@@ -29,9 +29,12 @@ def setup_logging(level: int = logging.INFO) -> None:
     fh = logging.handlers.RotatingFileHandler(log_file(), maxBytes=5 << 20, backupCount=3, encoding="utf-8")
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
     fh.setLevel(level)
+    # Eigene Meldungen ab INFO, fremde Bibliotheken (open_clip, huggingface ...) erst ab WARNING
+    fh.addFilter(lambda r: r.name.startswith("imagomat") or r.levelno >= logging.WARNING)
     fh._imagomat = True  # type: ignore[attr-defined]
     root.addHandler(fh)
     root.setLevel(min(root.level or logging.WARNING, level))
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
     for noisy in ("httpx", "urllib3", "PIL", "matplotlib", "uvicorn.access", "multipart"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 

@@ -218,7 +218,12 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
 
 function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot; kept: number; onClose: () => void }) {
   const parent = shoot.folder.replace(/\/[^/]+\/?$/, "");
-  const [target, setTarget] = useState(`${parent}/${shoot.name} – Imagomat`);
+  const stored = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+  const store = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* egal */ } };
+  const [root, setRoot] = useState(stored("imagomat.exportRoot") ?? parent);
+  const [sub, setSub] = useState(stored("imagomat.exportSub") !== "0");
+  const target = sub ? `${root.replace(/\/$/, "")}/${shoot.name}` : root;
+  const setTarget = (v: string) => { setRoot(v); store("imagomat.exportRoot", v); };
   const [jpeg, setJpeg] = useState(false);
   const [mode, setMode] = useState<"hardlink" | "inplace">("hardlink");
   const [withRejected, setWithRejected] = useState(true);
@@ -248,11 +253,14 @@ function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot
       {state === "form" && (
         <>
           <p>{kept} bearbeitete Bilder (inkl. Masken, Denoise, Zuschnitt) werden für Lightroom vorbereitet. Deine Originale bleiben unverändert.</p>
-          <label>Zielordner</label>
+          <label>Dein Lightroom-Ordner (wird gemerkt)</label>
           <div className="row">
-            <input value={target} onChange={(e) => setTarget(e.target.value)} disabled={mode === "inplace"} />
-            <button onClick={async () => { const d = await pickFolder("Zielordner wählen"); if (d) setTarget(d); }} disabled={mode === "inplace"}>Wählen…</button>
+            <input value={root} onChange={(e) => setTarget(e.target.value)} disabled={mode === "inplace"} />
+            <button onClick={async () => { const d = await pickFolder("Ordner für RAW + XMP wählen"); if (d) setTarget(d); }} disabled={mode === "inplace"}>Wählen…</button>
           </div>
+          <label className="check"><input type="checkbox" checked={sub} disabled={mode === "inplace"}
+            onChange={(e) => { setSub(e.target.checked); store("imagomat.exportSub", e.target.checked ? "1" : "0"); }} /> Unterordner „{shoot.name}“ anlegen</label>
+          <div className="hint">RAW + XMP landen in: {mode === "inplace" ? shoot.folder : target}</div>
           <label className="check"><input type="checkbox" checked={jpeg} onChange={(e) => setJpeg(e.target.checked)} /> zusätzlich schnelle Vorschau-JPEGs (z. B. zum Verschicken)</label>
           <More>
             <label className="check"><input type="checkbox" checked={mode === "inplace"} onChange={(e) => setMode(e.target.checked ? "inplace" : "hardlink")} /> nur Einstellungen (XMP) neben die Originale schreiben</label>

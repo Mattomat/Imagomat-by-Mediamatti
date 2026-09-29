@@ -33,6 +33,7 @@ from .vision.segmentation import body_boxes, segment
 log = logging.getLogger(__name__)
 STEP_PREVIEW, STEP_METRICS, STEP_FACES, STEP_EMBED = "preview", "metrics", "faces", "embed"
 STEP_ACTION = "action"
+METRICS_VERSION = 2    # 2: Apples RAW-Engine/DNG Converter für unbekannte Kameras, Vorschau auf RAW-Skala
 ACTION_VERSION = 2     # erhöht, wenn sich die Moment-Erkennung ändert -> wird neu berechnet
 PREVIEW_SIDE = 2048
 
@@ -104,13 +105,19 @@ def compute_metrics(path: Path) -> tuple[np.ndarray, dict[str, Any], int, int | 
     width = height = None
     if raw_io.is_raw(path):
         try:
-            lin, info = raw_io.read_linear(path, max_side=1024)
+            lin, info = raw_io.read_linear_any(path, max_side=1024, reference=img)
             data.update(quality.linear_stats(lin, info.camera_wb))
             data.update({"as_shot_temp": info.as_shot_temp, "as_shot_tint": info.as_shot_tint,
                          "camera_wb": info.camera_wb.tolist(), "xyz_to_cam": info.xyz_to_cam.ravel().tolist()})
             orientation = info.orientation
             width, height = info.width, info.height
-            data.update({f"noise_{k}": v for k, v in raw_io.estimate_noise(path).items()})
+            source = info.extra.get("source", "libraw")
+            data["raw_source"] = source
+            if source == "libraw":
+                data.update({f"noise_{k}": v for k, v in raw_io.estimate_noise(path).items()})
+            else:
+                data.update(iso_noise(path))
+                _note_unsupported(path, RuntimeError(f"gelesen über {source}"))
         except Exception as e:  # noqa: BLE001 - defekte RAWs sollen den Shoot nicht stoppen
             data["raw_error"] = str(e)
             data.update(preview_linear_stats(img, path))
@@ -133,14 +140,20 @@ def _note_unsupported(path: Path, err: Exception) -> None:
     if model in _UNSUPPORTED_SEEN:
         return
     _UNSUPPORTED_SEEN.add(model)
-    log.warning("LibRaw kennt die Kamera %s nicht (%s, z. B. %s). Imagomat nutzt die eingebettete Vorschau; "
-                "Weissabgleich und Rauschen werden geschätzt.", model, err, path.name)
+    how = str(err).replace("gelesen über ", "") if str(err).startswith("gelesen über") else None
+    if how == "coreimage":
+        log.warning("LibRaw kennt die Kamera %s noch nicht. Imagomat liest sie über Apples RAW-Engine "
+                    "(Weissabgleich gemessen, Rauschen aus ISO geschätzt).", model)
+    elif how == "dng_converter":
+        log.warning("LibRaw kennt die Kamera %s noch nicht. Imagomat liest sie über den Adobe DNG Converter.", model)
+    else:
+        log.warning("Die Kamera %s kann weder LibRaw noch Apples RAW-Engine lesen (%s, z. B. %s). Imagomat nutzt "
+                    "die eingebettete Vorschau; Weissabgleich und Rauschen werden geschätzt. Tipp: Adobe DNG "
+                    "Converter (gratis) installieren.", model, err, path.name)
 
 
 def preview_linear_stats(img: np.ndarray, path: Path) -> dict[str, Any]:
     """Ersatz-Statistik, wenn LibRaw die RAW nicht lesen kann: linearisierte Vorschau + Rauschen aus ISO."""
-    from .io.tiffmeta import read_tiff_exif
-
     x = cv2.resize(img, (512, int(512 * img.shape[0] / img.shape[1])), interpolation=cv2.INTER_AREA)
     x = x.astype(np.float32) / 255.0
     lin = np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
@@ -151,13 +164,21 @@ def preview_linear_stats(img: np.ndarray, path: Path) -> dict[str, Any]:
         if k.startswith("lin_log_"):
             out[k] = float(out[k]) - PREVIEW_TO_RAW_EV
     out["raw_source"] = "preview"
-    iso = read_tiff_exif(path).get("ISO")
-    if isinstance(iso, (int, float)) and iso > 0:
-        # Vollformat-Näherung: SNR bei 18 % Grau ~100 bei ISO 100, fällt mit Wurzel(ISO)
-        sigma = 0.0018 * (float(iso) / 100.0) ** 0.5
-        out.update({"noise_sigma_mid": sigma, "noise_sigma_shadow": sigma * 0.75, "noise_snr_mid": 0.18 / sigma,
-                    "noise_a": sigma ** 2 / 0.18, "noise_b": 1e-8, "noise_source": "iso"})
+    out.update(iso_noise(path))
     return out
+
+
+def iso_noise(path: Path) -> dict[str, Any]:
+    """Rauschen aus der ISO schätzen (wenn keine Bayer-Daten vorliegen)."""
+    from .io.tiffmeta import read_tiff_exif
+
+    iso = read_tiff_exif(path).get("ISO")
+    if not (isinstance(iso, (int, float)) and iso > 0):
+        return {}
+    # Vollformat-Näherung: SNR bei 18 % Grau ~100 bei ISO 100, fällt mit Wurzel(ISO)
+    sigma = 0.0018 * (float(iso) / 100.0) ** 0.5
+    return {"noise_sigma_mid": sigma, "noise_sigma_shadow": sigma * 0.75, "noise_snr_mid": 0.18 / sigma,
+            "noise_a": sigma ** 2 / 0.18, "noise_b": 1e-8, "noise_source": "iso"}
 
 
 def _stage1(db: Database, row: Any) -> None:
@@ -170,7 +191,7 @@ def _stage1(db: Database, row: Any) -> None:
         c.execute("UPDATE images SET preview_path=?, orientation=?, width=COALESCE(?, width),"
                   " height=COALESCE(?, height) WHERE id=?",
                   (str(pp), orientation, width, height, image_id))
-    db.mark_step(image_id, STEP_METRICS)
+    db.mark_step(image_id, STEP_METRICS, METRICS_VERSION)
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +319,7 @@ def ensure_action(ctx: JobContext, shoot_id: int) -> None:
     """Action-Momente für Bilder nachrechnen, die noch eine ältere Version haben (schnell)."""
     db = ctx.db
     rows = [r for r in db.images(shoot_id)
-            if db.step_done(r["id"], STEP_METRICS) and not db.step_done(r["id"], STEP_ACTION, ACTION_VERSION)]
+            if db.step_done(r["id"], STEP_METRICS, METRICS_VERSION) and not db.step_done(r["id"], STEP_ACTION, ACTION_VERSION)]
     for i in range(0, len(rows), 8):
         ctx.check()
         chunk = rows[i:i + 8]
@@ -322,7 +343,7 @@ def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
     total = len(rows) * 3
     ctx.set_total(total)
     done = 0
-    todo1 = [r for r in rows if force or not db.step_done(r["id"], STEP_METRICS)]
+    todo1 = [r for r in rows if force or not db.step_done(r["id"], STEP_METRICS, METRICS_VERSION)]
     failed = 0
     done += len(rows) - len(todo1)
     ctx.progress(done, "Vorschauen und Metriken")
@@ -344,7 +365,7 @@ def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False) -> None:
     done += len(rows) - len(todo2)
     batch_rows: list[Any] = []
     batch_imgs: list[np.ndarray] = []
-    readable = {r["id"] for r in rows if db.step_done(r["id"], STEP_METRICS)}
+    readable = {r["id"] for r in rows if db.step_done(r["id"], STEP_METRICS, METRICS_VERSION)}
     for r in todo2:
         ctx.check()
         if r["id"] not in readable:

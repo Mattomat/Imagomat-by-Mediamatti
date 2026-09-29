@@ -255,12 +255,52 @@ def decode(path: str | Path, half_size: bool = True, oriented: bool = True) -> t
     return (orient(lin, info.orientation) if oriented else lin), info
 
 
+def _info_from_meta(meta: dict, orientation: int) -> RawInfo:
+    return RawInfo(width=int(meta.get("width") or 0), height=int(meta.get("height") or 0), orientation=orientation,
+                   xyz_to_cam=np.linalg.inv(SRGB_TO_XYZ), camera_wb=np.ones(3), black=0.0, white=1.0,
+                   as_shot_temp=meta.get("as_shot_temp"), as_shot_tint=meta.get("as_shot_tint"),
+                   extra={"source": meta.get("source", "coreimage")})
+
+
+def read_linear_any(path: str | Path, max_side: int | None = 1600,
+                    reference: np.ndarray | None = None) -> tuple[np.ndarray, RawInfo]:
+    """Wie ``read_linear``, aber für jede Kamera: LibRaw, sonst Apples RAW-Engine, sonst Adobe DNG Converter.
+
+    Bei den Ersatzwegen ist der Weissabgleich schon angewendet (``camera_wb`` = 1) und das Bild
+    ist lineares sRGB. ``reference`` (korrekt gedrehte Vorschau) sichert die Ausrichtung ab."""
+    from . import decoders
+    from .tiffmeta import read_tiff_exif
+
+    try:
+        return read_linear(path, max_side)
+    except (rawpy.LibRawError, OSError, ValueError) as first:
+        err = first
+    orientation = int(read_tiff_exif(path).get("Orientation") or 1)
+    res = decoders.coreimage_linear(path, max_side or 4096)
+    if res is not None:
+        lin, meta = res
+        if reference is not None:
+            lin = decoders.align_to(lin, reference)
+        return lin, _info_from_meta(meta, orientation)
+    with decoders.TempDng(path) as dng:
+        if dng is not None:
+            lin, info = read_linear(dng, max_side)
+            info.extra["source"] = "dng_converter"
+            return lin, info
+    raise err
+
+
 def decode_any(path: str | Path, half_size: bool = True) -> tuple[np.ndarray, RawInfo]:
     """Wie ``decode``, fällt aber auf die (linearisierte) Vorschau zurück, wenn LibRaw die Datei
     nicht öffnen kann. Dann ist die Vorschau bereits weissabgeglichen und gedreht (Näherung)."""
     try:
         return decode(path, half_size=half_size)
     except (rawpy.LibRawError, OSError, ValueError) as e:
+        try:
+            ref, _ = load_preview(path, 1024)
+            return read_linear_any(path, 2048 if half_size else None, reference=ref)
+        except Exception:  # noqa: BLE001 - weiter mit der Vorschau
+            pass
         log.info("Rendering über Vorschau für %s (%s)", Path(path).name, e)
         img, _ = load_preview(path, 2048 if half_size else 8192)
         x = img.astype(np.float32) / 255.0
