@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppCtx } from "../App";
 import { api, Cluster, IS_APP, JobInfo, Overview, Person, pickFile, pickFolder, Shoot, waitForJob } from "../api";
+import PersonDetail from "../components/PersonDetail";
 import { Progress } from "../ui";
 
 export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: ((p: string[]) => void) | null) => void }) {
@@ -14,6 +15,7 @@ export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h:
   const [names, setNames] = useState<Record<string, string>>({});
   const [faceV, setFaceV] = useState(0);
   const [catalogs, setCatalogs] = useState<string[]>([]);
+  const [open, setOpen] = useState<Person | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
@@ -179,17 +181,26 @@ export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h:
       {persons.length === 0 && <div className="empty">Noch keine Personen. Importiere einen Kader oder ziehe benannte Bilder hierher.</div>}
       <div className="person-grid">
         {shownPersons.map((p) => (
-          <div key={p.id} className="person-card">
-            <div className="avatar">
-              <img src={api.img(`/api/persons/${p.id}/face?v=${faceV}`)} onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
-              <span>{p.number ?? p.name.split(" ").map((x) => x[0]).join("").slice(0, 2)}</span>
+          <div key={p.id} className="person-card" onClick={() => setOpen(p)} title="Bilder ansehen und bearbeiten">
+            <div className="avatar-wrap">
+              <div className="avatar">
+                <img src={api.img(`/api/persons/${p.id}/face?v=${faceV}`)} onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
+                <span>{p.name.split(" ").map((x) => x[0]).join("").slice(0, 2)}</span>
+              </div>
+              {p.number && <span className="num-badge">{p.number}</span>}
             </div>
             <div className="p-name">{p.name}</div>
-            <div className="p-team">{p.number ? `#${p.number} · ` : ""}{p.team ?? ""}</div>
-            <button className="ghost small" title="Entfernen" onClick={() => api.del(`/api/persons/${p.id}`).then(load)}>✕</button>
+            <div className="p-team">{p.team ?? ""}</div>
+            <button className="ghost small" title="Entfernen" onClick={(e) => {
+              e.stopPropagation();
+              if (confirm(`${p.name} wirklich entfernen?`)) api.del(`/api/persons/${p.id}`).then(load);
+            }}>✕</button>
           </div>
         ))}
       </div>
+      {open && (
+        <PersonDetail person={open} teams={teams} toast={ctx.toast} onChanged={load} onClose={() => setOpen(null)} />
+      )}
     </div>
   );
 }

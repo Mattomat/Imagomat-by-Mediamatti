@@ -42,6 +42,7 @@ class RosterEntry:
     number: str | None
     team: str | None
     position: str | None = None
+    aliases: list[str] | None = None
 
 
 def parse_csv(text: str, default_team: str | None = None) -> list[RosterEntry]:
@@ -51,6 +52,8 @@ def parse_csv(text: str, default_team: str | None = None) -> list[RosterEntry]:
     if not rows:
         return []
     header = [h.strip().lower() for h in rows[0]]
+    kader_col = next((i for i, h in enumerate(header) if h.startswith("kader")), None)
+    alias_col = next((i for i, h in enumerate(header) if "variante" in h or h in ("alias", "aliases")), None)
     has_header = any(h in ("name", "nummer", "number", "team", "position", "vorname", "nachname") for h in header)
     idx = {k: i for i, k in enumerate(header)} if has_header else {"name": 0, "nummer": 1, "team": 2, "position": 3}
     out = []
@@ -63,8 +66,19 @@ def parse_csv(text: str, default_team: str | None = None) -> list[RosterEntry]:
             name = f"{get('vorname')} {get('nachname')}".strip()
         if not name:
             continue
+        aliases = [a.strip() for a in r[alias_col].split("|")] if alias_col is not None and alias_col < len(r) else []
+        aliases = [a for a in aliases if a]
+        if kader_col is not None:
+            # z. B. "FCW Herren: Nr. 22" oder "FCW Herren: Nr. 70 | FCW U21: Nr. 16" (erste = Hauptteam)
+            kader = r[kader_col].strip() if kader_col < len(r) else ""
+            m = re.match(r"\s*([^:|]+?)\s*:\s*(?:Nr\.?|#)?\s*(\d+)", kader)
+            if m:
+                out.append(RosterEntry(name, m.group(2), m.group(1), None, aliases))
+            else:
+                out.append(RosterEntry(name, None, None, None, aliases))   # ohne Kader: Team nicht raten
+            continue
         num = re.sub(r"\D", "", get("nummer", "number", "nr", "#")) or None
-        out.append(RosterEntry(name, num, get("team") or default_team, get("position") or None))
+        out.append(RosterEntry(name, num, get("team") or default_team, get("position") or None, aliases))
     return out
 
 
@@ -106,8 +120,22 @@ def fetch(url: str, team: str) -> list[RosterEntry]:
 
 
 def save(db: Database, entries: list[RosterEntry]) -> int:
+    """Bestehende Personen (gleicher Name, auch mit Akzent-/Schreibvarianten) werden ergänzt,
+    statt doppelt angelegt. Team/Nummer aus dem Kader überschreiben leere Werte."""
+    from .registry import find_person, update_person
+
     for e in entries:
-        upsert_person(db, e.name, e.team, e.number)
+        pid = find_person(db, e.name, e.aliases)
+        if pid is None:
+            upsert_person(db, e.name, e.team, e.number)
+            continue
+        kw: dict = {}
+        if e.number:
+            kw["number"] = e.number
+        if e.team:
+            kw["team"] = e.team
+        if kw:
+            update_person(db, pid, **kw)
     return len(entries)
 
 

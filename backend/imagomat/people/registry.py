@@ -50,7 +50,8 @@ def upsert_person(db: Database, name: str, team: str | None = None, number: str 
 
 def persons(db: Database) -> list[Person]:
     return [Person(r["id"], r["name"], r["team"], r["number"], r["keyword"] or keyword_for(r["name"], r["team"]))
-            for r in db.query("SELECT * FROM persons ORDER BY team, CAST(number AS INTEGER), name")]
+            for r in db.query("SELECT * FROM persons ORDER BY team IS NULL, team, number IS NULL, "
+                                "CAST(number AS INTEGER), name")]
 
 
 def exemplars(db: Database) -> tuple[np.ndarray, np.ndarray]:
@@ -110,3 +111,68 @@ def image_people(db: Database, image_id: int) -> list[Person]:
         " UNION SELECT person_id FROM numbers WHERE image_id=? AND person_id IS NOT NULL)", (image_id, image_id))
     return [Person(r["id"], r["name"], r["team"], r["number"], r["keyword"] or keyword_for(r["name"], r["team"]))
             for r in rows]
+
+
+def norm_name(name: str) -> str:
+    """Für den Namensabgleich: ohne Akzente, Bindestriche und Gross/Klein ("Théo" == "Theo")."""
+    import unicodedata
+
+    s = unicodedata.normalize("NFKD", name)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return " ".join(s.replace("-", " ").casefold().split())
+
+
+def find_person(db: Database, name: str, aliases: list[str] | None = None) -> int | None:
+    """Bestehende Person über den Namen (oder Varianten) finden, unabhängig vom Team."""
+    wanted = {norm_name(n) for n in [name, *(aliases or [])] if n}
+    for r in db.query("SELECT id, name FROM persons ORDER BY id"):
+        if norm_name(r["name"]) in wanted:
+            return int(r["id"])
+    return None
+
+
+def merge_persons(db: Database, source: int, target: int) -> None:
+    """Person ``source`` in ``target`` aufgehen lassen (Gesichter und Nummern wandern mit)."""
+    if source == target:
+        return
+    with db.tx() as c:
+        c.execute("UPDATE faces SET person_id=? WHERE person_id=?", (target, source))
+        c.execute("UPDATE numbers SET person_id=? WHERE person_id=?", (target, source))
+        src = c.execute("SELECT number, team FROM persons WHERE id=?", (source,)).fetchone()
+        if src:
+            c.execute("UPDATE persons SET number=COALESCE(number, ?), team=COALESCE(team, ?) WHERE id=?",
+                      (src["number"], src["team"], target))
+        c.execute("DELETE FROM persons WHERE id=?", (source,))
+
+
+_UNSET = object()
+
+
+def update_person(db: Database, pid: int, name: str | None = None, team: object = _UNSET,
+                  number: object = _UNSET) -> int:
+    """Name, Team oder Nummer ändern. Gibt es danach schon eine Person mit gleichem Namen und Team,
+    werden beide zusammengeführt. Rückgabe: ID der (verbleibenden) Person."""
+    row = db.one("SELECT * FROM persons WHERE id=?", (pid,))
+    if row is None:
+        raise KeyError(pid)
+    new_name = (name or row["name"]).strip()
+    new_team = row["team"] if team is _UNSET else ((str(team).strip() or None) if team else None)
+    new_number = row["number"] if number is _UNSET else ((str(number).strip() or None) if number else None)
+    other = db.one("SELECT id FROM persons WHERE name=? AND IFNULL(team,'')=IFNULL(?,'') AND id<>?",
+                   (new_name, new_team, pid))
+    if other is None and name and norm_name(name) != norm_name(row["name"]):
+        # Umbenannt auf eine bereits bekannte Person (z. B. Tippfehler korrigiert) -> zusammenführen
+        other_id = next((int(r["id"]) for r in db.query("SELECT id, name FROM persons WHERE id<>?", (pid,))
+                         if norm_name(r["name"]) == norm_name(new_name)), None)
+        if other_id is not None:
+            other = {"id": other_id}
+            tgt = db.one("SELECT team, number FROM persons WHERE id=?", (other_id,))
+            new_team = new_team if team is not _UNSET else (tgt["team"] or new_team)
+            new_number = new_number if number is not _UNSET else (tgt["number"] or new_number)
+    if other:
+        merge_persons(db, pid, int(other["id"]))
+        pid = int(other["id"])
+    with db.tx() as c:
+        c.execute("UPDATE persons SET name=?, team=?, number=?, keyword=? WHERE id=?",
+                  (new_name, new_team, new_number, keyword_for(new_name, new_team), pid))
+    return pid

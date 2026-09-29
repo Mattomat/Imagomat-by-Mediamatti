@@ -384,9 +384,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/images/{iid}/preview")
     def preview(iid: int) -> FileResponse:
-        r = db.one("SELECT preview_path FROM images WHERE id=?", (iid,))
-        if not r or not r["preview_path"] or not Path(r["preview_path"]).exists():
+        r = db.one("SELECT * FROM images WHERE id=?", (iid,))
+        if not r:
             raise HTTPException(404)
+        if not r["preview_path"] or not Path(r["preview_path"]).exists():
+            # z. B. Referenzbilder aus Lightroom: Vorschau bei Bedarf erzeugen und merken
+            from ..analysis import preview_path as _pp
+
+            try:
+                img = load_cached_preview(r)
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(404, f"Vorschau nicht verfügbar: {e}") from e
+            pp = _pp(iid)
+            cv2.imwrite(str(pp), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
+            with db.tx() as c:
+                c.execute("UPDATE images SET preview_path=? WHERE id=?", (str(pp), iid))
+            return FileResponse(str(pp), media_type="image/jpeg")
         return FileResponse(r["preview_path"], media_type="image/jpeg")
 
     @app.get("/api/images/{iid}/render")
@@ -530,6 +543,50 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def people_learn(body: dict[str, Any]) -> dict[str, Any]:
         """Referenzbilder (bereits benannte JPGs) einlesen."""
         return {"job_id": jobs.submit("learn_people", None, **body)}
+
+    @app.patch("/api/persons/{pid}")
+    def patch_person(pid: int, body: dict[str, Any]) -> dict[str, Any]:
+        """Name, Team oder Nummer ändern (führt bei gleichem Namen automatisch zusammen)."""
+        from ..people.registry import update_person
+
+        kw = {k: body[k] for k in ("team", "number") if k in body}
+        try:
+            new_id = update_person(db, pid, name=body.get("name"), **kw)
+        except KeyError as e:
+            raise HTTPException(404, "Person nicht gefunden") from e
+        p = db.one("SELECT * FROM persons WHERE id=?", (new_id,))
+        return {**dict(p), "merged": new_id != pid}
+
+    @app.get("/api/persons/{pid}/images")
+    def person_images(pid: int) -> dict[str, Any]:
+        """Alle Bilder einer Person (Gesicht oder Rückennummer), neueste zuerst."""
+        p = db.one("SELECT * FROM persons WHERE id=?", (pid,))
+        if not p:
+            raise HTTPException(404, "Person nicht gefunden")
+        rows = db.query(
+            "SELECT i.id AS image_id, i.filename, i.capture_time, s.name AS shoot, s.id AS shoot_id, "
+            "f.id AS face_id, f.bbox, f.assigned_by, 'face' AS via FROM faces f JOIN images i ON i.id=f.image_id "
+            "JOIN shoots s ON s.id=i.shoot_id WHERE f.person_id=? "
+            "UNION ALL SELECT i.id, i.filename, i.capture_time, s.name, s.id, NULL, n.bbox, 'number', 'number' "
+            "FROM numbers n JOIN images i ON i.id=n.image_id JOIN shoots s ON s.id=i.shoot_id WHERE n.person_id=? "
+            "ORDER BY capture_time DESC LIMIT 2000", (pid, pid))
+        seen: dict[int, dict[str, Any]] = {}
+        for r in rows:
+            d = seen.setdefault(r["image_id"], {**dict(r), "bbox": json.loads(r["bbox"]) if r["bbox"] else None})
+            if d["face_id"] is None and r["face_id"] is not None:
+                d.update(face_id=r["face_id"], bbox=json.loads(r["bbox"]) if r["bbox"] else None)
+        items = list(seen.values())
+        for it in items:
+            it["reference"] = it["shoot"].startswith("__")
+            if it["reference"]:
+                it["shoot"] = "Referenzbilder"
+        return {"person": dict(p), "images": items}
+
+    @app.post("/api/faces/{fid}/unassign")
+    def unassign_face(fid: int) -> dict[str, Any]:
+        """Falsch erkanntes Gesicht von der Person lösen."""
+        assign_face(db, fid, None)
+        return {"ok": True}
 
     @app.get("/api/persons/{pid}/face")
     def person_face(pid: int) -> Response:
