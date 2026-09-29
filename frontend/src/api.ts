@@ -78,6 +78,17 @@ export interface ImageItem {
   preset: string | null;
   moment: string | null;
   action: number | null;
+  people_check?: PeopleCheck[];
+}
+
+export interface PeopleCheck {
+  face_id: number;
+  face_person_id: number;
+  face_person: string | null;
+  shirt_person_id: number;
+  shirt_person: string | null;
+  shirt: string[];
+  chosen: "face" | "shirt";
 }
 
 export interface Preset {

@@ -16,6 +16,9 @@ export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h:
   const [faceV, setFaceV] = useState(0);
   const [catalogs, setCatalogs] = useState<string[]>([]);
   const [open, setOpen] = useState<Person | null>(null);
+  const [singles, setSingles] = useState<Cluster["faces"]>([]);
+  const [single, setSingle] = useState<number | null>(null);
+  const [singleName, setSingleName] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
@@ -33,7 +36,10 @@ export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h:
     });
   }, [ctx.tick]);
   useEffect(() => {
-    if (shootId) api.get<Cluster[]>(`/api/shoots/${shootId}/clusters`).then((c) => setClusters(c.filter((x) => !x.person_id)));
+    if (shootId) api.get<Cluster[]>(`/api/shoots/${shootId}/clusters`).then((c) => {
+      setClusters(c.filter((x) => !x.person_id && x.cluster_id !== null));
+      setSingles(c.find((x) => x.key === "unknown")?.faces ?? []);
+    });
   }, [shootId, ctx.tick]);
 
   const teams = useMemo(() => [...new Set(persons.map((p) => p.team).filter((t): t is string => !!t))].sort(), [persons]);
@@ -89,13 +95,50 @@ export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h:
   const assignCluster = async (c: Cluster) => {
     const n = (names[c.key] ?? "").trim();
     if (!n || !shootId) return;
-    const p = persons.find((x) => x.name.toLowerCase() === n.toLowerCase());
-    const body = p ? { person_id: p.id } : { name: n, team: team.trim() || undefined };
+    const body = bodyFor(n);
     if (c.cluster_id !== null) await api.post(`/api/shoots/${shootId}/clusters/${c.cluster_id}/assign`, body);
     else for (const f of c.faces) await api.post(`/api/faces/${f.id}/assign`, body);
     setClusters((cs) => cs.filter((x) => x.key !== c.key));
     ctx.toast(`${n} zugeordnet`);
     load();
+  };
+
+  const bodyFor = (n: string) => {
+    const p = persons.find((x) => x.name.toLowerCase() === n.toLowerCase());
+    return p ? { person_id: p.id } : { name: n, team: team.trim() || undefined };
+  };
+  const removeFromGroup = async (c: Cluster, fid: number) => {
+    await api.post(`/api/faces/${fid}/uncluster`, {});
+    setClusters((cs) => cs.map((x) => (x.key === c.key ? { ...x, faces: x.faces.filter((f) => f.id !== fid), count: x.count - 1 } : x))
+      .filter((x) => x.count > 0));
+  };
+  const ignoreGroup = async (c: Cluster) => {
+    if (!shootId || c.cluster_id === null) return;
+    await api.post(`/api/shoots/${shootId}/clusters/${c.cluster_id}/ignore`, {});
+    setClusters((cs) => cs.filter((x) => x.key !== c.key));
+    ctx.toast("Gruppe ausgeblendet");
+  };
+  const nameSingle = async () => {
+    const n = singleName.trim();
+    if (!n || single === null) return;
+    await api.post(`/api/faces/${single}/assign`, bodyFor(n));
+    setSingles((xs) => xs.filter((f) => f.id !== single));
+    setSingle(null);
+    setSingleName("");
+    ctx.toast(`${n} zugeordnet`);
+    load();
+  };
+  const regroup = async () => {
+    if (!shootId) return;
+    const r = await api.post<{ job_id: number }>(`/api/shoots/${shootId}/run/people`, {});
+    ctx.refreshJobs();
+    await waitForJob(r.job_id);
+    ctx.toast("Gruppen neu berechnet");
+    setShootId(shootId);
+    api.get<Cluster[]>(`/api/shoots/${shootId}/clusters`).then((c) => {
+      setClusters(c.filter((x) => !x.person_id && x.cluster_id !== null));
+      setSingles(c.find((x) => x.key === "unknown")?.faces ?? []);
+    });
   };
 
   return (
@@ -146,26 +189,57 @@ export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h:
         <datalist id="teams">{teams.map((t) => <option key={t} value={t} />)}</datalist>
       </div>
 
-      {clusters.length > 0 && (
+      {(clusters.length > 0 || singles.length > 0) && (
         <>
           <div className="section-head">
             <h2>Wer ist das?</h2>
             <select value={shootId ?? ""} onChange={(e) => setShootId(+e.target.value)}>
               {shoots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
+            <button className="ghost small" onClick={regroup}>Neu gruppieren</button>
           </div>
+          <p className="hint">Jede Gruppe sollte eine Person sein. Passt ein Gesicht nicht, auf ✕ klicken. Gegner oder Zuschauer mit „Ignorieren“ ausblenden.</p>
           <datalist id="persons">{persons.map((p) => <option key={p.id} value={p.name} />)}</datalist>
           <div className="who-list">
-            {clusters.slice(0, 20).map((c) => (
+            {clusters.slice(0, 30).map((c) => (
               <div key={c.key} className="who-card">
-                <div className="faces">{c.faces.slice(0, 5).map((f) => <img key={f.id} src={api.img(`/api/faces/${f.id}/crop`)} />)}</div>
-                <div className="who-count">{c.count} Bilder</div>
-                <input list="persons" placeholder="Name eingeben, Enter" value={names[c.key] ?? ""}
-                  onChange={(e) => setNames({ ...names, [c.key]: e.target.value })}
-                  onKeyDown={(e) => e.key === "Enter" && assignCluster(c)} />
+                <div className="faces">
+                  {c.faces.slice(0, 8).map((f) => (
+                    <div key={f.id} className="face-x">
+                      <img src={api.img(`/api/faces/${f.id}/crop`)} />
+                      <button title="Gehört nicht dazu" onClick={() => removeFromGroup(c, f.id)}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="who-count">{c.count} Gesichter</div>
+                <div className="row">
+                  <input list="persons" placeholder="Name eingeben, Enter" value={names[c.key] ?? ""}
+                    onChange={(e) => setNames({ ...names, [c.key]: e.target.value })}
+                    onKeyDown={(e) => e.key === "Enter" && assignCluster(c)} />
+                  <button className="ghost small" onClick={() => ignoreGroup(c)}>Ignorieren</button>
+                </div>
               </div>
             ))}
           </div>
+          {singles.length > 0 && (
+            <>
+              <h3>Einzelne Gesichter ({singles.length}{singles.length >= 60 ? "+" : ""})</h3>
+              <div className="singles">
+                {singles.map((f) => (
+                  <img key={f.id} className={single === f.id ? "sel" : ""} src={api.img(`/api/faces/${f.id}/crop`)}
+                    onClick={() => { setSingle(f.id); setSingleName(""); }} />
+                ))}
+              </div>
+              {single !== null && (
+                <div className="row single-name">
+                  <img src={api.img(`/api/faces/${single}/crop`)} />
+                  <input autoFocus list="persons" placeholder="Wer ist das? Name, Enter" value={singleName}
+                    onChange={(e) => setSingleName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && nameSingle()} />
+                  <button className="ghost" onClick={() => setSingle(null)}>Abbrechen</button>
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
 

@@ -443,7 +443,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             crs["MaskGroupBasedCorrections"] = json.loads(r["masks"])
         path = Path(r["path"])
         if not raw_io.is_raw(path):
-            raise HTTPException(415, "Rendering nur für RAW-Dateien")
+            return preview(iid)            # fertige JPGs: nichts zu entwickeln, Vorschau zeigen
         lin_cache = cache_dir() / "linear" / f"{iid}.npz"
         lin_cache.parent.mkdir(parents=True, exist_ok=True)
         if lin_cache.exists():
@@ -500,7 +500,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         rows = db.query(
             "SELECT f.id, f.image_id, f.cluster_id, f.person_id, f.assigned_by, p.name FROM faces f "
             "JOIN images i ON i.id=f.image_id LEFT JOIN persons p ON p.id=f.person_id WHERE i.shoot_id=? "
-            "ORDER BY f.det_score DESC", (sid,))
+            "AND IFNULL(f.assigned_by,'') <> 'ignored' ORDER BY f.det_score DESC", (sid,))
         groups: dict[str, dict[str, Any]] = {}
         for r in rows:
             key = f"p{r['person_id']}" if r["person_id"] else (f"c{r['cluster_id']}" if r["cluster_id"] is not None
@@ -508,7 +508,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             g = groups.setdefault(key, {"key": key, "person_id": r["person_id"], "name": r["name"],
                                         "cluster_id": r["cluster_id"], "faces": [], "count": 0})
             g["count"] += 1
-            if len(g["faces"]) < 12:
+            if len(g["faces"]) < (60 if key == "unknown" else 12):
                 g["faces"].append({"id": r["id"], "image_id": r["image_id"], "assigned_by": r["assigned_by"]})
         return sorted(groups.values(), key=lambda g: (g["name"] is None, -g["count"]))
 

@@ -11,6 +11,7 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
   const [profile, setProfile] = useState<string>("");
   const [sel, setSel] = useState<Selection>("normal");
   const [maxKeep, setMaxKeep] = useState("");
+  const [mode, setMode] = useState<"full" | "people">("full");
   const [teams, setTeams] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -32,8 +33,9 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
     setBusy(true);
     try {
       const r = await api.post<{ shoot_id: number }>("/api/shoots/import", {
-        folder, profile: profile || undefined, teams, ...SELECTION_PARAMS[sel],
-        max_keep: maxKeep ? Math.max(1, parseInt(maxKeep, 10)) : undefined,
+        folder, profile: profile || undefined, teams, mode,
+        ...(mode === "full" ? SELECTION_PARAMS[sel] : {}),
+        max_keep: mode === "full" && maxKeep ? Math.max(1, parseInt(maxKeep, 10)) : undefined,
       });
       ctx.refreshJobs();
       ctx.go({ name: "shoot", id: r.shoot_id });
@@ -71,6 +73,14 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
 
       <div className="options">
         <div className="opt">
+          <label>Was soll passieren?</label>
+          <Segmented value={mode} onChange={setMode}
+            options={[["full", "Aussortieren + Bearbeiten"], ["people", "Nur Personen benennen"]]} />
+          <div className="hint">{mode === "people"
+            ? "z. B. fertige JPGs: Personen erkennen und Namen hineinschreiben, dann wieder exportieren"
+            : "RAWs: beste Bilder auswählen, bearbeiten, Personen benennen, an Lightroom übergeben"}</div>
+        </div>
+        {mode === "full" && <><div className="opt">
           <label>Stil</label>
           <select value={profile} onChange={(e) => setProfile(e.target.value)}>
             <option value="">Automatisch (passender Stil je Situation)</option>
@@ -89,7 +99,7 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
             <input type="number" min={1} placeholder="–" value={maxKeep} onChange={(e) => setMaxKeep(e.target.value)} />
             Bilder <span className="muted">(leer = nur Prozent)</span>
           </div>
-        </div>
+        </div></>}
         {ov && ov.teams.length > 0 && (
           <div className="opt">
             <label>Teams im Bild (für Rückennummern)</label>

@@ -254,3 +254,25 @@ table.list td { border-bottom: 1px solid var(--line); padding: 7px 4px; font-siz
 .pd-box { position: absolute; border: 2px solid var(--accent); border-radius: 6px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.25); }
 .pd-big-bar { display: flex; gap: 10px; align-items: center; margin-top: 12px; width: min(900px, 92vw); color: var(--muted); font-size: 13px; }
 .pd-big-bar .spacer { flex: 1; }
+.face-x { position: relative; }
+.face-x button { position: absolute; top: -4px; right: -4px; width: 18px; height: 18px; padding: 0; border-radius: 9px; font-size: 10px; line-height: 18px; background: rgba(0, 0, 0, 0.75); color: #fff; border: none; opacity: 0; cursor: pointer; }
+.face-x:hover button { opacity: 1; }
+.who-card .faces { flex-wrap: wrap; }
+.who-card .row { display: flex; gap: 6px; }
+.singles { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.singles img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; cursor: pointer; opacity: 0.85; }
+.singles img:hover, .singles img.sel { opacity: 1; outline: 2px solid var(--accent); }
+.single-name { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+.single-name img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; }
+.people-panel { padding: 8px 16px; display: flex; flex-direction: column; gap: 8px; }
+.pp-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pp-face { display: flex; align-items: center; gap: 6px; background: var(--panel2); border-radius: 20px; padding: 3px 10px 3px 3px; cursor: pointer; font-size: 12px; }
+.pp-face img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+.pp-face .unknown { color: var(--muted); font-style: italic; }
+.pp-face.sel, .pp-face:hover { outline: 2px solid var(--accent); }
+.pp-chip { display: flex; align-items: center; gap: 4px; background: var(--panel2); border-radius: 20px; padding: 4px 6px 4px 10px; font-size: 12px; }
+.pp-chip button { border: none; background: none; color: var(--muted); cursor: pointer; padding: 0 4px; }
+.pp-edit { display: flex; gap: 6px; align-items: center; }
+.pp-edit input { max-width: 280px; }
+.conflict { display: flex; gap: 8px; align-items: center; background: rgba(240, 180, 60, 0.12); border: 1px solid rgba(240, 180, 60, 0.35); border-radius: 10px; padding: 6px 10px; font-size: 13px; flex-wrap: wrap; }
+.conflict button.on { outline: 2px solid var(--accent); }

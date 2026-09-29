@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppCtx } from "../App";
-import { api, ImageItem, pickFolder, reveal, Shoot, waitForJob } from "../api";
+import { api, ImageItem, IS_APP, pickFolder, reveal, Shoot, waitForJob } from "../api";
+import PeoplePanel from "../components/PeoplePanel";
 import { SELECTION_HINT, SELECTION_PARAMS, SELECTIONS, Selection, selectionFromSettings } from "../selection";
 import { Modal, More, Progress, Segmented } from "../ui";
 
@@ -8,9 +9,14 @@ type Tab = "keep" | "reject" | "check";
 
 const STEPS = ["Vorschauen", "Aussortieren", "Personen", "Bearbeiten"];
 
+function needsCheck(i: ImageItem): boolean {
+  return (i.people_check?.length ?? 0) > 0
+    || (i.decision === "keep" && i.confidence !== null && i.confidence < 0.35);
+}
+
 function stepOf(msg: string | null | undefined): number {
   if (!msg) return 0;
-  const m = msg.match(/^(\d)\/4/);
+  const m = msg.match(/^(\d)\/\d/);
   if (m) return +m[1] - 1;
   if (/Culling|behalten/.test(msg)) return 1;
   if (/Personen|Gesichter wiedererkannt|Rückennummer/.test(msg)) return 2;
@@ -43,18 +49,20 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const counts = useMemo(() => ({
     keep: items.filter((i) => i.decision === "keep").length,
     reject: items.filter((i) => i.decision === "reject").length,
-    check: items.filter((i) => i.decision === "keep" && i.confidence !== null && i.confidence < 0.35).length,
+    check: items.filter((i) => needsCheck(i)).length,
   }), [items]);
   const people = useMemo(() => [...new Set(items.flatMap((i) => i.people))].sort(), [items]);
   const shown = useMemo(() => items.filter((i) => {
     if (person && !i.people.includes(person)) return false;
     if (tab === "keep") return i.decision === "keep";
     if (tab === "reject") return i.decision === "reject";
-    return i.decision === "keep" && i.confidence !== null && i.confidence < 0.35;
+    return needsCheck(i);
   }), [items, tab, person]);
   const cur = shown[Math.min(sel, Math.max(0, shown.length - 1))];
 
   const selection = selectionFromSettings(shoot?.settings);
+  const peopleMode = (() => { try { return JSON.parse(shoot?.settings || "{}").mode === "people"; } catch { return false; } })();
+  const [tagging, setTagging] = useState(false);
   const recull = async (s: Selection) => {
     try {
       const r = await api.post<{ job_id: number }>(`/api/shoots/${id}/run/cull`, SELECTION_PARAMS[s]);
@@ -110,7 +118,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
           <h1>{shoot.name}</h1>
           <p className="muted">{shoot.n} Bilder</p>
           <div className="steps-row">
-            {STEPS.map((s, i) => <div key={s} className={`step ${i < step ? "done" : i === step ? "now" : ""}`}>{s}</div>)}
+            {(peopleMode ? ["Vorschauen", "Personen"] : STEPS).map((s, i) => <div key={s} className={`step ${i < step ? "done" : i === step ? "now" : ""}`}>{s}</div>)}
           </div>
           <Progress value={job && job.total ? job.progress / job.total : 0.02} label={job?.message ?? "Starte …"} />
           <p className="hint">Du kannst währenddessen weiterarbeiten, z. B. unter „Personen“.</p>
@@ -153,18 +161,22 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
             <button className={tab === "check" ? "on" : ""} onClick={() => { setTab("check"); setSel(0); }}>Prüfen <b>{counts.check}</b></button>
           )}
         </div>
-        <select className="person-filter" value={selection} disabled={running} title={SELECTION_HINT[selection]}
-          onChange={(e) => recull(e.target.value as Selection)}>
-          {SELECTIONS.map(([k, label]) => <option key={k} value={k}>Auswahl: {label}</option>)}
-        </select>
+        {!peopleMode && (
+          <select className="person-filter" value={selection} disabled={running} title={SELECTION_HINT[selection]}
+            onChange={(e) => recull(e.target.value as Selection)}>
+            {SELECTIONS.map(([k, label]) => <option key={k} value={k}>Auswahl: {label}</option>)}
+          </select>
+        )}
         {people.length > 0 && (
           <select className="person-filter" value={person} onChange={(e) => { setPerson(e.target.value); setSel(0); }}>
             <option value="">Alle Personen</option>
             {people.map((p) => <option key={p}>{p}</option>)}
           </select>
         )}
-        <button disabled={running || counts.keep === 0} onClick={() => setSocial("all")}>Social Media</button>
-        <button className="primary" disabled={running} onClick={() => setExporting(true)}>Nach Lightroom ▸</button>
+        {!peopleMode && <button disabled={running || counts.keep === 0} onClick={() => setSocial("all")}>Social Media</button>}
+        {peopleMode
+          ? <button className="primary" disabled={running} onClick={() => setTagging(true)}>Mit Namen exportieren ▸</button>
+          : <button className="primary" disabled={running} onClick={() => setExporting(true)}>Nach Lightroom ▸</button>}
       </div>
 
       {!loupe ? (
@@ -189,9 +201,10 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         <div className="loupe">
           <div className="stage" onClick={() => setBefore((b) => !b)}>
             <img key={`${cur.id}-${before}`}
-              src={api.img(before || cur.decision !== "keep" ? `/api/images/${cur.id}/preview` : `/api/images/${cur.id}/render?size=2000`)} />
-            <div className="stage-badge">{before || cur.decision !== "keep" ? "Original" : "Bearbeitet (Vorschau)"}</div>
+              src={api.img(before || peopleMode || cur.decision !== "keep" ? `/api/images/${cur.id}/preview` : `/api/images/${cur.id}/render?size=2000`)} />
+            <div className="stage-badge">{before || peopleMode || cur.decision !== "keep" ? "Original" : "Bearbeitet (Vorschau)"}</div>
           </div>
+          <PeoplePanel ctx={ctx} image={cur} onChanged={load} />
           <div className="loupe-bar">
             <span className="fname">{cur.filename}</span>
             {cur.decision === "reject" && <span className="why">Aussortiert: {cur.reasons.join(", ")}</span>}
@@ -209,6 +222,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         ← → blättern · Enter gross · Leertaste Vorher/Nachher · 1–5 Sterne · X aussortieren · P behalten
       </div>
       {exporting && <ExportDialog ctx={ctx} shoot={shoot} kept={counts.keep} onClose={() => setExporting(false)} />}
+      {tagging && <TagExportDialog ctx={ctx} shoot={shoot} total={items.length} onClose={() => setTagging(false)} />}
       {social !== "none" && (
         <SocialDialog ctx={ctx} shoot={shoot} single={social === "one" ? cur ?? null : null} onClose={() => setSocial("none")} />
       )}
@@ -221,12 +235,13 @@ function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot
   const stored = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
   const store = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* egal */ } };
   const [root, setRoot] = useState(stored("imagomat.exportRoot") ?? parent);
-  const [sub, setSub] = useState(stored("imagomat.exportSub") !== "0");
-  const target = sub ? `${root.replace(/\/$/, "")}/${shoot.name}` : root;
+  const [folderName, setFolderName] = useState(shoot.name);
+  const target = folderName.trim() ? `${root.replace(/\/$/, "")}/${folderName.trim()}` : root;
   const setTarget = (v: string) => { setRoot(v); store("imagomat.exportRoot", v); };
   const [jpeg, setJpeg] = useState(false);
   const [mode, setMode] = useState<"hardlink" | "inplace">("hardlink");
-  const [withRejected, setWithRejected] = useState(true);
+  const [withRejected, setWithRejected] = useState(false);
+  const [openLr, setOpenLr] = useState(stored("imagomat.openLr") !== "0");
   const [state, setState] = useState<"form" | "busy" | "done">("form");
   const [progress, setProgress] = useState(0);
 
@@ -241,9 +256,17 @@ function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot
       const j = await waitForJob(r.job_id, (x) => setProgress(x.total ? x.progress / x.total : 0));
       if (j.status !== "done") throw new Error(j.error?.split("\n")[0] ?? "Export fehlgeschlagen");
       setState("done");
+      if (openLr && IS_APP) openInLightroom(mode === "inplace" ? shoot.folder : target);
     } catch (e) {
       ctx.toast((e as Error).message, "error");
       setState("form");
+    }
+  };
+  const openInLightroom = async (folder: string) => {
+    try {
+      await api.post("/api/lightroom/open", { path: folder });
+    } catch (e) {
+      ctx.toast(`Lightroom konnte nicht geöffnet werden: ${(e as Error).message}`, "error");
     }
   };
 
@@ -258,13 +281,18 @@ function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot
             <input value={root} onChange={(e) => setTarget(e.target.value)} disabled={mode === "inplace"} />
             <button onClick={async () => { const d = await pickFolder("Ordner für RAW + XMP wählen"); if (d) setTarget(d); }} disabled={mode === "inplace"}>Wählen…</button>
           </div>
-          <label className="check"><input type="checkbox" checked={sub} disabled={mode === "inplace"}
-            onChange={(e) => { setSub(e.target.checked); store("imagomat.exportSub", e.target.checked ? "1" : "0"); }} /> Unterordner „{shoot.name}“ anlegen</label>
-          <div className="hint">RAW + XMP landen in: {mode === "inplace" ? shoot.folder : target}</div>
+          <label>Neuer Ordner</label>
+          <input value={folderName} disabled={mode === "inplace"} onChange={(e) => setFolderName(e.target.value)}
+            placeholder="leer = direkt in den Ordner oben" />
+          <div className="hint">Nur die {kept} ausgewählten Bilder (RAW + XMP) landen in: {mode === "inplace" ? shoot.folder : target}</div>
+          {IS_APP && (
+            <label className="check"><input type="checkbox" checked={openLr}
+              onChange={(e) => { setOpenLr(e.target.checked); store("imagomat.openLr", e.target.checked ? "1" : "0"); }} /> danach direkt in Lightroom importieren (Import-Dialog öffnet sich mit diesem Ordner)</label>
+          )}
           <label className="check"><input type="checkbox" checked={jpeg} onChange={(e) => setJpeg(e.target.checked)} /> zusätzlich schnelle Vorschau-JPEGs (z. B. zum Verschicken)</label>
           <More>
             <label className="check"><input type="checkbox" checked={mode === "inplace"} onChange={(e) => setMode(e.target.checked ? "inplace" : "hardlink")} /> nur Einstellungen (XMP) neben die Originale schreiben</label>
-            <label className="check"><input type="checkbox" checked={withRejected} onChange={(e) => setWithRejected(e.target.checked)} /> aussortierte Bilder mitnehmen (1 Stern)</label>
+            <label className="check"><input type="checkbox" checked={withRejected} onChange={(e) => setWithRejected(e.target.checked)} /> auch aussortierte Bilder mitnehmen (1 Stern)</label>
           </More>
           <div className="modal-foot">
             <button className="ghost" onClick={onClose}>Abbrechen</button>
@@ -277,11 +305,14 @@ function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot
         <>
           <p className="success">Fertig! So geht's in Lightroom weiter:</p>
           <ol className="steps">
-            <li><b>Importieren</b> → den Ordner <code>{dest.split("/").pop()}</code> wählen → <b>Hinzufügen</b>.</li>
+            {openLr && IS_APP
+              ? <li>Im Lightroom-Import ist <code>{dest.split("/").pop()}</code> schon gewählt → oben <b>Hinzufügen</b> → <b>Importieren</b>.</li>
+              : <li><b>Importieren</b> → den Ordner <code>{dest.split("/").pop()}</code> wählen → <b>Hinzufügen</b>.</li>}
             <li>Alle Bilder auswählen (⌘A) → <b>Foto › Entwicklungseinstellungen › KI-Einstellungen aktualisieren</b>. Damit rechnet Lightroom Masken und Entrauschen.</li>
           </ol>
           <div className="modal-foot">
             <button onClick={() => reveal(dest)}>Im Finder zeigen</button>
+            {IS_APP && <button onClick={() => openInLightroom(dest)}>In Lightroom öffnen</button>}
             <button className="primary" onClick={onClose}>Schliessen</button>
           </div>
         </>
@@ -351,6 +382,69 @@ function SocialDialog({ ctx, shoot, single, onClose }: {
           <p className="success">{result.message.split(" -> ")[0]}</p>
           <div className="modal-foot">
             <button onClick={() => reveal(result.target)}>Im Finder zeigen</button>
+            <button className="primary" onClick={onClose}>Schliessen</button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+
+/** Nur Personen: Bilder mit eingebetteten Namen in einen neuen Ordner schreiben. */
+function TagExportDialog({ ctx, shoot, total, onClose }: { ctx: AppCtx; shoot: Shoot; total: number; onClose: () => void }) {
+  const parent = shoot.folder.replace(/\/[^/]+\/?$/, "");
+  const stored = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+  const store = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* egal */ } };
+  const [root, setRoot] = useState(stored("imagomat.tagRoot") ?? parent);
+  const [folderName, setFolderName] = useState(`${shoot.name} – mit Namen`);
+  const [onlyPeople, setOnlyPeople] = useState(false);
+  const [state, setState] = useState<"form" | "busy" | "done">("form");
+  const [progress, setProgress] = useState(0);
+  const [msg, setMsg] = useState("");
+  const target = folderName.trim() ? `${root.replace(/\/$/, "")}/${folderName.trim()}` : root;
+
+  const go = async () => {
+    setState("busy");
+    try {
+      const r = await api.post<{ job_id: number }>(`/api/shoots/${shoot.id}/tag-export`, { target, only_with_people: onlyPeople });
+      ctx.refreshJobs();
+      const j = await waitForJob(r.job_id, (x) => setProgress(x.total ? x.progress / x.total : 0));
+      if (j.status !== "done") throw new Error(j.error?.split("\n")[0] ?? "Export fehlgeschlagen");
+      setMsg((j.message ?? "").split(" -> ")[0]);
+      setState("done");
+    } catch (e) {
+      ctx.toast((e as Error).message, "error");
+      setState("form");
+    }
+  };
+
+  return (
+    <Modal title="Mit Namen exportieren" onClose={onClose}>
+      {state === "form" && (
+        <>
+          <p>{total} Bilder werden mit den erkannten Namen (Stichwörter + Gesichter) gespeichert. JPGs bekommen die Namen direkt in die Datei, Lightroom liest sie beim Import. Deine Originale bleiben unverändert.</p>
+          <label>Ordner (wird gemerkt)</label>
+          <div className="row">
+            <input value={root} onChange={(e) => { setRoot(e.target.value); store("imagomat.tagRoot", e.target.value); }} />
+            <button onClick={async () => { const d = await pickFolder("Zielordner wählen"); if (d) { setRoot(d); store("imagomat.tagRoot", d); } }}>Wählen…</button>
+          </div>
+          <label>Neuer Ordner</label>
+          <input value={folderName} onChange={(e) => setFolderName(e.target.value)} />
+          <label className="check"><input type="checkbox" checked={onlyPeople} onChange={(e) => setOnlyPeople(e.target.checked)} /> nur Bilder mit erkannten Personen</label>
+          <div className="modal-foot">
+            <button className="ghost" onClick={onClose}>Abbrechen</button>
+            <button className="primary" onClick={go}>Exportieren</button>
+          </div>
+        </>
+      )}
+      {state === "busy" && <Progress value={progress} label="Namen werden geschrieben …" />}
+      {state === "done" && (
+        <>
+          <p className="success">{msg}</p>
+          <div className="modal-foot">
+            <button onClick={() => reveal(target)}>Im Finder zeigen</button>
+            {IS_APP && <button onClick={() => api.post("/api/lightroom/open", { path: target }).catch((e) => ctx.toast(String((e as Error).message), "error"))}>In Lightroom importieren</button>}
             <button className="primary" onClick={onClose}>Schliessen</button>
           </div>
         </>
