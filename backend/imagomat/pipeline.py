@@ -8,6 +8,7 @@ from . import analysis  # noqa: F401  (registriert Jobs)
 from .culling import calibrate as _cal  # noqa: F401
 from .culling import engine
 from .export import exporter
+from .export import social  # noqa: F401  (registriert Job social)
 from .jobs import JobContext, job
 from .people import clustering
 from .people import reference  # noqa: F401  (registriert Job learn_people)

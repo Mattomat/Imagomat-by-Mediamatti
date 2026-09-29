@@ -99,6 +99,13 @@ class ExportReq(BaseModel):
     jpeg_side: int = 2048
 
 
+class SocialReq(BaseModel):
+    format: str = "story"
+    selection: str = "top"
+    ids: list[int] | None = None
+    target: str | None = None
+
+
 class RosterReq(BaseModel):
     team: str
     url: str | None = None
@@ -340,6 +347,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/api/shoots/{sid}/export")
     def export(sid: int, req: ExportReq) -> dict[str, Any]:
         return {"job_id": jobs.submit("export", sid, **req.model_dump())}
+
+    @app.post("/api/shoots/{sid}/social")
+    def social(sid: int, req: SocialReq) -> dict[str, Any]:
+        """Bilder für Instagram & Co. speichern (Story, Post, Quadrat, Original)."""
+        from ..export.social import default_target
+
+        shoot = db.one("SELECT name FROM shoots WHERE id=?", (sid,))
+        if not shoot:
+            raise HTTPException(404, "Shoot nicht gefunden")
+        target = req.target or str(default_target(shoot["name"], req.format))
+        return {"job_id": jobs.submit("social", sid, **{**req.model_dump(), "target": target}), "target": target}
 
     @app.post("/api/shoots/{sid}/feedback")
     def feedback(sid: int, body: dict[str, Any]) -> dict[str, Any]:

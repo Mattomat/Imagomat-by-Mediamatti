@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppCtx } from "../App";
 import { api, ImageItem, pickFolder, reveal, Shoot, waitForJob } from "../api";
 import { SELECTION_HINT, SELECTION_PARAMS, SELECTIONS, Selection, selectionFromSettings } from "../selection";
-import { Modal, More, Progress } from "../ui";
+import { Modal, More, Progress, Segmented } from "../ui";
 
 type Tab = "keep" | "reject" | "check";
 
@@ -27,6 +27,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const [loupe, setLoupe] = useState(false);
   const [before, setBefore] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [social, setSocial] = useState<"none" | "all" | "one">("none");
   const gridRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(() => {
@@ -118,6 +119,26 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     );
   }
 
+  if (!running && items.length > 0 && items.every((i) => i.decision === null)) {
+    const failed = job?.status === "failed";
+    return (
+      <div className="page center">
+        <div className="processing">
+          <h1>{shoot.name}</h1>
+          <p className="muted">{shoot.n} Bilder · noch nicht verarbeitet</p>
+          {failed && <p className="error">Letzter Versuch fehlgeschlagen: {job?.error?.split("\n")[0]}</p>}
+          {job?.status === "cancelled" && <p className="hint">Die Verarbeitung wurde abgebrochen.</p>}
+          <button className="primary big" onClick={async () => {
+            await api.post(`/api/shoots/${id}/run/pipeline`, {});
+            ctx.refreshJobs();
+            load();
+          }}>Jetzt verarbeiten</button>
+          <p className="hint">Bereits analysierte Bilder werden übersprungen.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="shoot">
       <div className="shoot-head">
@@ -142,6 +163,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
             {people.map((p) => <option key={p}>{p}</option>)}
           </select>
         )}
+        <button disabled={running || counts.keep === 0} onClick={() => setSocial("all")}>Social Media</button>
         <button className="primary" disabled={running} onClick={() => setExporting(true)}>Nach Lightroom ▸</button>
       </div>
 
@@ -178,6 +200,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
             <span className="spacer" />
             <button onClick={() => patch(cur, { decision: "keep" })} className={cur.decision === "keep" ? "on" : ""}>Behalten</button>
             <button onClick={() => patch(cur, { decision: "reject" })} className={cur.decision === "reject" ? "on bad" : ""}>Aussortieren</button>
+            <button onClick={() => setSocial("one")}>Für Story speichern</button>
             <button className="ghost" onClick={() => setLoupe(false)}>Zurück</button>
           </div>
         </div>
@@ -186,6 +209,9 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         ← → blättern · Enter gross · Leertaste Vorher/Nachher · 1–5 Sterne · X aussortieren · P behalten
       </div>
       {exporting && <ExportDialog ctx={ctx} shoot={shoot} kept={counts.keep} onClose={() => setExporting(false)} />}
+      {social !== "none" && (
+        <SocialDialog ctx={ctx} shoot={shoot} single={social === "one" ? cur ?? null : null} onClose={() => setSocial("none")} />
+      )}
     </div>
   );
 }
@@ -248,6 +274,75 @@ function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot
           </ol>
           <div className="modal-foot">
             <button onClick={() => reveal(dest)}>Im Finder zeigen</button>
+            <button className="primary" onClick={onClose}>Schliessen</button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+type SocialFormat = "story" | "post" | "square" | "original";
+const SOCIAL_FORMATS: [SocialFormat, string][] = [
+  ["story", "Story 9:16"],
+  ["post", "Post 4:5"],
+  ["square", "Quadrat"],
+  ["original", "Original"],
+];
+
+/** Bilder direkt für Instagram & Co. speichern (automatisch um die Personen zugeschnitten). */
+function SocialDialog({ ctx, shoot, single, onClose }: {
+  ctx: AppCtx; shoot: Shoot; single: ImageItem | null; onClose: () => void;
+}) {
+  const [format, setFormat] = useState<SocialFormat>("story");
+  const [selection, setSelection] = useState<"top" | "keep" | "one">(single ? "one" : "top");
+  const [state, setState] = useState<"form" | "busy" | "done">("form");
+  const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState<{ target: string; message: string } | null>(null);
+
+  const go = async () => {
+    setState("busy");
+    try {
+      const r = await api.post<{ job_id: number; target: string }>(`/api/shoots/${shoot.id}/social`, {
+        format, selection: selection === "one" ? "keep" : selection, ids: selection === "one" && single ? [single.id] : null,
+      });
+      ctx.refreshJobs();
+      const j = await waitForJob(r.job_id, (x) => setProgress(x.total ? x.progress / x.total : 0));
+      if (j.status !== "done") throw new Error(j.error?.split("\n")[0] ?? "Speichern fehlgeschlagen");
+      setResult({ target: r.target, message: j.message ?? "" });
+      setState("done");
+    } catch (e) {
+      ctx.toast((e as Error).message, "error");
+      setState("form");
+    }
+  };
+
+  return (
+    <Modal title="Für Social Media speichern" onClose={onClose}>
+      {state === "form" && (
+        <>
+          <label>Format</label>
+          <Segmented value={format} options={SOCIAL_FORMATS} onChange={setFormat} />
+          <div className="hint">
+            {format === "original" ? "ganzes Bild, 2048 px lange Seite"
+              : "automatisch um die Spieler zugeschnitten, in Instagram-Grösse (1080 px breit)"}
+          </div>
+          <label>Welche Bilder</label>
+          <Segmented value={selection} onChange={setSelection}
+            options={[...(single ? [["one", "Nur dieses"] as ["one", string]] : []), ["top", "Top-Bilder"], ["keep", "Alle behaltenen"]]} />
+          <p className="hint">Gespeichert in Downloads › Imagomat › {shoot.name}. Mit deinem Stil bearbeitet (Vorschau-Qualität).</p>
+          <div className="modal-foot">
+            <button className="ghost" onClick={onClose}>Abbrechen</button>
+            <button className="primary" onClick={go}>Speichern</button>
+          </div>
+        </>
+      )}
+      {state === "busy" && <Progress value={progress} label="Bilder werden gerendert …" />}
+      {state === "done" && result && (
+        <>
+          <p className="success">{result.message.split(" -> ")[0]}</p>
+          <div className="modal-foot">
+            <button onClick={() => reveal(result.target)}>Im Finder zeigen</button>
             <button className="primary" onClick={onClose}>Schliessen</button>
           </div>
         </>
