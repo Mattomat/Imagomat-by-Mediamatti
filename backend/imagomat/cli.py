@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -44,6 +45,13 @@ def _run(db: Database, kind: str, shoot_id: int | None = None, **params) -> dict
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Ruhigeres Terminal: Warnungen und Protokoll-Rauschen der KI-Bibliotheken ausblenden
+    import warnings
+
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", category=UserWarning)
+    os.environ.setdefault("GLOG_minloglevel", "2")
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     from .logs import setup_logging
 

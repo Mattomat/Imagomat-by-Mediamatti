@@ -26,7 +26,6 @@ const ML_PACKAGES: &[&str] = &[
     "einops>=0.8",
     "kornia>=0.7",
     "onnxruntime>=1.18",
-    "mediapipe>=0.10.14",
     "ocrmac>=1.0",
     "insightface>=0.7.3",
 ];

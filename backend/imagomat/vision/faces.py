@@ -12,6 +12,8 @@ Landmarken, sonst Haar-Augendetektor.
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Protocol
@@ -197,7 +199,8 @@ class _MediaPipeEyes:
             raise RuntimeError("MediaPipe-Modell fehlt")
         self.mp = mp
         self.lm = FaceLandmarker.create_from_options(FaceLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=str(p)), output_face_blendshapes=True, num_faces=1))
+            base_options=BaseOptions(model_asset_path=str(p), delegate=BaseOptions.Delegate.CPU),
+            output_face_blendshapes=True, num_faces=1))
 
     def openness(self, crop: np.ndarray) -> float | None:
         if min(crop.shape[:2]) < 32:
@@ -213,6 +216,11 @@ class _MediaPipeEyes:
 
 @lru_cache(maxsize=1)
 def _mediapipe() -> _MediaPipeEyes | None:
+    # Auf macOS bricht MediaPipe den ganzen Prozess hart ab, wenn es die GPU (Metal) nicht bekommt
+    # ("Check failed: service_"). Dort nutzen wir die Landmarken von InsightFace, ausser es wird
+    # ausdrücklich mit IMAGOMAT_MEDIAPIPE=1 eingeschaltet.
+    if sys.platform == "darwin" and os.environ.get("IMAGOMAT_MEDIAPIPE") != "1":
+        return None
     if not has_module("mediapipe"):
         return None
     try:
