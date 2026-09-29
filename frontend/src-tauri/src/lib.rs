@@ -121,9 +121,27 @@ fn run_logged(app: &AppHandle, stage: &str, progress: f32, cmd: &mut Command) ->
     }
 }
 
+/// uv aus dem App-Bundle in den Laufzeitordner kopieren, ausführbar machen und die
+/// macOS-Quarantäne-Markierung entfernen (sonst kann Gatekeeper den Start blockieren).
+fn prepare_uv(res: &Path, runtime: &Path) -> Result<PathBuf, String> {
+    let src = res.join("bin").join("uv");
+    let dst = runtime.join("bin").join("uv");
+    fs::create_dir_all(runtime.join("bin")).map_err(|e| e.to_string())?;
+    fs::copy(&src, &dst).map_err(|e| format!("uv kopieren: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&dst, fs::Permissions::from_mode(0o755));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("/usr/bin/xattr").args(["-d", "com.apple.quarantine"]).arg(&dst).output();
+    }
+    Ok(dst)
+}
+
 fn bootstrap(app: &AppHandle) -> Result<PathBuf, String> {
     let res = app.path().resource_dir().map_err(|e| e.to_string())?;
-    let uv = res.join("bin").join("uv");
     let runtime = data_root().join("runtime");
     let venv = runtime.join("venv");
     let python = venv.join("bin").join("python");
@@ -135,6 +153,7 @@ fn bootstrap(app: &AppHandle) -> Result<PathBuf, String> {
     }
     fs::create_dir_all(&runtime).map_err(|e| e.to_string())?;
     emit(app, "Vorbereiten", "Programmdateien kopieren", 0.02, false, false);
+    let uv = prepare_uv(&res, &runtime)?;
     let src = runtime.join("src");
     let _ = fs::remove_dir_all(&src);
     copy_dir(&res.join("backend"), &src).map_err(|e| format!("Kopieren: {e}"))?;

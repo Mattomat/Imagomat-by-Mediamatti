@@ -63,6 +63,23 @@ jobs:
           name: Imagomat-macOS
           path: frontend/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
+      - name: Smoke-Test (App starten, Einrichtung, Backend erreichbar)
+        timeout-minutes: 25
+        run: |
+          APP=frontend/src-tauri/target/release/bundle/macos/Imagomat.app
+          open "$APP"
+          for i in $(seq 1 280); do
+            if curl -sf http://127.0.0.1:8765/api/health; then
+              echo; echo "Backend läuft nach $((i*5)) s"
+              curl -sf http://127.0.0.1:8765/api/licenses | head -c 400; echo
+              osascript -e 'quit app "Imagomat"' || true
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Backend nicht erreichbar"; ls -la ~/Library/Application\ Support/Imagomat/ || true
+          tail -n 80 ~/Library/Application\ Support/Imagomat/logs/backend.log || true
+          exit 1
       - name: Release (bei Tag v*)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
