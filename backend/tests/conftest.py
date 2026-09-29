@@ -13,6 +13,12 @@ def isolated_home(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("IMAGOMAT_HOME", str(home))
     monkeypatch.setenv("IMAGOMAT_OFFLINE", "1")
+    # Tests laufen immer mit den schnellen Ersatzverfahren (keine Modell-Downloads, deterministisch)
+    import json
+
+    (home / "settings.json").write_text(json.dumps({
+        "embedding_backend": "classical", "face_backend": "haar", "segmentation_backend": "classical",
+        "ocr_backend": "none", "device": "cpu"}), "utf-8")
     # Caches von Backends zurücksetzen, damit jeder Test die Offline-Fallbacks nutzt
     from imagomat.vision import embeddings, faces, models, segmentation
 

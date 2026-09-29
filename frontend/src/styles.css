@@ -98,3 +98,11 @@ pre.json { background: var(--panel2); padding: 8px; border-radius: 6px; font-siz
 .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
 .bar div { height: 100%; background: var(--accent); }
 .job button { padding: 2px 8px; font-size: 12px; }
+
+/* Start / Einrichtung */
+.splash { height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+.splash-box { width: min(560px, 90vw); text-align: center; }
+.splash .logo { font-size: 34px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 18px; }
+.splash .stage { font-weight: 600; margin-top: 10px; }
+.bar.big { height: 10px; border-radius: 5px; margin-top: 18px; }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -187,3 +187,20 @@ def test_feedback_uses_last_export(tmp_path: Path):
     assert StyleModel.load("FB").n == 7   # nur das korrigierte Bild kommt dazu
     up = db.one("SELECT user_params FROM edits e JOIN images i ON i.id=e.image_id WHERE i.filename='IMG0050.dng'")
     assert json.loads(up[0])["Exposure2012"] == "+1.50"
+
+
+def test_gbdt_with_torch_loaded():
+    """macOS: PyTorch + Gradient Boosting im selben Prozess darf nicht abstürzen."""
+    import pytest
+
+    pytest.importorskip("torch")
+    import torch  # noqa: F401
+
+    from imagomat.style.model import gbdt_factory
+
+    make = gbdt_factory()
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(200, 10))
+    y = X[:, 0] * 2 + rng.normal(scale=0.1, size=200)
+    m = make().fit(X, y)
+    assert np.corrcoef(m.predict(X), y)[0, 1] > 0.9

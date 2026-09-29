@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, connectEvents, Job, JobEvent, Shoot } from "./api";
 import JobBar from "./components/JobBar";
+import Splash from "./components/Splash";
 import ExportView from "./views/Export";
 import PeopleView from "./views/People";
 import ProfilesView from "./views/Profiles";
@@ -24,10 +25,12 @@ export default function App() {
   const [shoot, setShoot] = useState<Shoot | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [tick, setTick] = useState(0);
+  const [ready, setReady] = useState(false);
 
   const refreshJobs = () => api.get<Job[]>("/api/jobs").then(setJobs).catch(() => undefined);
 
   useEffect(() => {
+    if (!ready) return;
     refreshJobs();
     return connectEvents((e: JobEvent) => {
       setJobs((js) => {
@@ -42,12 +45,14 @@ export default function App() {
         );
       });
     });
-  }, []);
+  }, [ready]);
 
   const openShoot = (s: Shoot, next: Tab = "review") => {
     setShoot(s);
     setTab(next);
   };
+
+  if (!ready) return <Splash onReady={() => setReady(true)} />;
 
   return (
     <div className="app">
