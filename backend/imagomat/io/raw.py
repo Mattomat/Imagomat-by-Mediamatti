@@ -262,6 +262,37 @@ def _info_from_meta(meta: dict, orientation: int) -> RawInfo:
                    extra={"source": meta.get("source", "coreimage")})
 
 
+# Linearisierte Kamera-Vorschau -> Skala echter RAW-Daten (Mittelgrau dort ~0.8 EV tiefer)
+PREVIEW_TO_RAW_EV = 0.8
+# Kameramodelle, bei denen ein Leseweg schon gescheitert ist: nicht bei jedem Bild neu probieren
+# (erst nach mehreren Fehlschlägen ohne Erfolg: eine einzelne defekte Datei sperrt nichts)
+_FAILED: dict[tuple[str, str], int] = {}
+_OK: set[tuple[str, str]] = set()
+FAIL_AFTER = 3
+
+
+def _model_key(path: str | Path) -> str:
+    from .tiffmeta import read_tiff_exif
+
+    try:
+        ex = read_tiff_exif(path)
+    except Exception:  # noqa: BLE001
+        return Path(path).suffix.lower()
+    return f"{ex.get('Make', '')} {ex.get('Model', '')}".strip() or Path(path).suffix.lower()
+
+
+def _failed(model: str, how: str) -> bool:
+    return (model, how) not in _OK and _FAILED.get((model, how), 0) >= FAIL_AFTER
+
+
+def _mark_failed(model: str, how: str) -> None:
+    _FAILED[(model, how)] = _FAILED.get((model, how), 0) + 1
+
+
+def _mark_ok(model: str, how: str) -> None:
+    _OK.add((model, how))
+
+
 def read_linear_any(path: str | Path, max_side: int | None = 1600,
                     reference: np.ndarray | None = None) -> tuple[np.ndarray, RawInfo]:
     """Wie ``read_linear``, aber für jede Kamera: LibRaw, sonst Apples RAW-Engine, sonst Adobe DNG Converter.
@@ -271,40 +302,59 @@ def read_linear_any(path: str | Path, max_side: int | None = 1600,
     from . import decoders
     from .tiffmeta import read_tiff_exif
 
-    try:
-        return read_linear(path, max_side)
-    except (rawpy.LibRawError, OSError, ValueError) as first:
-        err = first
+    model = _model_key(path)
+    err: Exception = ValueError(f"{model}: kein Leseweg")
+    if not _failed(model, "libraw"):
+        try:
+            return read_linear(path, max_side)
+        except (rawpy.LibRawError, OSError, ValueError) as first:
+            err = first
+            if isinstance(first, rawpy.LibRawFileUnsupportedError):
+                _mark_failed(model, "libraw")
     orientation = int(read_tiff_exif(path).get("Orientation") or 1)
-    res = decoders.coreimage_linear(path, max_side or 4096)
-    if res is not None:
-        lin, meta = res
-        if reference is not None:
-            lin = decoders.align_to(lin, reference)
-        return lin, _info_from_meta(meta, orientation)
-    with decoders.TempDng(path) as dng:
-        if dng is not None:
-            lin, info = read_linear(dng, max_side)
-            info.extra["source"] = "dng_converter"
-            return lin, info
+    if not _failed(model, "coreimage"):
+        res = decoders.coreimage_linear(path, max_side or 4096)
+        if res is not None:
+            lin, meta = res
+            if reference is not None:
+                lin = decoders.align_to(lin, reference)
+            _mark_ok(model, "coreimage")
+            return lin, _info_from_meta(meta, orientation)
+        _mark_failed(model, "coreimage")
+    if not _failed(model, "dng"):
+        with decoders.TempDng(path) as dng:
+            if dng is not None:
+                lin, info = read_linear(dng, max_side)
+                info.extra["source"] = "dng_converter"
+                return lin, info
+        if decoders.dng_converter() is None:
+            _mark_failed(model, "dng")
     raise err
 
 
 def decode_any(path: str | Path, half_size: bool = True) -> tuple[np.ndarray, RawInfo]:
     """Wie ``decode``, fällt aber auf die (linearisierte) Vorschau zurück, wenn LibRaw die Datei
     nicht öffnen kann. Dann ist die Vorschau bereits weissabgeglichen und gedreht (Näherung)."""
+    model = _model_key(path)
     try:
+        if _failed(model, "libraw"):
+            raise ValueError("LibRaw kennt diese Kamera nicht")
         return decode(path, half_size=half_size)
     except (rawpy.LibRawError, OSError, ValueError) as e:
+        if isinstance(e, rawpy.LibRawFileUnsupportedError):
+            _mark_failed(model, "libraw")
         try:
             ref, _ = load_preview(path, 1024)
             return read_linear_any(path, 2048 if half_size else None, reference=ref)
         except Exception:  # noqa: BLE001 - weiter mit der Vorschau
             pass
-        log.info("Rendering über Vorschau für %s (%s)", Path(path).name, e)
+        if (model, "preview_logged") not in _OK:
+            _mark_ok(model, "preview_logged")             # einmal pro Kamera protokollieren
+            log.info("Rendering über Vorschau für %s (z. B. %s: %s)", model, Path(path).name, e)
         img, _ = load_preview(path, 2048 if half_size else 8192)
         x = img.astype(np.float32) / 255.0
         lin = np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4).astype(np.float32)
+        lin *= np.float32(2.0 ** -PREVIEW_TO_RAW_EV)     # gleiche Skala wie die Analyse
         info = RawInfo(width=img.shape[1], height=img.shape[0], orientation=1,
                        xyz_to_cam=np.linalg.inv(SRGB_TO_XYZ), camera_wb=np.ones(3), black=0.0, white=1.0,
                        extra={"from_preview": True})

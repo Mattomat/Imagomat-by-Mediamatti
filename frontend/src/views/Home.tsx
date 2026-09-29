@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { AppCtx } from "../App";
 import { api, IS_APP, Overview, pickFolder, Shoot } from "../api";
 import { SELECTION_HINT, SELECTION_PARAMS, SELECTIONS, Selection } from "../selection";
-import { Segmented } from "../ui";
+import { Modal, Segmented } from "../ui";
 
 export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: ((p: string[]) => void) | null) => void }) {
   const [ov, setOv] = useState<Overview | null>(null);
@@ -14,6 +14,7 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
   const [mode, setMode] = useState<"full" | "people">("full");
   const [teams, setTeams] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState<Shoot | null>(null);
 
   useEffect(() => {
     api.get<Overview>("/api/overview").then((o) => {
@@ -102,7 +103,7 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
         </div></>}
         {ov && ov.teams.length > 0 && (
           <div className="opt">
-            <label>Teams im Bild (für Rückennummern)</label>
+            <label>Team (Rückennummern zählen nur, wenn kein Gesicht erkannt wird)</label>
             <div className="chips">
               {ov.teams.map((t) => (
                 <button key={t} className={teams.includes(t) ? "chip on" : "chip"}
@@ -123,17 +124,40 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
             {shoots.map((s) => {
               const running = s.job && ["running", "queued"].includes(s.job.status);
               return (
-                <button key={s.id} className="shoot-card" onClick={() => ctx.go({ name: "shoot", id: s.id })}>
-                  <div className="cover">{s.cover ? <img src={api.img(`/api/images/${s.cover}/preview`)} /> : null}</div>
+                <div key={s.id} className="shoot-card" role="button" tabIndex={0}
+                  onClick={() => ctx.go({ name: "shoot", id: s.id })}
+                  onKeyDown={(e) => e.key === "Enter" && ctx.go({ name: "shoot", id: s.id })}>
+                  <div className="cover">{s.cover ? <img loading="lazy" src={api.img(`/api/images/${s.cover}/thumb`)} /> : null}</div>
+                  <button className="sc-del" title="Shoot entfernen" onClick={(e) => { e.stopPropagation(); setDeleting(s); }}>✕</button>
                   <div className="sc-name">{s.name}</div>
                   <div className="sc-meta">
                     {running ? `wird verarbeitet …` : s.kept != null ? `${s.kept} von ${s.n} behalten` : `${s.n} Bilder`}
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>
         </>
+      )}
+      {deleting && (
+        <Modal title={`„${deleting.name}“ entfernen?`} onClose={() => setDeleting(null)}>
+          <p>Der Shoot verschwindet aus Imagomat, samt Auswahl und Bearbeitung.</p>
+          <p className="hint">Deine Originalbilder bleiben unangetastet. Gesichter, die du benannt hast, behält Imagomat
+            für die Personenerkennung.</p>
+          <div className="modal-actions">
+            <button className="ghost" onClick={() => setDeleting(null)}>Abbrechen</button>
+            <button className="danger" onClick={async () => {
+              try {
+                await api.del(`/api/shoots/${deleting.id}`);
+                ctx.toast(`„${deleting.name}“ entfernt`);
+                setShoots((xs) => xs.filter((x) => x.id !== deleting.id));
+              } catch (e) {
+                ctx.toast((e as Error).message, "error");
+              }
+              setDeleting(null);
+            }}>Entfernen</button>
+          </div>
+        </Modal>
       )}
     </div>
   );

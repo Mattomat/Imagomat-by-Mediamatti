@@ -9,6 +9,7 @@ Ablauf für einen Shoot:
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,6 +26,8 @@ from .model import Prediction, Record, StyleModel
 from .presets import PRESETS, apply as apply_preset, choose_preset
 from .targets import DIRECT, TARGETS, decode
 
+log = logging.getLogger(__name__)
+
 
 @dataclass
 class ImageDevelop:
@@ -39,6 +42,7 @@ class ImageDevelop:
     confidence: float = 0.5
     subject_mask: np.ndarray | None = None
     crs: dict[str, Any] = field(default_factory=dict)
+    preview: str | None = None               # Kamera-Vorschau (für Weiss/Schwarz am Waveform)
     denoise: int | None = None
     notes: list[str] = field(default_factory=list)
 
@@ -139,18 +143,110 @@ def _crop(it: ImageDevelop, settings: Settings) -> dict[str, Any]:
     return to_lightroom_crop(plan, it.orientation)
 
 
+def bottom_luma(img: np.ndarray) -> tuple[float, float]:
+    """Mittlere Helligkeit (0..1, sRGB) unten (untere 40 %) und in der Bildmitte."""
+    g = img.mean(axis=2) / 255.0 if img.ndim == 3 else img / 255.0
+    h = g.shape[0]
+    return float(g[int(h * 0.6):].mean()), float(g[int(h * 0.3):int(h * 0.6)].mean())
+
+
+def bottom_fade(it: ImageDevelop, settings: Settings) -> dict[str, Any] | None:
+    """Dunkler, unscharfer Verlauf von unten, pro Bild angepasst:
+    heller Rasen/Vordergrund -> kräftiger; unten schon dunkel -> schwächer; Verlauf beginnt unterhalb
+    der Spieler-Mitte, damit Gesichter und Oberkörper hell bleiben."""
+    ds = settings.develop
+    if not ds.bottom_fade or ds.bottom_fade_strength <= 0:
+        return None
+    a = it.record.analysis
+    bottom, mid = a.get("bottom_luma"), a.get("mid_luma")
+    ev = -1.1
+    if bottom is not None:
+        rel = bottom - (mid if mid is not None else bottom)
+        ev = -0.8 - 0.9 * float(np.clip((bottom - 0.2) / 0.4, 0, 1)) - 0.4 * float(np.clip(rel / 0.2, 0, 1))
+        if bottom < 0.1:
+            ev = -0.5                         # unten schon fast schwarz: nicht absaufen lassen
+    ev *= ds.bottom_fade_strength
+    start = 0.5
+    sb = a.get("subject_bbox")
+    if sb:
+        start = float(np.clip(sb[1] + (sb[3] - sb[1]) * 0.6, 0.45, 0.7))
+    soft = float(np.clip(ds.bottom_fade_strength, 0.3, 1.5))
+    local = {"Exposure2012": round(ev, 2), "Highlights2012": -25, "Saturation": -15,
+             "Sharpness": round(-60 * soft), "Clarity2012": round(-30 * soft), "Texture": round(-40 * soft)}
+    comp = mk.gradient_component((0.5, start), (0.5, 1.0), it.orientation, "Verlauf unten")
+    return mk.correction("Verlauf unten", local, [comp])
+
+
+def punch(crs: dict[str, Any], a: dict[str, Any], amount: float) -> list[str]:
+    """Weiss- und Schwarzpunkt pro Bild setzen (wie Shift-Doppelklick in Lightroom, aber sanfter) und
+    etwas mehr Kontrast. Gemittelte Stil-Vorhersagen sind sonst flacher als deine Einzelbilder."""
+    from ..lightroom.params import to_number
+
+    if amount <= 0 or a.get("lin_log_p99") is None:
+        return []
+    num = lambda k: float(to_number(crs.get(k)) or 0.0)  # noqa: E731
+    exp = num("Exposure2012")
+    whites, blacks, hl = num("Whites2012"), num("Blacks2012"), num("Highlights2012")
+    # Wo landen die hellsten 1 % nach Belichtung, Weiss und Lichter? (log2, 0 = weiss)
+    top = a["lin_log_p99"] + exp + whites / 60.0 + min(hl, 0.0) / 150.0
+    dw = float(np.clip((-0.15 - top) * 30.0, 0.0, 45.0)) * amount
+    bottom = (a.get("lin_log_p01") if a.get("lin_log_p01") is not None else -9.0) + exp + blacks / 40.0
+    db = -float(np.clip((bottom + 7.5) * 6.0, 0.0, 25.0)) * amount
+    notes = []
+    if dw >= 1:
+        crs["Whites2012"] = int(round(min(whites + dw, 70)))
+        notes.append(f"Weiss +{dw:.0f}")
+    if db <= -1:
+        crs["Blacks2012"] = int(round(max(blacks + db, -70)))
+        notes.append(f"Schwarz {db:.0f}")
+    crs["Contrast2012"] = int(round(min(num("Contrast2012") + 8 * amount, 70)))
+    return notes
+
+
+_BACKGROUND_PUNCH = {"LocalContrast2012": 0.15, "LocalDehaze": 0.10}
+
+
+def punch_background(corr: dict[str, Any], amount: float) -> None:
+    """Hintergrund-Maske (Motiv invertiert): nicht nur abdunkeln, sondern Kontrast/Tiefe geben.
+    Hast du selbst im Hintergrund bewusst Kontrast rausgenommen, bleibt das so."""
+    from ..lightroom.params import to_number
+
+    comps = [m for m in corr.get("CorrectionMasks", []) or [] if isinstance(m, dict)]
+    if amount <= 0 or not comps or not all(
+            m.get("What") == "Mask/Image" and str(m.get("MaskInverted", "false")).lower() == "true" for m in comps):
+        return
+    for k, v in _BACKGROUND_PUNCH.items():
+        cur = float(to_number(corr.get(k)) or 0.0)
+        if cur >= 0:
+            corr[k] = float(np.clip(max(cur, v * amount), -1, 1))
+
+
+def _is_bottom_gradient(corr: dict[str, Any], orientation: int) -> bool:
+    from ..lightroom.params import to_number
+    from ..vision.geometry import sensor_to_display
+
+    comps = [m for m in corr.get("CorrectionMasks", []) or [] if isinstance(m, dict)]
+    if not comps or any(m.get("What") != "Mask/Gradient" for m in comps):
+        return False
+    for m in comps:
+        zx, zy = sensor_to_display(to_number(m.get("ZeroX")) or 0, to_number(m.get("ZeroY")) or 0, orientation)
+        fx, fy = sensor_to_display(to_number(m.get("FullX")) or 0, to_number(m.get("FullY")) or 0, orientation)
+        if fy > zy and fy >= 0.7 and abs(fy - zy) > abs(fx - zx):
+            return True
+    return False
+
+
 def _preset_masks(it: ImageDevelop, dialect: Dialect) -> list[dict[str, Any]]:
     a = it.record.analysis
     out = []
     for r in PRESETS[it.preset].masks if it.preset in PRESETS else []:
+        if r.kind == "gradient_bottom":
+            continue                          # kommt aus bottom_fade() (pro Bild angepasst)
         ok = {"always": True, "has_subject": (a.get("subject_fraction") or 0) > 0.02,
               "has_sky": (a.get("sky_fraction") or 0) > 0.05, "has_face": (a.get("face_count") or 0) > 0}[r.condition]
         if not ok:
             continue
-        if r.kind == "gradient_bottom":
-            comp = mk.gradient_component((0.5, 0.55), (0.5, 1.0), it.orientation, r.name)
-        else:
-            comp = mk.ai_component(r.kind, dialect, r.name)
+        comp = mk.ai_component(r.kind, dialect, r.name)
         out.append(mk.correction(r.name, r.local, [comp]))
     return out
 
@@ -165,6 +261,7 @@ def build_settings(it: ImageDevelop, settings: Settings, dialect: Dialect) -> No
     else:
         crs.update({"LensProfileEnable": 1, "AutoLateralCA": 1})
     crs.update(decode(it.targets, a.get("as_shot_temp"), a.get("as_shot_tint")))
+    it.notes += punch(crs, a, settings.develop.punch)
     crs.update(_crop(it, settings))
     # Denoise
     amount = int(round(it.targets.get("denoise", 0)))
@@ -186,6 +283,15 @@ def build_settings(it: ImageDevelop, settings: Settings, dialect: Dialect) -> No
                     corrections.append(c)
         else:
             corrections = _preset_masks(it, dialect)
+        wants_fade = it.prediction is not None or any(
+            r.kind == "gradient_bottom" for r in (PRESETS[it.preset].masks if it.preset in PRESETS else []))
+        fade = bottom_fade(it, settings) if wants_fade else None
+        for c in corrections:
+            punch_background(c, settings.develop.punch)
+        if fade is not None:
+            # eigener (gelernter) Verlauf unten wird durch den angepassten, kräftigeren ersetzt
+            corrections = [c for c in corrections if not _is_bottom_gradient(c, it.orientation)] + [fade]
+            it.notes.append(f"Verlauf unten {fade['LocalExposure2012'] * 4:+.1f} EV")
         if not settings.develop.ai_masks:
             corrections = [_ai_to_paint(c, it) for c in corrections]
             corrections = [c for c in corrections if c]
@@ -216,3 +322,21 @@ def develop_items(items: list[ImageDevelop], model: StyleModel | None, settings:
     smooth_shoot(items, settings.develop.shoot_consistency)
     for it in items:
         build_settings(it, settings, dialect)
+        fit_white_black(it, settings)
+
+
+def fit_white_black(it: ImageDevelop, settings: Settings) -> None:
+    """Weiss/Schwarz wie am Lumetri-Waveform: oben und unten leicht anschlagen lassen."""
+    if settings.develop.punch <= 0 or not it.preview:
+        return
+    from .scopes import fit_scopes, preview_linear
+
+    try:
+        lin = preview_linear(it.preview)
+        if lin is None:
+            return
+        notes = fit_scopes(it.crs, lin, it.orientation, it.subject_mask, settings.develop.punch)
+    except Exception as e:  # noqa: BLE001 - dann bleibt die Schätzung aus punch()
+        log.debug("Waveform-Anpassung fehlgeschlagen für %s: %s", it.image_id, e)
+        return
+    it.notes = [n for n in it.notes if not n.startswith(("Weiss", "Schwarz"))] + notes

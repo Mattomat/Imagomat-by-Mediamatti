@@ -1,8 +1,9 @@
-"""Rückennummern und Trikotnamen schlagen die Gesichtserkennung."""
+"""Gesicht zuerst; Rückennummer/Trikotname nur, wenn im Bild niemand erkannt wurde (FCW-Farben)."""
 
 import json
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from imagomat.db import Database, f32_to_blob
@@ -19,7 +20,17 @@ def test_parse_shirt_text():
     assert "37" in texts and "@MALUVUNU" in texts and "@SWISS" in texts and "@Bier" not in texts
 
 
-def _setup(tmp_path: Path):
+def _preview(tmp_path: Path, name: str, color=(200, 20, 30)) -> str:
+    """Vorschau mit einfarbigem Trikot (Standard: FCW-Rot) und heller Nummer."""
+    img = np.full((1000, 1000, 3), (40, 140, 60), np.uint8)       # Rasen
+    img[300:600, 150:350] = color
+    img[360:440, 220:280] = 245
+    p = tmp_path / f"{name}.jpg"
+    cv2.imwrite(str(p), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+    return str(p)
+
+
+def _setup(tmp_path: Path, color=(200, 20, 30)):
     db = Database(tmp_path / "p.db")
     maluvunu = upsert_person(db, "Elias Maluvunu", "FCW Herren", "37")
     kehrer = upsert_person(db, "Emilio Kehrer", "FCW Herren", "11")
@@ -28,6 +39,7 @@ def _setup(tmp_path: Path):
     iid = db.upsert_image(sid, {"path": str(tmp_path / "a.arw"), "filename": "a.arw"})
     emb = np.ones(512, np.float32)
     with db.tx() as c:
+        c.execute("UPDATE images SET preview_path=? WHERE id=?", (_preview(tmp_path, "a", color), iid))
         # Referenzgesicht von Kehrer (bestätigt) -> die neue Rückenansicht ähnelt ihm
         ref = db.upsert_image(sid, {"path": str(tmp_path / "ref.arw"), "filename": "ref.arw"})
         c.execute("INSERT INTO faces(image_id, bbox, embedding, person_id, assigned_by, yaw) VALUES(?,?,?,?,?,?)",
@@ -37,7 +49,7 @@ def _setup(tmp_path: Path):
     return db, sid, iid, maluvunu, kehrer
 
 
-def test_number_beats_face_and_side_face_not_auto(tmp_path: Path):
+def test_number_used_when_nobody_recognized(tmp_path: Path):
     db, sid, iid, maluvunu, kehrer = _setup(tmp_path)
     with db.tx() as c:
         c.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
@@ -62,9 +74,8 @@ def test_frontal_face_wins_over_number(tmp_path: Path):
     assert JobManager(db).run_sync(db.create_job("people", sid, {}))["status"] == "done"
     face = db.one("SELECT person_id, assigned_by FROM faces WHERE image_id=?", (iid,))
     assert face["person_id"] == kehrer and face["assigned_by"] == "auto"
-    check = db.get_analysis(iid)["people_check"][0]            # Widerspruch wird zum Prüfen gemeldet
-    assert check["face_person_id"] == kehrer and check["shirt_person_id"] == maluvunu
-    assert check["chosen"] == "face"
+    # Gesicht erkannt -> das Trikot wird gar nicht verwendet
+    assert db.one("SELECT person_id FROM numbers WHERE image_id=?", (iid,))[0] is None
 
 
 def test_sponsor_words_are_not_names(tmp_path: Path):
@@ -100,16 +111,37 @@ def test_face_beats_number_and_name(tmp_path: Path):
     assert JobManager(db).run_sync(db.create_job("people", sid, {}))["status"] == "done"
     face = db.one("SELECT person_id FROM faces WHERE image_id=?", (iid,))
     assert face["person_id"] == kehrer                     # Gesicht ist stärker als das Trikot
-    assert db.get_analysis(iid)["people_check"][0]["chosen"] == "face"
+    assert {r[0] for r in db.query("SELECT person_id FROM numbers")} == {None}
 
 
-def test_shirt_name_resolves_without_team(tmp_path: Path):
+def test_shirt_needs_team_and_fcw_colors(tmp_path: Path):
+    # Ohne bekanntes Team: nichts über das Trikot (sonst landen Spielerinnen anderer Teams im Bild)
     db, sid, iid, maluvunu, _ = _setup(tmp_path)
+    with db.tx() as c:
+        c.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
+                  (iid, "37", 0.9, "[0.22,0.36,0.28,0.44]"))
+    jm = JobManager(db)
+    assert jm.run_sync(db.create_job("people", sid, {}))["status"] == "done"
+    assert db.one("SELECT person_id FROM numbers")[0] is None
+    # Gegner in Blau: auch mit Team nichts
+    (tmp_path / "blau").mkdir()
+    db2, sid2, iid2, _, _ = _setup(tmp_path / "blau", color=(30, 60, 200))
+    with db2.tx() as c:
+        c.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
+                  (iid2, "37", 0.9, "[0.22,0.36,0.28,0.44]"))
+    db2.update_shoot_settings(sid2, teams=["FCW Herren"])
+    assert JobManager(db2).run_sync(db2.create_job("people", sid2, {}))["status"] == "done"
+    assert db2.one("SELECT person_id FROM numbers")[0] is None
+
+
+def test_shirt_name_resolves(tmp_path: Path):
+    db, sid, iid, maluvunu, _ = _setup(tmp_path)
+    db.update_shoot_settings(sid, teams=["FCW Herren"])
     with db.tx() as c:
         c.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
                   (iid, "@MALUVUNU", 0.8, "[0.22,0.45,0.29,0.48]"))
         c.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
-                  (iid, "37", 0.9, "[0.22,0.36,0.28,0.44]"))       # ohne Team mehrdeutig (Herren/Frauen)
+                  (iid, "37", 0.9, "[0.22,0.36,0.28,0.44]"))
     jm = JobManager(db)
     assert jm.run_sync(db.create_job("people", sid, {}))["status"] == "done"
     rows = {r["text"]: r["person_id"] for r in db.query("SELECT text, person_id FROM numbers")}

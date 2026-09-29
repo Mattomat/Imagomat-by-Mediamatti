@@ -74,7 +74,6 @@ def base_curve(x: np.ndarray, contrast: float) -> np.ndarray:
 
 def _tone_local(lin: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarray:
     hl, sh = _n(crs, "Highlights2012") / 100, _n(crs, "Shadows2012") / 100
-    wh, bl = _n(crs, "Whites2012") / 100, _n(crs, "Blacks2012") / 100
     L = np.maximum(_lum(lin), 1e-6)
     logL = np.log2(L)
     base = _blur(logL.astype(np.float32), 12 * scale)
@@ -82,9 +81,19 @@ def _tone_local(lin: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarra
     w_hi = _smoothstep(-2.8, 0.5, base)
     w_lo = 1 - _smoothstep(-7.5, -3.0, base)
     delta = hl * 1.4 * w_hi + sh * 1.6 * w_lo
-    # Weiss/Schwarz: Endpunkte global
-    delta += wh * 0.8 * _smoothstep(-2.0, 0.5, logL) + bl * 1.2 * (1 - _smoothstep(-9.0, -5.0, logL))
     return lin * np.power(2.0, delta)[..., None]
+
+
+def _white_black(disp: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
+    """Weiss/Schwarz verschieben die Endpunkte (Anzeige-Raum): Weiss hebt/senkt vor allem das obere
+    Drittel bis zum Anschlag, Schwarz das untere. Näherung an Lightroom (PV2012)."""
+    wh, bl = _n(crs, "Whites2012") / 100, _n(crs, "Blacks2012") / 100
+    if not wh and not bl:
+        return disp
+    Y = np.clip(_lum(disp), 1e-4, 1.0)
+    Y2 = Y * (1 + (0.45 if wh > 0 else 0.3) * wh * Y ** 1.5)
+    Y2 = Y2 + (0.25 if bl < 0 else 0.15) * bl * (1 - np.clip(Y2, 0, 1)) ** 3
+    return disp * (np.maximum(Y2, 0) / Y)[..., None]
 
 
 def _presence(disp: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarray:
@@ -254,6 +263,10 @@ def _apply_local(lin: np.ndarray, corrections: list[dict[str, Any]], orientation
             logL = np.log2(np.maximum(_lum(lin), 1e-6))
             d = hl * 1.2 * _smoothstep(-2.8, 0.5, logL) + sh * 1.4 * (1 - _smoothstep(-7.5, -3.0, logL))
             lin = lin * np.power(2.0, d * m[..., 0])[..., None]
+        soft = -min(0.0, _n(corr, "LocalSharpness")) + 0.5 * -min(0.0, _n(corr, "LocalTexture"))
+        if soft:
+            # negative Schärfe/Struktur: weichzeichnen (Vorschau-Näherung an Lightroom)
+            lin = lin + (_blur(lin, 3.0 * scale) - lin) * np.clip(soft, 0, 1) * m
     return lin
 
 
@@ -334,6 +347,7 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
     img = _tone_local(img, crs, scale)
     img = _apply_local(img, crs.get("MaskGroupBasedCorrections") or [], orientation, seg, scale)
     disp = base_curve(img, _n(crs, "Contrast2012")).astype(np.float32)
+    disp = _white_black(disp, crs)
     disp = _presence(disp, crs, scale)
     disp = _hsl_and_color(disp, crs)
     disp = _apply_curve(disp, crs)

@@ -71,9 +71,26 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     const r = await api.post<{ job_id: number }>(`/api/shoots/${id}/run/develop`, { profile });
     ctx.refreshJobs();
     await waitForJob(r.job_id);
-    ctx.toast(`Neu bearbeitet mit „${profile}“`);
+    ctx.toast(profile.startsWith("preset:") ? "Neu bearbeitet (Standard)" : `Neu bearbeitet mit „${profile}“`);
     load();
     api.get<{ used: string | null; is_preset: boolean; profiles: string[] }>(`/api/shoots/${id}/style`).then(setStyle);
+  };
+  const [comparing, setComparing] = useState(false);
+  const [teamsAll, setTeamsAll] = useState<string[]>([]);
+  useEffect(() => { api.get<{ teams: string[] }>("/api/overview").then((o) => setTeamsAll(o.teams)).catch(() => undefined); }, []);
+  const shootTeams: string[] = (() => { try { return JSON.parse(shoot?.settings || "{}").teams ?? []; } catch { return []; } })();
+  const setTeam = async (t: string) => {
+    await api.patch(`/api/shoots/${id}`, { teams: t ? [t] : [] });
+    const r = await api.post<{ job_id: number }>(`/api/shoots/${id}/run/people`, {});
+    ctx.refreshJobs();
+    await waitForJob(r.job_id);
+    load();
+    ctx.toast(t ? `Personen neu erkannt (Team ${t})` : "Personen neu erkannt");
+  };
+  const applyStyle = async (profile: string) => {
+    setComparing(false);
+    await api.patch(`/api/shoots/${id}`, { profile: profile.startsWith("preset:") ? "" : profile });
+    await redevelop(profile);
   };
   const recull = async (s: Selection) => {
     try {
@@ -178,6 +195,15 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
                     <option value="">ändern …</option>
                     {style.profiles.map((p) => <option key={p}>{p}</option>)}
                   </select></>}
+              {" "}<button className="link" disabled={running} onClick={() => setComparing(true)}>Stile vergleichen</button>
+            </div>
+          )}
+          {teamsAll.length > 0 && (
+            <div className="muted">
+              Team: <select className="team-select" value={shootTeams[0] ?? ""} disabled={running} onChange={(e) => setTeam(e.target.value)}>
+                <option value="">automatisch erkennen</option>
+                {teamsAll.map((t) => <option key={t}>{t}</option>)}
+              </select>
             </div>
           )}
         </div>
@@ -212,7 +238,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
           {shown.map((i, idx) => (
             <div key={i.id} id={`t-${i.id}`} className={`thumb ${idx === sel ? "sel" : ""}`}
               onClick={() => setSel(idx)} onDoubleClick={() => { setSel(idx); setLoupe(true); }}>
-              <img loading="lazy" src={api.img(`/api/images/${i.id}/preview`)} />
+              <img loading="lazy" decoding="async" src={api.img(`/api/images/${i.id}/thumb`)} />
               <div className="thumb-foot">
                 {i.decision === "keep"
                   ? <span className="stars">{"★".repeat(i.rating ?? 0)}</span>
@@ -250,6 +276,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
       </div>
       {exporting && <ExportDialog ctx={ctx} shoot={shoot} kept={counts.keep} onClose={() => setExporting(false)} />}
       {tagging && <TagExportDialog ctx={ctx} shoot={shoot} total={items.length} onClose={() => setTagging(false)} />}
+      {comparing && <StyleCompare shootId={id} current={style?.used ?? null} onApply={applyStyle} onClose={() => setComparing(false)} />}
       {social !== "none" && (
         <SocialDialog ctx={ctx} shoot={shoot} single={social === "one" ? cur ?? null : null} onClose={() => setSocial("none")} />
       )}
@@ -477,6 +504,35 @@ function TagExportDialog({ ctx, shoot, total, onClose }: { ctx: AppCtx; shoot: S
             <button className="primary" onClick={onClose}>Schliessen</button>
           </div>
         </>
+      )}
+    </Modal>
+  );
+}
+
+function StyleCompare({ shootId, current, onApply, onClose }: {
+  shootId: number; current: string | null; onApply: (style: string) => void; onClose: () => void;
+}) {
+  const [data, setData] = useState<{ images: number[]; styles: { key: string; label: string; n: number | null }[] } | null>(null);
+  useEffect(() => { api.get<typeof data>(`/api/shoots/${shootId}/compare`).then(setData).catch(() => undefined); }, [shootId]);
+  return (
+    <Modal title="Stile vergleichen" onClose={onClose} wide>
+      <p className="hint">Dieselben Bilder mit jedem deiner Stile bearbeitet (Vorschau, noch nichts gespeichert). Wähle den, der dir am besten gefällt: er wird dann für alle Bilder des Shoots übernommen.</p>
+      {!data ? <p className="muted">Lade …</p> : (
+        <div className="compare">
+          {data.styles.map((s) => (
+            <div key={s.key} className={`compare-row ${current === s.key ? "on" : ""}`} style={{ ["--n" as string]: data.images.length }}>
+              <div className="cr-name">
+                {s.label}
+                {s.n ? <span className="muted">aus {s.n} Bildern gelernt</span> : null}
+                {current === s.key ? <span className="muted">aktuell</span> : null}
+                <button className="primary small" onClick={() => onApply(s.key)}>Für alle übernehmen</button>
+              </div>
+              {data.images.map((iid) => (
+                <img key={iid} loading="lazy" src={api.img(`/api/images/${iid}/styled?style=${encodeURIComponent(s.key)}&size=900`)} />
+              ))}
+            </div>
+          ))}
+        </div>
       )}
     </Modal>
   );

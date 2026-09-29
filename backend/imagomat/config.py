@@ -114,6 +114,12 @@ class DevelopSettings:
     write_masks: bool = True
     ai_masks: bool = True               # KI-Masken als Deklaration (Lightroom rechnet neu)
     paint_mask_fallback: bool = True
+    # Dunkler, weicher Verlauf von unten (Rasen zurücknehmen); Stärke wird pro Bild angepasst
+    bottom_fade: bool = True
+    bottom_fade_strength: float = 1.0   # 0.5 = halb so stark, 1.5 = kräftiger
+    # Knackigkeit: Weiss-/Schwarzpunkt pro Bild setzen, etwas mehr Kontrast, Hintergrund mit Kontrast
+    # statt nur dunkler (0 = aus, 1 = normal, 1.5 = kräftig)
+    punch: float = 1.0
     shoot_consistency: float = 0.6      # 0 = aus, 1 = voll angleichen
     process_version: str | None = None  # None = aus Katalog/XMP gelernt, Fallback "11.0"
     camera_raw_version: str | None = None

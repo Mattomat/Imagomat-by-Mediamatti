@@ -205,6 +205,7 @@ def learn_people(ctx: JobContext, folder: str | None = None, files: list[str] | 
     thr = MATCH_THRESHOLD.get(get_backend().name, 0.45)
     learned, images_ok, unclear = 0, 0, 0
     people_seen: set[str] = set()
+    ex, ids = exemplars(db, get_backend().name)
     for i, (p, pairs, regions, sensor_regions) in enumerate(work):
         ctx.check()
         ctx.progress(i, f"Personen lernen: {p.name}")
@@ -216,7 +217,8 @@ def learn_people(ctx: JobContext, folder: str | None = None, files: list[str] | 
         faces = detect_faces(img)
         name_to_pid = {n: upsert_person(db, n, t or team) for n, t in pairs}
         known |= set(name_to_pid)
-        ex, ids = exemplars(db)
+        if i % 25 == 0 or not len(ids):      # alle Beispiele laden ist teuer: nicht bei jedem Bild
+            ex, ids = exemplars(db, get_backend().name)
         names = list(dict.fromkeys(n for n, _ in pairs))
         mapping = assign(faces, names, regions, ex, ids, name_to_pid, thr)
         if sensor_regions and len(mapping) < len(regions) and orientation != 1:

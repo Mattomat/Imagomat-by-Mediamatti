@@ -293,10 +293,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/shoots/{sid}")
     def shoot(sid: int) -> dict[str, Any]:
-        r = next((x for x in shoots() if x["id"] == sid), None)
+        r = db.one(
+            "SELECT s.*, COUNT(i.id) n, SUM(CASE WHEN c.decision='keep' THEN 1 ELSE 0 END) kept, "
+            "MIN(CASE WHEN c.is_series_best=1 AND c.decision='keep' THEN i.id END) cover, MIN(i.id) first_image "
+            "FROM shoots s LEFT JOIN images i ON i.shoot_id=s.id LEFT JOIN culling c ON c.image_id=i.id "
+            "WHERE s.id=? GROUP BY s.id", (sid,))
         if r is None:
             raise HTTPException(404)
-        return r
+        d = dict(r)
+        d["cover"] = d["cover"] or d["first_image"]
+        job = db.one("SELECT id, kind, status, progress, total, message FROM jobs WHERE shoot_id=? "
+                     "ORDER BY id DESC LIMIT 1", (sid,))
+        d["job"] = dict(job) if job else None
+        return d
 
     @app.post("/api/reveal")
     def reveal(body: dict[str, str]) -> dict[str, Any]:
@@ -476,6 +485,33 @@ def create_app(db_path: str | None = None) -> FastAPI:
             return FileResponse(str(pp), media_type="image/jpeg")
         return FileResponse(r["preview_path"], media_type="image/jpeg")
 
+    def _linear(iid: int, path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+        """Lineare Bilddaten fürs Rendern (einmal dekodieren, dann aus dem Cache)."""
+        lin_cache = cache_dir() / "linear" / f"{iid}.npz"
+        lin_cache.parent.mkdir(parents=True, exist_ok=True)
+        if lin_cache.exists():
+            z = np.load(lin_cache)
+            return z["lin"].astype(np.float32), z["xyz"], z["wb"], int(z["orient"])
+        lin, info = raw_io.decode_any(path, half_size=True)
+        h, w = lin.shape[:2]
+        s = 2048 / max(h, w)
+        if s < 1:
+            lin = cv2.resize(lin, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
+        xyz, wb, orient = info.xyz_to_cam, info.camera_wb, info.orientation
+        np.savez(lin_cache, lin=lin.astype(np.float16), xyz=xyz, wb=wb, orient=orient)
+        return lin, xyz, wb, orient
+
+    def _render_file(iid: int, path: Path, crs: dict[str, Any], size: int, cache: Path) -> Response:
+        if not raw_io.is_raw(path):
+            return preview(iid)            # fertige JPGs: nichts zu entwickeln, Vorschau zeigen
+        lin, xyz, wb, orient = _linear(iid, path)
+        m = load_masks(iid)
+        seg = {"subject": m[0], "sky": m[1]} if m else {}
+        img = render(lin, xyz, wb, crs, orient, seg, size)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(cache), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
+        return FileResponse(cache, media_type="image/jpeg")
+
     @app.get("/api/images/{iid}/render")
     def render_after(iid: int, size: int = 1600) -> Response:
         r = db.one("SELECT i.path, e.params, e.masks, e.updated_at FROM images i LEFT JOIN edits e "
@@ -488,28 +524,96 @@ def create_app(db_path: str | None = None) -> FastAPI:
         crs = json.loads(r["params"]) if r["params"] else {}
         if r["masks"]:
             crs["MaskGroupBasedCorrections"] = json.loads(r["masks"])
-        path = Path(r["path"])
-        if not raw_io.is_raw(path):
-            return preview(iid)            # fertige JPGs: nichts zu entwickeln, Vorschau zeigen
-        lin_cache = cache_dir() / "linear" / f"{iid}.npz"
-        lin_cache.parent.mkdir(parents=True, exist_ok=True)
-        if lin_cache.exists():
-            z = np.load(lin_cache)
-            lin, xyz, wb, orient = z["lin"].astype(np.float32), z["xyz"], z["wb"], int(z["orient"])
-        else:
-            lin, info = raw_io.decode_any(path, half_size=True)
-            h, w = lin.shape[:2]
-            s = 2048 / max(h, w)
+        return _render_file(iid, Path(r["path"]), crs, size, cache)
+
+    @app.get("/api/images/{iid}/thumb")
+    def thumb(iid: int) -> Response:
+        """Kleine Kachel fürs Raster (statt der grossen Vorschau): lädt viel schneller."""
+        r = db.one("SELECT preview_path FROM images WHERE id=?", (iid,))
+        if not r:
+            raise HTTPException(404)
+        src = Path(r["preview_path"]) if r["preview_path"] else None
+        if src is None or not src.exists():
+            return preview(iid)
+        t = cache_dir() / "thumbs" / f"{iid}.jpg"
+        if not t.exists() or t.stat().st_mtime < src.stat().st_mtime:
+            img = cv2.imread(str(src), cv2.IMREAD_REDUCED_COLOR_2)
+            if img is None:
+                return FileResponse(src, media_type="image/jpeg")
+            h, w = img.shape[:2]
+            s = 480 / max(h, w)
             if s < 1:
-                lin = cv2.resize(lin, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
-            xyz, wb, orient = info.xyz_to_cam, info.camera_wb, info.orientation
-            np.savez(lin_cache, lin=lin.astype(np.float16), xyz=xyz, wb=wb, orient=orient)
-        m = load_masks(iid)
-        seg = {"subject": m[0], "sky": m[1]} if m else {}
-        img = render(lin, xyz, wb, crs, orient, seg, size)
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(cache), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
-        return FileResponse(cache, media_type="image/jpeg")
+                img = cv2.resize(img, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
+            t.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(t), img, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        return FileResponse(t, media_type="image/jpeg")
+
+    # ------------------------------------------------------------------ Stile vergleichen
+    @app.get("/api/shoots/{sid}/compare")
+    def compare(sid: int, n: int = 3) -> dict[str, Any]:
+        from ..style import compare as cmp
+
+        return {"images": cmp.sample_images(db, sid, n), "styles": cmp.styles()}
+
+    @app.get("/api/images/{iid}/styled")
+    def styled(iid: int, style: str, size: int = 900) -> Response:
+        """Bild mit einem bestimmten Stil entwickelt (nur Vorschau, nichts wird gespeichert)."""
+        import hashlib
+
+        from ..style import compare as cmp
+
+        r = db.one("SELECT path, shoot_id FROM images WHERE id=?", (iid,))
+        if not r:
+            raise HTTPException(404)
+        tag = hashlib.sha1(f"{style}|{cmp.model_version(style)}|{settings_version()}".encode()).hexdigest()[:12]
+        cache = cache_dir() / "renders" / f"{iid}_cmp_{tag}_{size}.jpg"
+        if cache.exists():
+            return FileResponse(cache, media_type="image/jpeg")
+        try:
+            crs = cmp.develop_preview(db, r["shoot_id"], iid, style)
+        except KeyError as e:
+            raise HTTPException(404, "Bild ist noch nicht analysiert") from e
+        return _render_file(iid, Path(r["path"]), crs, size, cache)
+
+    def settings_version() -> float:
+        from ..config import settings_path
+
+        p = settings_path()
+        return p.stat().st_mtime if p.exists() else 0.0
+
+    # ------------------------------------------------------------------ Löschen
+    @app.delete("/api/shoots/{sid}")
+    def delete_shoot(sid: int) -> dict[str, Any]:
+        from ..manage import delete_shoot as _delete
+
+        for j in db.query("SELECT id FROM jobs WHERE shoot_id=? AND status IN ('running','queued')", (sid,)):
+            jobs.cancel(int(j["id"]))
+        try:
+            return _delete(db, sid)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.delete("/api/profiles/{name}")
+    def delete_profile(name: str) -> dict[str, Any]:
+        from ..manage import delete_profile as _delete
+
+        try:
+            _delete(name)
+        except KeyError as e:
+            raise HTTPException(404, "Stil nicht gefunden") from e
+        return {"ok": True}
+
+    @app.patch("/api/profiles/{name}")
+    def rename_profile(name: str, body: dict[str, str]) -> dict[str, Any]:
+        from ..manage import rename_profile as _rename
+
+        try:
+            _rename(name, body.get("name", ""))
+        except KeyError as e:
+            raise HTTPException(404, "Stil nicht gefunden") from e
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"ok": True}
 
     @app.patch("/api/images/{iid}/culling")
     def patch_culling(iid: int, req: CullingPatch) -> dict[str, Any]:

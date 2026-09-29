@@ -8,7 +8,8 @@ type S = {
   culling: { reject_rating: number; series_gap_seconds: number };
   keywords: { people_root: string; write_face_regions: boolean };
   denoise: { mode: string; always: boolean; min_amount: number; max_amount: number };
-  develop: { auto_straighten: boolean; auto_crop: boolean; write_masks: boolean; ai_masks: boolean; shoot_consistency: number };
+  develop: { auto_straighten: boolean; auto_crop: boolean; write_masks: boolean; ai_masks: boolean; shoot_consistency: number;
+    punch: number; bottom_fade: boolean; bottom_fade_strength: number };
   device: string;
   face_backend: string;
   ignored_shirt_words: string[];
@@ -44,6 +45,23 @@ export default function SettingsView({ ctx }: { ctx: AppCtx }) {
             options={[["lightroom", "Lightroom rechnet"], ["local", "Imagomat"], ["mark", "Nur markieren"]]} />
         </div>
         <div className="setting">
+          <div>
+            <b>Kontrast (Weiss/Schwarz)</b>
+            <div className="hint">wie am Waveform: oben und unten schlägt ein kleiner Teil leicht an</div>
+          </div>
+          <Segmented value={s.develop.punch} onChange={(v) => set("develop", { punch: v })}
+            options={[[0, "wie gelernt"], [0.6, "etwas"], [1, "knackig"], [1.5, "kräftig"]]} />
+        </div>
+        <div className="setting">
+          <div>
+            <b>Dunkler Verlauf von unten</b>
+            <div className="hint">dunkler und weicher Rasen/Vordergrund, pro Bild angepasst</div>
+          </div>
+          <Segmented value={s.develop.bottom_fade ? s.develop.bottom_fade_strength : 0}
+            onChange={(v) => set("develop", { bottom_fade: v > 0, bottom_fade_strength: v > 0 ? v : 1 })}
+            options={[[0, "aus"], [0.6, "leicht"], [1, "normal"], [1.4, "stark"]]} />
+        </div>
+        <div className="setting">
           <div><b>Schiefe Bilder begradigen</b></div>
           <input type="checkbox" className="switch" checked={s.develop.auto_straighten} onChange={(e) => set("develop", { auto_straighten: e.target.checked })} />
         </div>
@@ -52,7 +70,7 @@ export default function SettingsView({ ctx }: { ctx: AppCtx }) {
           <input type="checkbox" className="switch" checked={s.develop.auto_crop} onChange={(e) => set("develop", { auto_crop: e.target.checked })} />
         </div>
         <div className="setting">
-          <div><b>Masken setzen</b><div className="hint">z. B. Spieler aufhellen, Hintergrund beruhigen</div></div>
+          <div><b>Masken setzen</b><div className="hint">z. B. Spieler aufhellen, Hintergrund mit Tiefe</div></div>
           <input type="checkbox" className="switch" checked={s.develop.write_masks} onChange={(e) => set("develop", { write_masks: e.target.checked })} />
         </div>
         <div className="setting">

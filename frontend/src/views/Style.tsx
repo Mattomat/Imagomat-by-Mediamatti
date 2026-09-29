@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AppCtx } from "../App";
 import { api, IS_APP, JobInfo, Overview, pickFile, pickFolder, Preset, Profile, Shoot, waitForJob } from "../api";
-import { More, Progress } from "../ui";
+import { Modal, More, Progress } from "../ui";
 
 function accuracy(p: Profile): string | null {
   const e = p.metrics.mae_model?.Exposure2012;
@@ -54,6 +54,25 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
       load();
     } catch (e) {
       setJob(null);
+      ctx.toast((e as Error).message, "error");
+    }
+  };
+
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<{ old: string; name: string } | null>(null);
+  const rename = (old: string) => setRenaming({ old, name: old });
+  const doRename = async () => {
+    if (!renaming) return;
+    const { old } = renaming;
+    const neu = renaming.name.trim();
+    setRenaming(null);
+    if (!neu || neu === old) return;
+    try {
+      await api.patch(`/api/profiles/${encodeURIComponent(old)}`, { name: neu });
+      if (def === old) setDef(neu);
+      ctx.toast(`Umbenannt in „${neu}“`);
+      load();
+    } catch (e) {
       ctx.toast((e as Error).message, "error");
     }
   };
@@ -117,6 +136,10 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
                 <div className="muted">gelernt aus {p.n} Bildern</div>
                 {accuracy(p) && <div className="muted">{accuracy(p)}</div>}
                 {p.templates.length > 0 && <div className="muted">Masken: {p.templates.slice(0, 3).map((t) => t.name).join(", ")}</div>}
+                <div className="pc-actions">
+                  <button className="link" onClick={() => rename(p.name)}>Umbenennen</button>
+                  <button className="link" style={{ color: "var(--bad)" }} onClick={() => setDeleting(p.name)}>Löschen</button>
+                </div>
                 {shoots.length > 0 && (
                   <More label="Aus meinen Korrekturen lernen">
                     <p className="hint">Hast du einen Shoot in Lightroom nachkorrigiert und die Metadaten gespeichert (⌘S)? Dann lernt der Stil daraus.</p>
@@ -139,6 +162,34 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
         ))}
       </div>
       {def && <button className="link mt" onClick={() => setDefault(null)}>Standard auf „automatisch“ zurücksetzen</button>}
+      {renaming && (
+        <Modal title="Stil umbenennen" onClose={() => setRenaming(null)}>
+          <input autoFocus value={renaming.name} onChange={(e) => setRenaming({ ...renaming, name: e.target.value })}
+            onKeyDown={(e) => e.key === "Enter" && doRename()} />
+          <div className="modal-actions">
+            <button className="ghost" onClick={() => setRenaming(null)}>Abbrechen</button>
+            <button className="primary" onClick={doRename}>Umbenennen</button>
+          </div>
+        </Modal>
+      )}
+      {deleting && (
+        <Modal title={`Stil „${deleting}“ löschen?`} onClose={() => setDeleting(null)}>
+          <p>Der gelernte Stil wird entfernt. Bereits bearbeitete Shoots und exportierte XMPs bleiben, wie sie sind.</p>
+          <div className="modal-actions">
+            <button className="ghost" onClick={() => setDeleting(null)}>Abbrechen</button>
+            <button className="danger" onClick={async () => {
+              try {
+                await api.del(`/api/profiles/${encodeURIComponent(deleting)}`);
+                ctx.toast(`Stil „${deleting}“ gelöscht`);
+                load();
+              } catch (e) {
+                ctx.toast((e as Error).message, "error");
+              }
+              setDeleting(null);
+            }}>Löschen</button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

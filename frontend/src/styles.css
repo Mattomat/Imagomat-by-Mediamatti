@@ -110,7 +110,25 @@ main { overflow: hidden; position: relative; }
 .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px 28px; margin-top: 22px; }
 .opt label { margin-top: 0; }
 .shoot-cards { display: grid; grid-auto-rows: max-content; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }
-.shoot-card { padding: 0; overflow: hidden; text-align: left; background: var(--panel); border-radius: var(--radius); }
+.shoot-card { padding: 0; overflow: hidden; text-align: left; background: var(--panel); border-radius: var(--radius);
+  border: 1px solid var(--line); cursor: pointer; position: relative; }
+.shoot-card:hover { border-color: #4a4e57; }
+.shoot-card .sc-del { position: absolute; top: 8px; right: 8px; padding: 2px 8px; font-size: 12px; opacity: 0;
+  background: rgba(0, 0, 0, 0.6); border-color: transparent; }
+.shoot-card:hover .sc-del, .shoot-card .sc-del:focus { opacity: 1; }
+button.danger { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 650; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+/* Stile vergleichen */
+.compare { display: grid; gap: 10px; }
+.compare-row { display: grid; grid-template-columns: 170px repeat(var(--n), minmax(0, 1fr)); gap: 8px; align-items: center; }
+.compare-row .cr-name { font-weight: 600; font-size: 13px; }
+.compare-row .cr-name .muted { font-weight: 400; display: block; font-size: 12px; }
+.compare-row img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 6px; background: #0b0b0d; display: block; }
+.compare-row.on { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
+.compare-row button { margin-top: 6px; }
+.modal.wide { width: min(1200px, 94vw); max-height: 90vh; overflow: auto; }
+.profile-card .pc-actions { display: flex; gap: 12px; margin-top: 8px; }
+.team-select { max-width: 220px; }
 .shoot-card .cover { height: 130px; background: #0b0b0d; }
 .shoot-card .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .sc-name { padding: 10px 12px 2px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

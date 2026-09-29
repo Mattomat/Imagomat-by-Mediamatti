@@ -2,9 +2,9 @@
 
 Ablauf pro Shoot:
 1. Bekannte Personen wiedererkennen (Vergleich mit bestätigten Gesichtern).
-2. Rückennummern: Nummer im Körperbereich eines Gesichts + Kader des Shoots -> Person.
-   Nummern ohne Gesicht (Spieler von hinten) ordnen die Person trotzdem dem Bild zu.
-3. Rest mit HDBSCAN clustern. In der UI gibst du Clustern einen Namen; ab dann erkennt die
+2. Rückennummer/Trikotname nur als Notlösung: nur wenn im Bild gar kein Gesicht erkannt wurde, und nur Spieler des Shoot-Teams auf roten,
+   weissen oder schwarzen Trikots (FC Winterthur). Gegner und andere eigene Teams zählen nie.
+3. Rest clustern. In der UI gibst du Clustern einen Namen; ab dann erkennt die
    App die Person auch in künftigen Shoots.
 """
 
@@ -19,7 +19,7 @@ from ..db import Database, blob_to_f32
 from ..jobs import JobContext, job
 from ..vision.faces import get_backend
 from ..vision.segmentation import body_boxes
-from .registry import MATCH_THRESHOLD, exemplars, match
+from .registry import MATCH_THRESHOLD, best_similarity, exemplars, match
 
 log = logging.getLogger(__name__)
 
@@ -76,10 +76,11 @@ def _edit_distance(a: str, b: str) -> int:
 
 
 def dominant_team(db: Database, shoot_id: int) -> str | None:
-    """Welches Team ist in diesem Shoot am häufigsten erkannt? (für doppelte Nummern Herren/Frauen/U21)"""
+    """Welches Team ist in diesem Shoot am häufigsten erkannt? (für doppelte Nummern Herren/Frauen/U21)
+    Nur Gesichter zählen: Trikot-Zuordnungen würden sich sonst selbst bestätigen."""
     rows = db.query(
         "SELECT p.team, COUNT(*) n FROM faces f JOIN images i ON i.id=f.image_id JOIN persons p ON p.id=f.person_id "
-        "WHERE i.shoot_id=? AND p.team IS NOT NULL AND f.assigned_by IN ('auto','confirmed','manual','number') "
+        "WHERE i.shoot_id=? AND p.team IS NOT NULL AND f.assigned_by IN ('auto','confirmed','manual') "
         "GROUP BY p.team ORDER BY n DESC", (shoot_id,))
     total = sum(r["n"] for r in rows)
     if rows and total >= 3 and rows[0]["n"] / total >= 0.5:
@@ -100,16 +101,21 @@ class ShirtResolver:
             if r["number"]:
                 self.by_number.setdefault(str(r["number"]).lstrip("0") or "0", []).append((r["id"], r["team"]))
             parts = norm_name(r["name"]).split()
-            if parts and len(parts[-1]) >= 4:
+            if parts and len(parts[-1]) >= 4 and (not self.scope or r["team"] in self.scope):
                 self.names.append((parts[-1].upper(), r["id"]))
         self._norm = norm_name
 
+    @property
+    def scope(self) -> list[str]:
+        """Teams, deren Nummern in diesem Shoot gelten (leer = unbekannt)."""
+        return self.teams or ([self.dominant] if self.dominant else [])
+
     def number(self, text: str) -> int | None:
         cands = self.by_number.get(text.lstrip("0") or "0", [])
-        if self.teams:
-            cands = [c for c in cands if c[1] in self.teams]
-        elif len(cands) > 1 and self.dominant:
-            cands = [c for c in cands if c[1] == self.dominant] or cands
+        if self.scope:
+            # Nur das Team des Shoots. Fehlt die Nummer dort, ist es ein Gegner oder ein Lesefehler,
+            # nie eine Spielerin/ein Spieler eines anderen eigenen Teams.
+            cands = [c for c in cands if c[1] in self.scope]
         return cands[0][0] if len(cands) == 1 else None
 
     def name(self, text: str) -> int | None:
@@ -165,7 +171,14 @@ def plausible_back_names(texts, ignored: set[str]) -> set[int]:
 
 MAX_AUTO_YAW = 55.0      # Gesichter von der Seite/hinten nicht automatisch benennen (unsicher)
 MIN_AUTO_FACE = 0.035     # zu kleine Gesichter ebenso
-FRONTAL_YAW = 35.0        # "klar von vorne": dann gewinnt das Gesicht gegen die Rückennummer
+FRONTAL_YAW = 35.0
+# Trikot sagt Person X, das Gesicht ähnelt X aber überhaupt nicht -> Trikot verwerfen
+SHIRT_VETO = {"insightface": 0.18, "yunet": 0.22, "haar": 0.5}
+# Rückennummer: so sicher und so gross muss sie gelesen sein
+SHIRT_MIN_CONF = 0.6
+SHIRT_MIN_HEIGHT = 0.02
+# Anteil roter, weisser oder schwarzer Pixel rund um die Nummer (FC-Winterthur-Trikots)
+TEAM_COLOR_MIN = 0.6
 
 
 def _frontal(f) -> bool:
@@ -173,32 +186,57 @@ def _frontal(f) -> bool:
     return abs(f["yaw"] or 0.0) <= FRONTAL_YAW and (bb[3] - bb[1]) >= 0.05
 
 
+def _clear(f) -> bool:
+    bb = json.loads(f["bbox"])
+    return abs(f["yaw"] or 0.0) <= MAX_AUTO_YAW and (bb[3] - bb[1]) >= MIN_AUTO_FACE
+
+
+def team_color_share(img: np.ndarray, bbox) -> float | None:
+    """Wie viel des Trikots rund um die Nummer ist rot, weiss oder schwarz? (FCW: Heim rot, auswärts
+    weiss/schwarz). Blaue, gelbe, grüne ... Gegner-Trikots fallen so heraus."""
+    import cv2
+
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = bbox
+    bw, bh = x1 - x0, y1 - y0
+    X0, X1 = int(max(0, x0 - bw * 0.8) * w), int(min(1, x1 + bw * 0.8) * w)
+    Y0, Y1 = int(max(0, y0 - bh * 0.4) * h), int(min(1, y1 + bh * 0.6) * h)
+    if X1 - X0 < 6 or Y1 - Y0 < 6:
+        return None
+    hsv = cv2.cvtColor(np.ascontiguousarray(img[Y0:Y1, X0:X1]), cv2.COLOR_RGB2HSV).astype(np.int32)
+    H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    red = ((H <= 10) | (H >= 165)) & (S >= 90) & (V >= 50)
+    white = (S <= 50) & (V >= 150)
+    black = V <= 60
+    return float((red | white | black).mean())
+
+
 @job("people")
 def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -> None:
-    from ..analysis import ensure_ocr
+    from ..analysis import ensure_ocr, load_cached_preview
 
     db = ctx.db
     ensure_ocr(ctx, shoot_id)
-    thr = threshold if threshold is not None else MATCH_THRESHOLD.get(get_backend().name, 0.45)
+    backend = get_backend().name
+    thr = threshold if threshold is not None else MATCH_THRESHOLD.get(backend, 0.45)
     faces = db.query(
         "SELECT f.id, f.image_id, f.bbox, f.embedding, f.person_id, f.assigned_by, f.yaw FROM faces f "
         "JOIN images i ON i.id=f.image_id WHERE i.shoot_id=?", (shoot_id,))
     ctx.set_total(len(faces) + 2)
-    ex, ids = exemplars(db)
-    # 1. Wiedererkennen (nur gut sichtbare Gesichter)
+    ex, ids = exemplars(db, backend)
+    # 1. Gesichter: die Hauptsache
     auto = 0
     for f in faces:
         if f["assigned_by"] in ("manual", "confirmed", "ignored") or f["embedding"] is None:
             continue
-        bb = json.loads(f["bbox"])
-        clear = abs(f["yaw"] or 0.0) <= MAX_AUTO_YAW and (bb[3] - bb[1]) >= MIN_AUTO_FACE
-        pid = match(blob_to_f32(f["embedding"]), ex, ids, thr)[0] if clear else None
+        pid = match(blob_to_f32(f["embedding"]), ex, ids, thr)[0] if _clear(f) else None
         with db.tx() as c:
             c.execute("UPDATE faces SET person_id=?, assigned_by=? WHERE id=?",
                       (pid, "auto" if pid else None, f["id"]))
         auto += pid is not None
     ctx.progress(len(faces), f"{auto} Gesichter wiedererkannt")
-    # 2. Rückennummern und Trikotnamen: stärker als das Gesicht
+    # 2. Trikot (Nummer/Name) nur als Notlösung: wenn im Bild KEIN Gesicht erkannt wurde, nur Spieler
+    #    des Teams dieses Shoots und nur auf roten, weissen oder schwarzen Trikots.
     resolver = ShirtResolver(db, shoot_teams(db, shoot_id), dominant_team(db, shoot_id))
     by_image: dict[int, list] = {}
     for f in db.query("SELECT f.* FROM faces f JOIN images i ON i.id=f.image_id WHERE i.shoot_id=?", (shoot_id,)):
@@ -208,54 +246,68 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
 
     ignored = {w.strip().upper() for w in load_settings().ignored_shirt_words if w.strip()}
     back_names = plausible_back_names(texts, ignored)
-    # Belege pro Bild und Person sammeln: Nummer und/oder Name auf dem Trikot (+ Position)
-    evidence: dict[tuple[int, int], dict] = {}
-    for n in texts:
-        text = str(n["text"])
-        if text.startswith("#") or not n["bbox"]:
-            continue                      # manuell hinzugefügte Personen bleiben unangetastet
-        if text.startswith("@") and n["id"] not in back_names:
-            pid = None                    # Sponsor oder Wort ohne Rückennummer -> kein Name
-        else:
-            pid = resolver.name(text[1:]) if text.startswith("@") else resolver.number(text)
-        with db.tx() as c:
-            c.execute("UPDATE numbers SET person_id=? WHERE id=?", (pid, n["id"]))
-        if pid is None:
+    with_person = {img for img, fs in by_image.items() if any(f["person_id"] for f in fs)}
+    rows_by_id = {r["id"]: r for r in db.images(shoot_id)}
+    previews: dict[int, np.ndarray | None] = {}
+
+    def preview(image_id: int) -> np.ndarray | None:
+        if image_id not in previews:
+            try:
+                previews[image_id] = load_cached_preview(rows_by_id[image_id])
+            except Exception:  # noqa: BLE001 - ohne Bild keine Farbprüfung -> kein Trikot-Treffer
+                previews[image_id] = None
+        return previews[image_id]
+
+    evidence: dict[tuple[int, int], list] = {}
+    if resolver.scope:
+        for n in texts:
+            text = str(n["text"])
+            if text.startswith("#") or not n["bbox"] or n["image_id"] in with_person:
+                continue
+            if text.startswith("@"):
+                pid = resolver.name(text[1:]) if n["id"] in back_names else None
+            else:
+                bb = json.loads(n["bbox"])
+                ok = (n["confidence"] or 0) >= SHIRT_MIN_CONF and bb[3] - bb[1] >= SHIRT_MIN_HEIGHT
+                pid = resolver.number(text) if ok else None
+            if pid is not None:
+                evidence.setdefault((n["image_id"], pid), []).append(n)
+    accepted: dict[int, int] = {}                 # numbers.id -> Person
+    via_shirt = vetoed = 0
+    for (image_id, pid), rows in evidence.items():
+        img = preview(image_id)
+        if img is None or not any((team_color_share(img, json.loads(n["bbox"])) or 0) >= TEAM_COLOR_MIN
+                                  for n in rows):
+            vetoed += 1
             continue
-        nb = json.loads(n["bbox"])
-        e = evidence.setdefault((n["image_id"], pid), {"kinds": set(), "centers": []})
-        e["kinds"].add("name" if text.startswith("@") else "number")
-        e["centers"].append(((nb[0] + nb[2]) / 2, (nb[1] + nb[3]) / 2))
-    names = {r["id"]: r["name"] for r in db.query("SELECT id, name FROM persons")}
-    checks: dict[int, list[dict]] = {}
-    via_shirt = 0
-    for (image_id, pid), e in evidence.items():
+        centers = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in (json.loads(n["bbox"]) for n in rows)]
         img_faces = by_image.get(image_id, [])
         boxes = body_boxes([tuple(json.loads(f["bbox"])) for f in img_faces], 1.5)
-        for f, (x0, y0, x1, y1) in zip(img_faces, boxes):
-            if not any(x0 <= cx <= x1 and y0 <= cy <= y1 for cx, cy in e["centers"]):
+        owner = next((f for f, (x0, y0, x1, y1) in zip(img_faces, boxes)
+                      if any(x0 <= cx <= x1 and y0 <= cy <= y1 for cx, cy in centers)), None)
+        if owner is not None and owner["assigned_by"] == "ignored":
+            continue
+        if owner is not None and owner["embedding"] is not None and _clear(owner):
+            # Gesicht sichtbar, aber nicht erkannt: darf der Trikot-Person nicht klar widersprechen
+            s = best_similarity(blob_to_f32(owner["embedding"]), ex, ids, pid)
+            if s is not None and s < SHIRT_VETO.get(backend, 0.2):
+                vetoed += 1
                 continue
-            if f["assigned_by"] in ("manual", "confirmed", "ignored"):
-                break
-            face_pid = f["person_id"]
-            if face_pid not in (None, pid) and f["assigned_by"] == "auto":
-                # Ein erkanntes Gesicht ist stärker als das Trikot. Widerspruch trotzdem melden ("Prüfen").
-                checks.setdefault(image_id, []).append({
-                    "face_id": f["id"], "face_person_id": face_pid, "face_person": names.get(face_pid),
-                    "shirt_person_id": pid, "shirt_person": names.get(pid), "shirt": sorted(e["kinds"]),
-                    "chosen": "face"})
-                break
+        accepted.update({n["id"]: pid for n in rows})
+        if owner is not None:
             with db.tx() as c:
-                c.execute("UPDATE faces SET person_id=?, assigned_by='number' WHERE id=?", (pid, f["id"]))
-            via_shirt += 1
-            break
-    for r in db.images(shoot_id):
-        a = db.get_analysis(r["id"])
-        if checks.get(r["id"]) or a.get("people_check"):
-            db.update_analysis(r["id"], {"people_check": checks.get(r["id"], [])})
-    n_checks = sum(len(v) for v in checks.values())
-    ctx.progress(len(faces) + 1, f"{via_shirt} Personen über Rückennummer/Trikotname"
-                 + (f", {n_checks} zum Prüfen" if n_checks else ""))
+                c.execute("UPDATE faces SET person_id=?, assigned_by='number' WHERE id=?", (pid, owner["id"]))
+        via_shirt += 1
+    with db.tx() as c:
+        for n in texts:
+            if not str(n["text"]).startswith("#"):
+                c.execute("UPDATE numbers SET person_id=? WHERE id=?", (accepted.get(n["id"]), n["id"]))
+    for r in rows_by_id.values():
+        if db.get_analysis(r["id"]).get("people_check"):
+            db.update_analysis(r["id"], {"people_check": []})
+    log.info("Personen Shoot %s: %d Gesichter erkannt, %d über Trikot, %d Trikot-Treffer verworfen, Team %s",
+             shoot_id, auto, via_shirt, vetoed, resolver.scope or "unbekannt")
+    ctx.progress(len(faces) + 1, f"{auto} Gesichter, {via_shirt} über Rückennummer/Trikotname")
     # 3. Clustern der unbekannten Gesichter
     rest = db.query(
         "SELECT f.id, f.embedding FROM faces f JOIN images i ON i.id=f.image_id "

@@ -130,7 +130,7 @@ def compute_metrics(path: Path) -> tuple[np.ndarray, dict[str, Any], int, int | 
 
 
 _UNSUPPORTED_SEEN: set[str] = set()
-PREVIEW_TO_RAW_EV = 0.8
+PREVIEW_TO_RAW_EV = raw_io.PREVIEW_TO_RAW_EV
 
 
 def _note_unsupported(path: Path, err: Exception) -> None:

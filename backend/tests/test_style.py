@@ -105,6 +105,7 @@ def test_train_from_xmp_folder_and_develop(tmp_path: Path):
     assert jm.run_sync(db.create_job("analyze", sid, {}))["status"] == "done"
     settings = load_settings()
     settings.develop.shoot_consistency = 0.0
+    settings.develop.punch = 0.0              # hier nur prüfen, ob dein Stil exakt übernommen wird
     from imagomat.config import save_settings
 
     save_settings(settings)
@@ -124,6 +125,16 @@ def test_train_from_xmp_folder_and_develop(tmp_path: Path):
         assert masks and masks[0]["CorrectionMasks"][0]["What"] == "Mask/Image"
         assert "MaskDigest" not in masks[0]["CorrectionMasks"][0]
     assert float(np.mean(errs)) < 0.35, errs
+    # Stil-Vergleich: gleiche Bilder mit verschiedenen Stilen, ohne zu speichern
+    from imagomat.style import compare
+
+    iid = db.images(sid)[0]["id"]
+    before = db.one("SELECT params FROM edits WHERE image_id=?", (iid,))[0]
+    mine, std = (compare.develop_preview(db, sid, iid, k) for k in ("Test", compare.AUTO))
+    assert mine["Exposure2012"] != std["Exposure2012"] or mine.get("Contrast2012") != std.get("Contrast2012")
+    assert db.one("SELECT params FROM edits WHERE image_id=?", (iid,))[0] == before
+    assert {s["key"] for s in compare.styles()} >= {"Test", compare.AUTO}
+    assert len(compare.sample_images(db, sid, 3)) >= 1
 
 
 def test_build_settings_preset_only():
@@ -209,3 +220,60 @@ def test_gbdt_with_torch_loaded():
     y = X[:, 0] * 2 + rng.normal(scale=0.1, size=200)
     m = make().fit(X, y)
     assert np.corrcoef(m.predict(X), y)[0, 1] > 0.9
+
+
+def test_bottom_fade_adapts_per_image():
+    from imagomat.style.develop import predict_all
+
+    s = load_settings()
+
+    def fade(bottom, mid):
+        a = {"lin_log_median": -3, "median": 0.4, "scene": {"sport_day": 0.9}, "preview_w": 1200, "preview_h": 800,
+             "subject_bbox": [0.4, 0.2, 0.6, 0.8], "bottom_luma": bottom, "mid_luma": mid}
+        it = ImageDevelop(1, Record(a, {"iso": 800}, None), 1, 6000, 4000)
+        predict_all([it], None, s)
+        build_settings(it, s, Dialect())
+        corr = [c for c in it.crs["MaskGroupBasedCorrections"] if c["CorrectionName"] == "Verlauf unten"]
+        assert len(corr) == 1 and corr[0]["CorrectionMasks"][0]["What"] == "Mask/Gradient"
+        assert corr[0]["LocalSharpness"] < -0.3 and corr[0]["LocalTexture"] < 0     # weich
+        return corr[0]["LocalExposure2012"] * 4
+
+    bright, dark = fade(0.55, 0.4), fade(0.08, 0.3)
+    assert bright < -1.5 and -0.8 < dark < 0
+
+
+def test_punch_sets_white_point_and_background_contrast():
+    from imagomat.style.develop import punch, punch_background
+
+    flat = {"Exposure2012": 0.5, "Whites2012": 0, "Blacks2012": 0, "Highlights2012": -40, "Contrast2012": 10}
+    a = {"lin_log_p99": -2.0, "lin_log_p01": -6.0}
+    crs = dict(flat)
+    punch(crs, a, 1.0)
+    assert crs["Whites2012"] >= 30 and crs["Blacks2012"] < -5 and crs["Contrast2012"] == 18
+    bright = dict(flat, Whites2012=40)
+    punch(bright, {"lin_log_p99": 0.0, "lin_log_p01": -9.0}, 1.0)
+    assert bright["Whites2012"] == 40 and bright["Blacks2012"] == 0      # schon hell/dunkel genug
+    bg = {"LocalExposure2012": -0.1, "CorrectionMasks": [{"What": "Mask/Image", "MaskInverted": True}]}
+    punch_background(bg, 1.0)
+    assert bg["LocalContrast2012"] > 0 and bg["LocalDehaze"] > 0
+    mine = {"LocalContrast2012": -0.2, "CorrectionMasks": [{"What": "Mask/Image", "MaskInverted": True}]}
+    punch_background(mine, 1.0)
+    assert mine["LocalContrast2012"] == -0.2                              # bewusst so gewählt: bleibt
+
+
+def test_scopes_touch_white_and_black(tmp_path: Path):
+    """Wie am Lumetri-Waveform: oben und unten schlägt ein kleiner Teil leicht an."""
+    from imagomat.io.color import XYZ_TO_SRGB
+    from imagomat.render.pipeline import render
+    from imagomat.style.scopes import HI_TARGET, LO_TARGET, fit_scopes, preview_linear, scopes
+
+    rng = np.random.default_rng(1)
+    base = np.linspace(0, 1, 900)[None, :] * np.linspace(0.6, 1, 600)[:, None]
+    img = np.clip(5 + 250 * (base + rng.normal(0, 0.03, base.shape)), 0, 255).astype(np.uint8)
+    cv2.imwrite(str(tmp_path / "p.jpg"), np.repeat(img[..., None], 3, 2))
+    lin = preview_linear(str(tmp_path / "p.jpg"))
+    crs = {"Exposure2012": 0.9, "Contrast2012": 15, "Whites2012": 0, "Blacks2012": 0, "Highlights2012": -30}
+    fit_scopes(crs, lin)
+    sc = scopes(render(lin, XYZ_TO_SRGB, np.ones(3), {**crs, "WhiteBalance": "As Shot"}, 1, {}, None))
+    assert abs(sc["p_hi"] - HI_TARGET) < 0.03 and abs(sc["p_lo"] - LO_TARGET) < 0.02
+    assert sc["white_clip"] < 0.02 and sc["black_clip"] < 0.02            # leicht, nicht ausgefressen

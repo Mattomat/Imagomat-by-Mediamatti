@@ -49,6 +49,12 @@ def test_recognition_numbers_and_clusters(tmp_path: Path):
                    (ids[2], "10", 0.9, dumps([0.43, 0.35, 0.47, 0.42])))
         cx.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
                    (ids[3], "7", 0.8, dumps([0.1, 0.5, 0.15, 0.6])))  # Rückenansicht ohne Gesicht
+    import cv2
+
+    red = np.full((800, 1200, 3), (30, 30, 200), np.uint8)       # BGR: rotes FCW-Trikot
+    cv2.imwrite(str(tmp_path / "red.jpg"), red)
+    with db.tx() as cx:
+        cx.execute("UPDATE images SET preview_path=? WHERE id IN (?,?)", (str(tmp_path / "red.jpg"), ids[2], ids[3]))
     for i in range(4, 8):
         face(ids[i], c)                               # unbekannte Person -> Cluster
     from imagomat.vision import faces as fmod

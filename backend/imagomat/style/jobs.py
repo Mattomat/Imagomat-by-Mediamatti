@@ -120,21 +120,38 @@ def train_profile(ctx: JobContext, name: str, catalog: str | None = None, folder
         ctx.progress(message=f"Stil '{name}' gelernt aus {model.n} Bildern, Personen übernommen")
 
 
-def shoot_records(db: Database, shoot_id: int, only_keep: bool = True) -> list[ImageDevelop]:
+def shoot_records(db: Database, shoot_id: int, only_keep: bool = True,
+                  image_ids: list[int] | None = None) -> list[ImageDevelop]:
     sql = ("SELECT i.*, a.data, a.embedding FROM images i JOIN analysis a ON a.image_id=i.id "
            "LEFT JOIN culling c ON c.image_id=i.id WHERE i.shoot_id=?")
+    args: list[Any] = [shoot_id]
     if only_keep:
         sql += " AND (c.decision IS NULL OR c.decision='keep')"
+    if image_ids is not None:
+        sql += f" AND i.id IN ({','.join('?' * len(image_ids))})"
+        args += list(image_ids)
     out = []
-    for r in db.query(sql + " ORDER BY i.capture_time", (shoot_id,)):
+    for r in db.query(sql + " ORDER BY i.capture_time", args):
         a = json.loads(r["data"])
+        if "bottom_luma" not in a and r["preview_path"] and Path(r["preview_path"]).exists():
+            # Helligkeit unten/Mitte für den angepassten Verlauf (einmal messen, dann gespeichert)
+            import cv2
+
+            from .develop import bottom_luma
+
+            small = cv2.imread(r["preview_path"], cv2.IMREAD_REDUCED_COLOR_4)
+            if small is not None:
+                a["bottom_luma"], a["mid_luma"] = bottom_luma(small)
+                db.update_analysis(r["id"], {"bottom_luma": a["bottom_luma"], "mid_luma": a["mid_luma"]})
         exif = {"capture_time": r["capture_time"], "iso": r["iso"], "exposure_time": r["exposure_time"],
                 "aperture": r["aperture"], "focal_length": r["focal_length"], "camera": r["camera"],
                 "lens": r["lens"]}
         m = load_masks(r["id"])
         out.append(ImageDevelop(r["id"], Record(a, exif, blob_to_f32(r["embedding"]), path=r["path"]),
                                 int(r["orientation"] or 1), r["width"], r["height"],
-                                subject_mask=m[0] if m else None))
+                                subject_mask=m[0] if m else None,
+                                preview=r["preview_path"] if r["preview_path"] and Path(r["preview_path"]).exists()
+                                else None))
     return out
 
 
@@ -144,7 +161,10 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
     db = ctx.db
     settings = load_settings()
     shoot = db.one("SELECT * FROM shoots WHERE id=?", (shoot_id,))
-    profile = profile or (shoot["profile"] if shoot else None) or settings.default_profile
+    if profile and profile.startswith("preset:"):
+        profile = None                      # ausdrücklich ohne eigenen Stil ("Standard")
+    else:
+        profile = profile or (shoot["profile"] if shoot else None) or settings.default_profile
     model = StyleModel.load(profile) if profile else None
     items = shoot_records(db, shoot_id, only_keep)
     ctx.set_total(len(items))

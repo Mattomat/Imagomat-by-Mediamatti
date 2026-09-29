@@ -73,11 +73,14 @@ def _grade(shadow: tuple[float, float] = (0, 0), mid: tuple[float, float] = (0, 
 
 SUBJECT_POP = MaskRecipe("subject", "Motiv anheben", {"Exposure2012": 0.4, "Clarity2012": 10, "Texture": 8,
                                                      "Shadows2012": 10}, "has_subject")
-BACKGROUND_CALM = MaskRecipe("background", "Hintergrund beruhigen",
-                             {"Exposure2012": -0.1, "Saturation": -8, "Clarity2012": -5}, "has_subject")
+# Hintergrund: etwas dunkler, aber mit Kontrast und Tiefe (nicht nur Helligkeit runter -> sonst fade)
+BACKGROUND_CALM = MaskRecipe("background", "Hintergrund",
+                             {"Exposure2012": -0.25, "Contrast2012": 15, "Dehaze": 10, "Highlights2012": -15,
+                              "Saturation": -5}, "has_subject")
 # Dunkler Verlauf von unten (Rasen/Vordergrund zurücknehmen, lenkt den Blick auf die Spieler)
-BOTTOM_FADE = MaskRecipe("gradient_bottom", "Verlauf unten", {"Exposure2012": -0.45, "Highlights2012": -10,
-                                                             "Saturation": -5}, "always")
+BOTTOM_FADE = MaskRecipe("gradient_bottom", "Verlauf unten", {"Exposure2012": -1.1, "Highlights2012": -25,
+                                                             "Saturation": -15, "Sharpness": -60,
+                                                             "Clarity2012": -30, "Texture": -40}, "always")
 SKY_DEEPEN = MaskRecipe("sky", "Himmel", {"Exposure2012": -0.35, "Highlights2012": -20, "Saturation": 8}, "has_sky")
 
 PRESETS: dict[str, Preset] = {p.key: p for p in [
