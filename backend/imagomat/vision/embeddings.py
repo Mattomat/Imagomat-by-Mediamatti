@@ -10,6 +10,7 @@ Backends:
 from __future__ import annotations
 
 import logging
+import threading
 from functools import lru_cache
 
 import cv2
@@ -158,12 +159,40 @@ class ClipEmbedder:
         return np.clip((s - 3.0) / 5.0, 0, 1)
 
 
-@lru_cache(maxsize=2)
+_LOCK = threading.RLock()   # zwei Job-Spuren teilen sich ein Modell
+
+
+class _Locked:
+    """Serialisiert Aufrufe auf ein geteiltes Modell (Torch/MPS ist nicht threadsicher)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        attr = getattr(self._inner, name)
+        if callable(attr) and name in ("embed", "scenes_from_embeddings", "aesthetic", "scenes"):
+            def call(*a, **k):
+                with _LOCK:
+                    return attr(*a, **k)
+            return call
+        return attr
+
+
 def get_embedder(name: str | None = None):
+    with _LOCK:
+        return _get_embedder(name)
+
+
+get_embedder.cache_info = lambda: _get_embedder.cache_info()  # type: ignore[attr-defined]
+get_embedder.cache_clear = lambda: _get_embedder.cache_clear()  # type: ignore[attr-defined]
+
+
+@lru_cache(maxsize=2)
+def _get_embedder(name: str | None = None):
     name = name or load_settings().embedding_backend
     if name in ("auto", "clip") and has_module("open_clip"):
         try:
-            return ClipEmbedder()
+            return _Locked(ClipEmbedder())
         except Exception as e:  # noqa: BLE001
             log.warning("CLIP nicht verfügbar (%s), nutze klassische Embeddings", e)
     return ClassicalEmbedder()

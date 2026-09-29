@@ -76,16 +76,26 @@ class JobContext:
                 log.exception("job listener failed")
 
 
+LANES = ("shoot", "learn")
+LEARN_KINDS = {"train_profile", "learn_people", "calibrate_culling", "feedback", "import_profile"}
+
+
+def lane_of(kind: str) -> str:
+    return "learn" if kind in LEARN_KINDS else "shoot"
+
+
 class JobManager:
     """Führt Jobs nacheinander in einem Hintergrund-Thread aus."""
 
     def __init__(self, db: Database, recover: bool = False):
         self.db = db
-        self._queue: list[int] = []
+        # Zwei Spuren: Shoots (Analyse, Culling, Export ...) und Lernen (Stil, Personen, Kalibrierung).
+        # Ein stundenlanges Stil-Training blockiert so nie das Verarbeiten eines neuen Shoots.
+        self._queues: dict[str, list[int]] = {lane: [] for lane in LANES}
         self._cv = threading.Condition()
         self._contexts: dict[int, JobContext] = {}
         self.listeners: list[Callable[[dict[str, Any]], None]] = []
-        self._thread: threading.Thread | None = None
+        self._threads: dict[str, threading.Thread] = {}
         self._stop = False
         # Beim Start der App: unterbrochene Jobs als pausiert markieren. Nicht im Terminal-Aufruf,
         # sonst würden laufende Jobs der geöffneten App fälschlich als pausiert gelten.
@@ -94,9 +104,16 @@ class JobManager:
                 c.execute("UPDATE jobs SET status='paused' WHERE status IN ('running','queued')")
 
     def start(self) -> None:
-        if self._thread is None:
-            self._thread = threading.Thread(target=self._loop, name="imagomat-jobs", daemon=True)
-            self._thread.start()
+        for lane in LANES:
+            if lane not in self._threads:
+                t = threading.Thread(target=self._loop, args=(lane,), name=f"imagomat-jobs-{lane}", daemon=True)
+                self._threads[lane] = t
+                t.start()
+
+    def _enqueue(self, job_id: int, kind: str) -> None:
+        with self._cv:
+            self._queues[lane_of(kind)].append(job_id)
+            self._cv.notify_all()
 
     def stop(self) -> None:
         with self._cv:
@@ -109,9 +126,7 @@ class JobManager:
         if kind not in _REGISTRY:
             raise KeyError(f"unbekannter Job-Typ: {kind}")
         job_id = self.db.create_job(kind, shoot_id, params)
-        with self._cv:
-            self._queue.append(job_id)
-            self._cv.notify()
+        self._enqueue(job_id, kind)
         return job_id
 
     def resume(self, job_id: int) -> None:
@@ -119,9 +134,7 @@ class JobManager:
         if not j or j["status"] not in ("paused", "failed", "cancelled"):
             return
         self.db.update_job(job_id, status="queued", error=None)
-        with self._cv:
-            self._queue.append(job_id)
-            self._cv.notify()
+        self._enqueue(job_id, j["kind"])
 
     def cancel(self, job_id: int) -> None:
         ctx = self._contexts.get(job_id)
@@ -129,8 +142,9 @@ class JobManager:
             ctx._cancel.set()
         else:
             with self._cv:
-                if job_id in self._queue:
-                    self._queue.remove(job_id)
+                for q in self._queues.values():
+                    if job_id in q:
+                        q.remove(job_id)
             self.db.update_job(job_id, status="cancelled")
 
     def run_sync(self, job_id: int) -> dict[str, Any] | None:
@@ -138,14 +152,14 @@ class JobManager:
         self._run(job_id)
         return self.db.job(job_id)
 
-    def _loop(self) -> None:
+    def _loop(self, lane: str = "shoot") -> None:
         while True:
             with self._cv:
-                while not self._queue and not self._stop:
+                while not self._queues[lane] and not self._stop:
                     self._cv.wait()
                 if self._stop:
                     return
-                job_id = self._queue.pop(0)
+                job_id = self._queues[lane].pop(0)
             self._run(job_id)
 
     def _run(self, job_id: int) -> None:

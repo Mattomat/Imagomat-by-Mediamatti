@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Protocol
@@ -167,8 +168,19 @@ class HaarBackend:
         return out
 
 
-@lru_cache(maxsize=4)
+_MODEL_LOCK = threading.RLock()   # Modelle werden von zwei Job-Spuren gleichzeitig genutzt
+
+
 def get_backend(name: str | None = None) -> FaceBackend:
+    with _MODEL_LOCK:
+        return _get_backend(name)
+
+
+get_backend.cache_clear = lambda: _get_backend.cache_clear()  # type: ignore[attr-defined]
+
+
+@lru_cache(maxsize=4)
+def _get_backend(name: str | None = None) -> FaceBackend:
     name = name or load_settings().face_backend
     order = ["insightface", "yunet", "haar"] if name == "auto" else [name, "haar"]
     for n in order:
@@ -310,5 +322,7 @@ def face_quality(img: np.ndarray, face: Face, ear_threshold: float = 0.22) -> Fa
 
 def detect_faces(img: np.ndarray, backend: str | None = None, ear_threshold: float = 0.22,
                  min_score: float = 0.5) -> list[Face]:
-    faces = [f for f in get_backend(backend).detect(img) if f.score >= min_score]
+    be = get_backend(backend)
+    with _MODEL_LOCK:
+        faces = [f for f in be.detect(img) if f.score >= min_score]
     return [face_quality(img, f, ear_threshold) for f in faces]

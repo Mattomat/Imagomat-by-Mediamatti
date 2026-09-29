@@ -103,7 +103,10 @@ def _clip01(x: float) -> float:
 
 def clip_action(embedder: Any, embs: np.ndarray) -> list[tuple[float, str | None]]:
     """Wahrscheinlichkeit für einen Action-Moment aus CLIP-Bild-Embeddings."""
-    temb, keys = _clip_text(embedder)
+    from .embeddings import _LOCK
+
+    with _LOCK:
+        temb, keys = _clip_text(embedder)
     logits = 100.0 * embs @ temb.T
     out = []
     for row in logits:
