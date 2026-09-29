@@ -154,10 +154,18 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
         </>
       )}
 
+      <h2 className="mt">Fussball-Stile</h2>
+      <p className="hint">Zum Ausprobieren: im Shoot unter „Stile vergleichen“ nebeneinander ansehen und für alle übernehmen.
+        Belichtung, Weiss/Schwarz, Verlauf und Denoise passen sich weiterhin jedem Bild an.</p>
+      <div className="preset-list">
+        {presets.filter((p) => p.group === "Fussball").map((p) => (
+          <div key={p.key} className="preset"><b>{p.name}</b><span>{p.description}</span></div>
+        ))}
+      </div>
       <h2 className="mt">Mitgelieferte Stile</h2>
       <p className="hint">Werden automatisch je nach Situation gewählt, solange du keinen eigenen Stil als Standard hast.</p>
       <div className="preset-list">
-        {presets.map((p) => (
+        {presets.filter((p) => !p.group).map((p) => (
           <div key={p.key} className="preset"><b>{p.name}</b><span>{p.description}</span></div>
         ))}
       </div>

@@ -122,6 +122,7 @@ button.danger { background: var(--bad); border-color: var(--bad); color: #fff; f
 .compare { display: grid; gap: 10px; }
 .compare-row { display: grid; grid-template-columns: 170px repeat(var(--n), minmax(0, 1fr)); gap: 8px; align-items: center; }
 .compare-row .cr-name { font-weight: 600; font-size: 13px; }
+.compare-group { margin: 14px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .compare-row .cr-name .muted { font-weight: 400; display: block; font-size: 12px; }
 .compare-row img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 6px; background: #0b0b0d; display: block; }
 .compare-row.on { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }

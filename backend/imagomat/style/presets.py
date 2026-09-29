@@ -28,7 +28,7 @@ HSL = ("Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta")
 
 @dataclass
 class MaskRecipe:
-    kind: str                      # subject | background | sky | person
+    kind: str                      # subject | background | sky | person | gradient_bottom | gradient_top | spotlight
     name: str
     local: dict[str, float]        # UI-Einheiten, z. B. {"Exposure2012": 0.3, "Clarity2012": 10}
     condition: str = "always"      # always | has_subject | has_sky | has_face
@@ -51,6 +51,8 @@ class Preset:
     look: dict[str, float] = field(default_factory=dict)
     curve: list[float] | None = None          # Abweichung an CURVE_X
     masks: list[MaskRecipe] = field(default_factory=list)
+    fade: float = 1.0                         # Stärke des Verlaufs unten (mal Einstellung)
+    group: str = ""                           # z. B. "Fussball": in der Auswahl gruppiert, nie automatisch
 
 
 def _hsl(**kw: float) -> dict[str, float]:
@@ -146,6 +148,99 @@ PRESETS: dict[str, Preset] = {p.key: p for p in [
                  "Sharpness": 45, **_hsl(sat_Blue=10, lum_Blue=-10, sat_Green=5, lum_Green=-5)},
            masks=[SKY_DEEPEN]),
 ]}
+
+
+# ---------------------------------------------------------------------------
+# Fussball-Stile (zum Ausprobieren; werden nie automatisch gewählt)
+# Orientierung an gängigen Matchday-Looks: knackig/kommerziell, Flutlicht-moody, Kino (Teal/Orange),
+# gritty (Zweikampf), Schwarzweiss. Belichtung, Weiss/Schwarz und Denoise bleiben pro Bild adaptiv.
+# ---------------------------------------------------------------------------
+GRADIENT_TOP = MaskRecipe("gradient_top", "Verlauf oben", {"Exposure2012": -0.4, "Highlights2012": -30,
+                                                           "Dehaze": 10, "Saturation": -10}, "always")
+SPOTLIGHT = MaskRecipe("spotlight", "Spot auf Spieler", {"Exposure2012": -0.45, "Contrast2012": 10,
+                                                         "Saturation": -10}, "has_subject")
+
+FOOTBALL: list[Preset] = [
+    Preset("fb_matchday", "Matchday Punch", "Knackig und sauber wie auf Club-Kanälen: satte, aber natürliche "
+           "Farben, Spieler klar vor dem Hintergrund.",
+           target_log=-2.6, subject_weight=0.8, wb_mode="neutralize", neutralize=0.3, tint_fix=0.4,
+           highlight_protect=0.9, shadow_lift=1.0, denoise_bias=3,
+           look={"Contrast2012": 28, "Clarity2012": 14, "Texture": 12, "Dehaze": 8, "Vibrance": 20,
+                 "Sharpness": 50, "PostCropVignetteAmount": -12,
+                 **_hsl(hue_Green=6, sat_Green=-10, lum_Green=-10, sat_Red=8, lum_Red=-4, lum_Orange=4,
+                        sat_Yellow=-8)},
+           curve=[-5, -6, -3, 0, 3, 5, 3],
+           masks=[MaskRecipe("subject", "Spieler", {"Exposure2012": 0.35, "Clarity2012": 15, "Texture": 12,
+                                                    "Whites2012": 10, "Shadows2012": 12}, "has_subject"),
+                  MaskRecipe("background", "Hintergrund", {"Exposure2012": -0.3, "Contrast2012": 18, "Dehaze": 12,
+                                                           "Highlights2012": -20, "Saturation": -8}, "has_subject"),
+                  BOTTOM_FADE], group="Fussball"),
+    Preset("fb_night", "Flutlicht Moody", "Dunkel und dramatisch unter Flutlicht: dichte Schwarztöne, kühle "
+           "Schatten, warme Lichter, Spot auf den Spieler.",
+           target_log=-3.0, subject_weight=0.9, wb_mode="neutralize", neutralize=0.5, tint_fix=0.6,
+           highlight_protect=1.3, shadow_lift=0.5, denoise_bias=6,
+           look={"Contrast2012": 32, "Clarity2012": 12, "Texture": 10, "Dehaze": 12, "Vibrance": 8,
+                 "Saturation": -8, "Sharpness": 45, "PostCropVignetteAmount": -28,
+                 **_hsl(hue_Green=12, sat_Green=-30, lum_Green=-18, sat_Yellow=-20, sat_Blue=-10, lum_Orange=6),
+                 **_grade(shadow=(210, 14), high=(38, 10))},
+           curve=[-10, -9, -5, 0, 3, 5, 3],
+           masks=[MaskRecipe("subject", "Spieler", {"Exposure2012": 0.45, "Clarity2012": 12, "Texture": 10,
+                                                    "Shadows2012": 15}, "has_subject"),
+                  SPOTLIGHT, GRADIENT_TOP, BOTTOM_FADE], fade=1.25, group="Fussball"),
+    Preset("fb_cinematic", "Cinematic Teal/Orange", "Kino-Look: Hauttöne warm, Schatten und Rasen Richtung "
+           "Petrol, weiche Lichter.",
+           target_log=-2.8, subject_weight=0.8, wb_mode="as_shot", highlight_protect=1.2, shadow_lift=0.8,
+           look={"Contrast2012": 22, "Clarity2012": 8, "Dehaze": 6, "Vibrance": 12, "Saturation": -6,
+                 "Sharpness": 40, "PostCropVignetteAmount": -18,
+                 **_hsl(hue_Green=30, sat_Green=-25, lum_Green=-15, hue_Aqua=-10, sat_Aqua=10, hue_Blue=-12,
+                        sat_Orange=6, lum_Orange=8, hue_Yellow=-10, sat_Yellow=-20),
+                 **_grade(shadow=(195, 18), mid=(200, 4), high=(40, 14))},
+           curve=[4, -3, -3, 0, 3, 4, 0],
+           masks=[MaskRecipe("subject", "Spieler", {"Exposure2012": 0.3, "Clarity2012": 8, "Texture": 6},
+                             "has_subject"),
+                  MaskRecipe("background", "Hintergrund", {"Exposure2012": -0.35, "Contrast2012": 12, "Dehaze": 8,
+                                                           "Saturation": -12}, "has_subject"),
+                  BOTTOM_FADE], group="Fussball"),
+    Preset("fb_gritty", "Gritty Zweikampf", "Rau und intensiv: viel Struktur auf Spielern (Schweiss, Dreck), "
+           "entsättigt, harte Kontraste, feines Korn.",
+           target_log=-2.9, subject_weight=0.85, wb_mode="neutralize", neutralize=0.4, tint_fix=0.5,
+           highlight_protect=1.1, shadow_lift=0.7, denoise_bias=-5,
+           look={"Contrast2012": 35, "Clarity2012": 25, "Texture": 22, "Dehaze": 15, "Vibrance": -5,
+                 "Saturation": -22, "Sharpness": 55, "GrainAmount": 14, "PostCropVignetteAmount": -22,
+                 **_hsl(sat_Green=-35, lum_Green=-15, sat_Orange=-5, lum_Orange=-4, sat_Red=5)},
+           curve=[-8, -8, -4, 0, 4, 6, 3],
+           masks=[MaskRecipe("subject", "Spieler", {"Exposure2012": 0.3, "Clarity2012": 25, "Texture": 25,
+                                                    "Contrast2012": 10}, "has_subject"),
+                  MaskRecipe("background", "Hintergrund", {"Exposure2012": -0.45, "Contrast2012": 10,
+                                                           "Saturation": -15, "Clarity2012": -10}, "has_subject"),
+                  BOTTOM_FADE], fade=1.1, group="Fussball"),
+    Preset("fb_fcw_red", "Rot knallt", "Vereinsfarbe im Fokus: Rot kräftig und dicht, übrige Farben "
+           "zurückgenommen, dunkler Rand.",
+           target_log=-2.8, subject_weight=0.85, wb_mode="neutralize", neutralize=0.4, tint_fix=0.5,
+           highlight_protect=1.1, shadow_lift=0.8,
+           look={"Contrast2012": 28, "Clarity2012": 12, "Texture": 10, "Dehaze": 10, "Vibrance": 5,
+                 "Saturation": -5, "Sharpness": 50, "PostCropVignetteAmount": -22,
+                 **_hsl(sat_Red=18, lum_Red=-8, hue_Red=3, sat_Orange=-5, sat_Green=-35, lum_Green=-15,
+                        sat_Blue=-25, sat_Yellow=-30, sat_Aqua=-25, sat_Purple=-30, sat_Magenta=-20),
+                 **_grade(shadow=(220, 8))},
+           curve=[-6, -7, -4, 0, 3, 5, 3],
+           masks=[MaskRecipe("subject", "Spieler", {"Exposure2012": 0.35, "Clarity2012": 12, "Texture": 10},
+                             "has_subject"),
+                  MaskRecipe("background", "Hintergrund", {"Exposure2012": -0.4, "Contrast2012": 15, "Dehaze": 10,
+                                                           "Saturation": -20}, "has_subject"),
+                  BOTTOM_FADE], group="Fussball"),
+    Preset("fb_bw", "Schwarzweiss Drama", "Monochrom mit tiefem Schwarz: Emotionen, Jubel, Porträts nach "
+           "dem Spiel.",
+           target_log=-2.8, subject_weight=0.9, wb_mode="as_shot", highlight_protect=1.1, shadow_lift=0.6,
+           look={"Contrast2012": 35, "Clarity2012": 18, "Texture": 15, "Dehaze": 10, "Saturation": -100,
+                 "Sharpness": 50, "GrainAmount": 18, "PostCropVignetteAmount": -25,
+                 **_hsl(lum_Red=-10, lum_Orange=10, lum_Green=-25, lum_Blue=-15)},
+           curve=[-8, -9, -5, 0, 5, 7, 4],
+           masks=[MaskRecipe("subject", "Spieler", {"Exposure2012": 0.35, "Clarity2012": 15, "Texture": 12},
+                             "has_subject"),
+                  SPOTLIGHT, BOTTOM_FADE], fade=1.2, group="Fussball"),
+]
+PRESETS.update({p.key: p for p in FOOTBALL})
 
 
 def choose_preset(scene: dict[str, float] | None) -> str:

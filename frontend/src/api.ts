@@ -95,6 +95,7 @@ export interface Preset {
   key: string;
   name: string;
   description: string;
+  group?: string;
 }
 
 export interface Profile {

@@ -358,7 +358,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
         used = rows[0]["profile"] if rows else None
         from ..style.model import list_profiles
 
-        return {"used": used, "is_preset": bool(used and used.startswith("preset:")),
+        from ..style import compare as cmp
+        from ..style.presets import PRESETS
+
+        chosen = bool(used and used.startswith("preset:") and PRESETS.get(used[7:]) and PRESETS[used[7:]].group)
+        return {"used": used, "label": cmp.label(used),
+                "is_preset": bool(used and used.startswith("preset:")) and not chosen,
                 "profiles": [p["name"] for p in list_profiles()], "default": load_settings().default_profile}
 
     @app.get("/api/shoots/{sid}/images")
@@ -855,7 +860,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/presets")
     def presets() -> list[dict[str, Any]]:
-        return [{"key": p.key, "name": p.name, "description": p.description} for p in PRESETS.values()]
+        return [{"key": p.key, "name": p.name, "description": p.description, "group": p.group}
+                for p in PRESETS.values()]
 
     @app.post("/api/profiles/train")
     def train(req: TrainReq) -> dict[str, Any]:

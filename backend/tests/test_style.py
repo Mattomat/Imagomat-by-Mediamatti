@@ -277,3 +277,27 @@ def test_scopes_touch_white_and_black(tmp_path: Path):
     sc = scopes(render(lin, XYZ_TO_SRGB, np.ones(3), {**crs, "WhiteBalance": "As Shot"}, 1, {}, None))
     assert abs(sc["p_hi"] - HI_TARGET) < 0.03 and abs(sc["p_lo"] - LO_TARGET) < 0.02
     assert sc["white_clip"] < 0.02 and sc["black_clip"] < 0.02            # leicht, nicht ausgefressen
+
+
+def test_football_presets_build_with_masks():
+    from imagomat.style.develop import predict_all
+    from imagomat.style.presets import FOOTBALL
+
+    s = load_settings()
+    a = {"lin_log_median": -4, "lin_log_p99": -1.5, "lin_log_p01": -9, "median": 0.3, "as_shot_temp": 4200,
+         "as_shot_tint": 12, "subject_fraction": 0.2, "subject_bbox": [0.35, 0.2, 0.6, 0.85], "noise_sigma_mid": 0.006,
+         "preview_w": 1200, "preview_h": 800, "scene": {"sport_floodlight": 0.9}, "bottom_luma": 0.4, "mid_luma": 0.35}
+    for p in FOOTBALL:
+        it = ImageDevelop(1, Record(a, {"iso": 6400}, None), 1, 6000, 4000)
+        predict_all([it], None, s, p.key)
+        build_settings(it, s, Dialect())
+        assert it.preset == p.key
+        names = [c["CorrectionName"] for c in it.crs["MaskGroupBasedCorrections"]]
+        assert "Spieler" in names and "Verlauf unten" in names, (p.key, names)
+        kinds = {m["What"] for c in it.crs["MaskGroupBasedCorrections"] for m in c["CorrectionMasks"]}
+        if any(r.kind == "spotlight" for r in p.masks):
+            assert "Mask/CircularGradient" in kinds
+    bw = ImageDevelop(1, Record(a, {"iso": 6400}, None), 1, 6000, 4000)
+    predict_all([bw], None, s, "fb_bw")
+    build_settings(bw, s, Dialect())
+    assert float(bw.crs["Saturation"]) == -100

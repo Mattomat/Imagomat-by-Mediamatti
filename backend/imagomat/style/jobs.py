@@ -20,6 +20,7 @@ from ..lightroom.xmp import read_xmp
 from .develop import ImageDevelop, develop_items
 from .features import cached_record, image_record
 from .model import Record, StyleModel
+from .presets import PRESETS
 from .sources import analysis_source, TrainingSample, filter_samples, from_catalog, from_folder, load_preset
 
 log = logging.getLogger(__name__)
@@ -162,7 +163,9 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
     settings = load_settings()
     shoot = db.one("SELECT * FROM shoots WHERE id=?", (shoot_id,))
     if profile and profile.startswith("preset:"):
-        profile = None                      # ausdrücklich ohne eigenen Stil ("Standard")
+        key = profile.split(":", 1)[1]      # ausdrücklich ohne eigenen Stil: Standard oder ein Preset
+        preset = key if key in PRESETS else preset
+        profile = None
     else:
         profile = profile or (shoot["profile"] if shoot else None) or settings.default_profile
     model = StyleModel.load(profile) if profile else None

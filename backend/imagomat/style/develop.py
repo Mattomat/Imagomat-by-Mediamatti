@@ -165,7 +165,8 @@ def bottom_fade(it: ImageDevelop, settings: Settings) -> dict[str, Any] | None:
         ev = -0.8 - 0.9 * float(np.clip((bottom - 0.2) / 0.4, 0, 1)) - 0.4 * float(np.clip(rel / 0.2, 0, 1))
         if bottom < 0.1:
             ev = -0.5                         # unten schon fast schwarz: nicht absaufen lassen
-    ev *= ds.bottom_fade_strength
+    preset_fade = PRESETS[it.preset].fade if it.prediction is None and it.preset in PRESETS else 1.0
+    ev *= ds.bottom_fade_strength * preset_fade
     start = 0.5
     sb = a.get("subject_bbox")
     if sb:
@@ -246,7 +247,16 @@ def _preset_masks(it: ImageDevelop, dialect: Dialect) -> list[dict[str, Any]]:
               "has_sky": (a.get("sky_fraction") or 0) > 0.05, "has_face": (a.get("face_count") or 0) > 0}[r.condition]
         if not ok:
             continue
-        comp = mk.ai_component(r.kind, dialect, r.name)
+        if r.kind == "gradient_top":
+            comp = mk.gradient_component((0.5, 0.4), (0.5, 0.0), it.orientation, r.name)
+        elif r.kind == "spotlight":
+            # Radialfilter um die Spieler, aussen dunkler (invertiert)
+            x0, y0, x1, y1 = a.get("subject_bbox") or (0.3, 0.2, 0.7, 0.9)
+            w, h = x1 - x0, y1 - y0
+            box = (x0 - w * 0.45, y0 - h * 0.3, x1 + w * 0.45, y1 + h * 0.25)
+            comp = mk.radial_component(box, it.orientation, feather=85, inverted=True, name=r.name)
+        else:
+            comp = mk.ai_component(r.kind, dialect, r.name)
         out.append(mk.correction(r.name, r.local, [comp]))
     return out
 

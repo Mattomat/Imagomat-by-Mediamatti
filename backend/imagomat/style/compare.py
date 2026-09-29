@@ -29,9 +29,22 @@ def load_model(name: str) -> StyleModel | None:
 
 
 def styles() -> list[dict[str, Any]]:
-    out = [{"key": p["name"], "label": p["name"], "n": p.get("n")} for p in list_profiles()]
-    out.append({"key": AUTO, "label": "Standard (ohne eigenen Stil)", "n": None})
+    from .presets import PRESETS
+
+    out = [{"key": p["name"], "label": p["name"], "n": p.get("n"), "group": "Deine Stile"} for p in list_profiles()]
+    out += [{"key": f"preset:{p.key}", "label": p.name, "n": None, "group": p.group, "description": p.description}
+            for p in PRESETS.values() if p.group]
+    out.append({"key": AUTO, "label": "Standard (automatisch)", "n": None, "group": "Standard"})
     return out
+
+
+def label(key: str | None) -> str | None:
+    from .presets import PRESETS
+
+    if key and key.startswith("preset:") and key[7:] in PRESETS:
+        p = PRESETS[key[7:]]
+        return f"{p.group}: {p.name}" if p.group else p.name
+    return key
 
 
 def sample_images(db: Database, shoot_id: int, n: int = 3) -> list[int]:

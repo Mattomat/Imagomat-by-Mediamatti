@@ -63,17 +63,18 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const selection = selectionFromSettings(shoot?.settings);
   const peopleMode = (() => { try { return JSON.parse(shoot?.settings || "{}").mode === "people"; } catch { return false; } })();
   const [tagging, setTagging] = useState(false);
-  const [style, setStyle] = useState<{ used: string | null; is_preset: boolean; profiles: string[] } | null>(null);
+  type StyleInfo = { used: string | null; label: string | null; is_preset: boolean; profiles: string[] };
+  const [style, setStyle] = useState<StyleInfo | null>(null);
   useEffect(() => {
-    api.get<{ used: string | null; is_preset: boolean; profiles: string[] }>(`/api/shoots/${id}/style`).then(setStyle).catch(() => undefined);
+    api.get<StyleInfo>(`/api/shoots/${id}/style`).then(setStyle).catch(() => undefined);
   }, [id, ctx.tick]);
   const redevelop = async (profile: string) => {
     const r = await api.post<{ job_id: number }>(`/api/shoots/${id}/run/develop`, { profile });
     ctx.refreshJobs();
     await waitForJob(r.job_id);
-    ctx.toast(profile.startsWith("preset:") ? "Neu bearbeitet (Standard)" : `Neu bearbeitet mit „${profile}“`);
+    ctx.toast(profile === "preset:auto" ? "Neu bearbeitet (Standard)" : "Neu bearbeitet");
     load();
-    api.get<{ used: string | null; is_preset: boolean; profiles: string[] }>(`/api/shoots/${id}/style`).then(setStyle);
+    api.get<StyleInfo>(`/api/shoots/${id}/style`).then(setStyle);
   };
   const [comparing, setComparing] = useState(false);
   const [teamsAll, setTeamsAll] = useState<string[]>([]);
@@ -191,7 +192,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
                       {style.profiles.map((p) => <option key={p}>{p}</option>)}
                     </select>
                   : <button className="link" onClick={() => ctx.go({ name: "style" })}>Eigenen Stil lernen →</button>}</>
-                : <>Stil: <b>{style.used}</b> <select value="" onChange={(e) => e.target.value && redevelop(e.target.value)}>
+                : <>Stil: <b>{style.label ?? style.used}</b> <select value="" onChange={(e) => e.target.value && redevelop(e.target.value)}>
                     <option value="">ändern …</option>
                     {style.profiles.map((p) => <option key={p}>{p}</option>)}
                   </select></>}
@@ -512,18 +513,21 @@ function TagExportDialog({ ctx, shoot, total, onClose }: { ctx: AppCtx; shoot: S
 function StyleCompare({ shootId, current, onApply, onClose }: {
   shootId: number; current: string | null; onApply: (style: string) => void; onClose: () => void;
 }) {
-  const [data, setData] = useState<{ images: number[]; styles: { key: string; label: string; n: number | null }[] } | null>(null);
+  type Opt = { key: string; label: string; n: number | null; group: string; description?: string };
+  const [data, setData] = useState<{ images: number[]; styles: Opt[] } | null>(null);
   useEffect(() => { api.get<typeof data>(`/api/shoots/${shootId}/compare`).then(setData).catch(() => undefined); }, [shootId]);
   return (
     <Modal title="Stile vergleichen" onClose={onClose} wide>
       <p className="hint">Dieselben Bilder mit jedem deiner Stile bearbeitet (Vorschau, noch nichts gespeichert). Wähle den, der dir am besten gefällt: er wird dann für alle Bilder des Shoots übernommen.</p>
       {!data ? <p className="muted">Lade …</p> : (
         <div className="compare">
-          {data.styles.map((s) => (
-            <div key={s.key} className={`compare-row ${current === s.key ? "on" : ""}`} style={{ ["--n" as string]: data.images.length }}>
+          {data.styles.map((s, i) => (<div key={s.key}>
+            {(i === 0 || data.styles[i - 1].group !== s.group) && <h3 className="compare-group">{s.group}</h3>}
+            <div className={`compare-row ${current === s.key ? "on" : ""}`} style={{ ["--n" as string]: data.images.length }}>
               <div className="cr-name">
                 {s.label}
                 {s.n ? <span className="muted">aus {s.n} Bildern gelernt</span> : null}
+                {s.description ? <span className="muted">{s.description}</span> : null}
                 {current === s.key ? <span className="muted">aktuell</span> : null}
                 <button className="primary small" onClick={() => onApply(s.key)}>Für alle übernehmen</button>
               </div>
@@ -531,7 +535,7 @@ function StyleCompare({ shootId, current, onApply, onClose }: {
                 <img key={iid} loading="lazy" src={api.img(`/api/images/${iid}/styled?style=${encodeURIComponent(s.key)}&size=900`)} />
               ))}
             </div>
-          ))}
+          </div>))}
         </div>
       )}
     </Modal>
