@@ -79,7 +79,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: frontend/src-tauri/wheels/*.whl
-          key: rawpy-${{ env.RAWPY_REF }}-libraw-${{ env.LIBRAW_REF }}-py312-arm64
+          key: rawpy-${{ env.RAWPY_REF }}-libraw-${{ env.LIBRAW_REF }}-py312-arm64-nodeps-${{ hashFiles('scripts/rawpy_no_external_deps.py') }}
       - name: RAW-Leser mit neuester LibRaw bauen
         if: steps.rawpy-cache.outputs.cache-hit != 'true'
         env:
@@ -91,9 +91,19 @@ jobs:
           git submodule update --init -q external/LibRaw external/LibRaw-cmake
           (cd external/LibRaw && git fetch -q --depth 1 origin "$LIBRAW_REF" && git checkout -q FETCH_HEAD)
           grep -c "ILCE-7M5" external/LibRaw/src/tables/cameralist.cpp
+          # Keine Homebrew-Bibliotheken einbinden (fehlen auf den Macs der Nutzer)
+          python3 "$GITHUB_WORKSPACE/scripts/rawpy_no_external_deps.py" setup.py
           "$GITHUB_WORKSPACE/frontend/src-tauri/bin/uv" build --wheel --python 3.12 \
             --out-dir "$GITHUB_WORKSPACE/frontend/src-tauri/wheels" .
           ls -la "$GITHUB_WORKSPACE/frontend/src-tauri/wheels"
+      - name: RAW-Leser prüfen (nur macOS-Systembibliotheken)
+        run: |
+          rm -rf /tmp/wcheck && mkdir -p /tmp/wcheck
+          unzip -q -o frontend/src-tauri/wheels/rawpy-*.whl -d /tmp/wcheck
+          for f in /tmp/wcheck/rawpy/*.so /tmp/wcheck/rawpy/*.dylib; do otool -L "$f"; done | tee /tmp/wcheck/deps.txt
+          if grep -E "/opt/homebrew|/usr/local|/opt/local" /tmp/wcheck/deps.txt; then
+            echo "::error::RAW-Leser hängt von Bibliotheken ab, die auf Nutzer-Macs fehlen"; exit 1
+          fi
       - name: Frontend + App bauen
         working-directory: frontend
         run: |
@@ -129,6 +139,8 @@ jobs:
               PY="$HOME/Library/Application Support/Imagomat/runtime/venv/bin/python"
               "$PY" -c "import rawpy, os, glob; d=os.path.dirname(rawpy.__file__); print(rawpy.__version__, rawpy.libraw_version); print([os.path.basename(x) for x in glob.glob(d+'/libraw*')])"
               LIB=$(ls "$HOME/Library/Application Support/Imagomat/runtime/venv/lib/python3.12/site-packages/rawpy/"libraw_r*.dylib | head -n 1)
+              for f in "$(dirname "$LIB")"/*.so "$(dirname "$LIB")"/*.dylib; do otool -L "$f"; done > /tmp/rawdeps.txt
+              if grep -E "/opt/homebrew|/usr/local" /tmp/rawdeps.txt; then echo "::error::RAW-Leser braucht Homebrew-Bibliotheken"; exit 1; fi
               if strings "$LIB" | grep -q "ILCE-7M5"; then echo "Sony A7 V (ILCE-7M5) wird gelesen"; else echo "::error::RAW-Leser kennt die A7 V nicht"; exit 1; fi
               echo "--- Einrichtung (Auszug) ---"
               grep -v "^\[KI-Pakete" ~/Library/Application\ Support/Imagomat/logs/setup.log | tail -n 40 || true

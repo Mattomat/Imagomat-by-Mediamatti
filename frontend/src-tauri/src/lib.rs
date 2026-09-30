@@ -153,22 +153,39 @@ fn prepare_uv(res: &Path, runtime: &Path) -> Result<PathBuf, String> {
 }
 
 /// Mitgelieferte Wheels installieren (z. B. rawpy mit der neuesten LibRaw: liest auch ganz neue Kameras
-/// wie die Sony A7 V ohne Adobe DNG Converter). Ersetzt die Version aus dem Internet.
+/// wie die Sony A7 V ohne Adobe DNG Converter). Ersetzt die Version aus dem Internet. Lässt sich das
+/// Paket danach nicht laden, kommt die Version aus dem Internet zurück: die App muss immer starten.
 fn install_bundled_wheels(app: &AppHandle, uv: &Path, python: &Path, dir: &Path) {
     let Ok(entries) = fs::read_dir(dir) else { return };
+    let stage = "RAW-Leser (neueste Kameras)";
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("whl") {
             continue;
         }
-        let stage = "RAW-Leser (neueste Kameras)";
-        if let Err(e) = run_logged(
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        let package = name.split('-').next().unwrap_or("").to_string();
+        let installed = run_logged(
             app,
             stage,
             0.28,
             Command::new(uv).args(["pip", "install", "--reinstall", "--no-deps", "--python"]).arg(python).arg(&path),
-        ) {
-            emit(app, stage, &format!("übersprungen: {e}"), 0.28, false, false);
+        );
+        let loads = installed.is_ok()
+            && Command::new(python)
+                .args(["-c", &format!("import {package}, importlib; importlib.import_module('{package}._{package}')")])
+                .env("PATH", gui_path())
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+        if !loads {
+            emit(app, stage, "mitgelieferte Version lässt sich nicht laden, nehme Standardversion", 0.28, false, false);
+            let _ = run_logged(
+                app,
+                stage,
+                0.28,
+                Command::new(uv).args(["pip", "install", "--reinstall", "--python"]).arg(python).arg(&package),
+            );
         }
     }
 }
