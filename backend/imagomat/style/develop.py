@@ -159,21 +159,22 @@ def bottom_fade(it: ImageDevelop, settings: Settings) -> dict[str, Any] | None:
         return None
     a = it.record.analysis
     bottom, mid = a.get("bottom_luma"), a.get("mid_luma")
-    ev = -1.1
+    ev = -0.9
     if bottom is not None:
         rel = bottom - (mid if mid is not None else bottom)
-        ev = -0.8 - 0.9 * float(np.clip((bottom - 0.2) / 0.4, 0, 1)) - 0.4 * float(np.clip(rel / 0.2, 0, 1))
+        ev = -0.6 - 0.6 * float(np.clip((bottom - 0.2) / 0.4, 0, 1)) - 0.3 * float(np.clip(rel / 0.2, 0, 1))
         if bottom < 0.1:
-            ev = -0.5                         # unten schon fast schwarz: nicht absaufen lassen
+            ev = -0.4                         # unten schon fast schwarz: nicht absaufen lassen
     preset_fade = PRESETS[it.preset].fade if it.prediction is None and it.preset in PRESETS else 1.0
     ev *= ds.bottom_fade_strength * preset_fade
-    start = 0.5
+    # Verlauf beginnt erst unter den Spielern (Beine/Füsse bleiben hell), ohne Motiv bei 60 %
+    start = 0.6
     sb = a.get("subject_bbox")
     if sb:
-        start = float(np.clip(sb[1] + (sb[3] - sb[1]) * 0.6, 0.45, 0.7))
+        start = float(np.clip(sb[1] + (sb[3] - sb[1]) * 0.85, 0.55, 0.8))
     soft = float(np.clip(ds.bottom_fade_strength, 0.3, 1.5))
-    local = {"Exposure2012": round(ev, 2), "Highlights2012": -25, "Saturation": -15,
-             "Sharpness": round(-60 * soft), "Clarity2012": round(-30 * soft), "Texture": round(-40 * soft)}
+    local = {"Exposure2012": round(ev, 2), "Highlights2012": -20, "Saturation": -10,
+             "Sharpness": round(-50 * soft), "Clarity2012": round(-25 * soft), "Texture": round(-35 * soft)}
     comp = mk.gradient_component((0.5, start), (0.5, 1.0), it.orientation, "Verlauf unten")
     return mk.correction("Verlauf unten", local, [comp])
 

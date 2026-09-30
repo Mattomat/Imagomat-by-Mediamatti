@@ -73,6 +73,9 @@ class CullingSettings:
     highlights_action_weight: float = 0.65
     moment_gap_seconds: float = 4.0     # Bilder innerhalb dieses Abstands = dieselbe Spielszene
     max_keep: int | None = None         # höchstens so viele Bilder behalten (None = nur Prozent)
+    # "Nur Schlechte raus": keine Prozent-Quote; es fliegen nur technisch schlechte Bilder raus und aus einer
+    # Serie mit (fast) gleichem Motiv bleiben höchstens so viele. 0 = alte Prozent-Auswahl (keep_ratio).
+    burst_keep: int = 2
     weights: dict[str, float] = field(default_factory=lambda: {
         "sharpness": 0.30, "face_quality": 0.25, "exposure": 0.15, "aesthetic": 0.20, "composition": 0.10,
     })
@@ -90,6 +93,9 @@ class KeywordSettings:
     person_keyword_style: str = "name"
     # Imagomat-Arbeitsstichwörter (Behalten, Denoise, Prüfen, Moment) mit ausgeben
     workflow_keywords: bool = False
+    # Inhalts-Stichwörter (Fans, Team, Jubel, Trainer ...): "no_person" = nur wenn keine Person erkannt,
+    # "always" = immer zusätzlich, "off" = nie
+    content_keywords: str = "no_person"
 
 
 @dataclass

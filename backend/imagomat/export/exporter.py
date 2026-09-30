@@ -30,6 +30,7 @@ from ..analysis import load_masks
 from ..config import load_settings
 from ..culling.engine import REASONS_DE
 from ..vision.action import MOMENTS_DE
+from ..vision.tags import ensure_tags, labels as tag_labels
 from ..db import Database
 from ..io import raw as raw_io
 from ..jobs import JobContext, job
@@ -81,6 +82,14 @@ def _items(db: Database, shoot_id: int, include_rejected: bool) -> list[ExportIt
         "LEFT JOIN culling c ON c.image_id=i.id LEFT JOIN edits e ON e.image_id=i.id "
         "LEFT JOIN analysis a ON a.image_id=i.id WHERE i.shoot_id=? ORDER BY i.capture_time, i.filename",
         (shoot_id,))
+    if kw.content_keywords != "off":
+        ensure_tags(db, [r["id"] for r in rows if include_rejected or (r["decision"] or "keep") != "reject"])
+        rows = db.query(
+            "SELECT i.*, c.decision, c.rating, c.label, c.reasons, c.series_id, c.is_series_best, c.score, "
+            "e.params, e.masks, e.confidence, e.denoise, a.data FROM images i "
+            "LEFT JOIN culling c ON c.image_id=i.id LEFT JOIN edits e ON e.image_id=i.id "
+            "LEFT JOIN analysis a ON a.image_id=i.id WHERE i.shoot_id=? ORDER BY i.capture_time, i.filename",
+            (shoot_id,))
     out = []
     for r in rows:
         decision = r["decision"] or "keep"
@@ -104,6 +113,8 @@ def _items(db: Database, shoot_id: int, include_rejected: bool) -> list[ExportIt
         for p in image_people(db, r["id"]):
             it.keywords.append(p.keyword)
             it.people.append(p.name)
+        if kw.content_keywords == "always" or (kw.content_keywords == "no_person" and not it.people):
+            it.keywords += [t for t in tag_labels(a.get("tags")) if t not in it.keywords]
         # Arbeits-Stichwörter (Behalten, Denoise, Prüfen ...) nur auf Wunsch; Standard: nur Personen
         wf = kw.workflow_keywords
         if wf and decision == "reject":

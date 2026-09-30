@@ -152,6 +152,27 @@ fn prepare_uv(res: &Path, runtime: &Path) -> Result<PathBuf, String> {
     Ok(dst)
 }
 
+/// Mitgelieferte Wheels installieren (z. B. rawpy mit der neuesten LibRaw: liest auch ganz neue Kameras
+/// wie die Sony A7 V ohne Adobe DNG Converter). Ersetzt die Version aus dem Internet.
+fn install_bundled_wheels(app: &AppHandle, uv: &Path, python: &Path, dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("whl") {
+            continue;
+        }
+        let stage = "RAW-Leser (neueste Kameras)";
+        if let Err(e) = run_logged(
+            app,
+            stage,
+            0.28,
+            Command::new(uv).args(["pip", "install", "--reinstall", "--no-deps", "--python"]).arg(python).arg(&path),
+        ) {
+            emit(app, stage, &format!("übersprungen: {e}"), 0.28, false, false);
+        }
+    }
+}
+
 fn bootstrap(app: &AppHandle) -> Result<PathBuf, String> {
     let res = app.path().resource_dir().map_err(|e| e.to_string())?;
     let runtime = data_root().join("runtime");
@@ -186,6 +207,7 @@ fn bootstrap(app: &AppHandle) -> Result<PathBuf, String> {
             .arg(&python)
             .arg(format!("{}[scrape]", src.display())),
     )?;
+    install_bundled_wheels(app, &uv, &python, &res.join("wheels"));
     let n = ML_PACKAGES.len() as f32;
     for (i, pkg) in ML_PACKAGES.iter().enumerate() {
         let p = 0.3 + 0.65 * (i as f32) / n;

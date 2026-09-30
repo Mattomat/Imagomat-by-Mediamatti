@@ -48,8 +48,8 @@ export default function PersonDetail({ person, teams, onClose, onChanged, toast 
   };
 
   const unassign = async (img: PImage) => {
-    if (!img.face_id) return;
-    await api.post(`/api/faces/${img.face_id}/unassign`, {});
+    // Person aus dem Bild entfernen; Imagomat merkt sich das und ordnet das Bild nicht wieder falsch zu
+    await api.del(`/api/images/${img.image_id}/persons/${pid}`);
     setImages((xs) => xs?.filter((x) => x.image_id !== img.image_id) ?? null);
     setBig(null);
     onChanged();
@@ -75,7 +75,7 @@ export default function PersonDetail({ person, teams, onClose, onChanged, toast 
             </div>
             <div className="hint">
               {images ? `${images.length} Bilder${shoots.length ? ` · ${shoots.length} Shoot${shoots.length > 1 ? "s" : ""}` : ""}` : "lädt …"}
-              {" · "}Heisst jemand gleich, werden beide zusammengeführt.
+              {" · "}Falsches Bild? Mit ✕ entfernen, Imagomat lernt daraus.
             </div>
           </div>
           <button className="ghost" onClick={onClose}>✕</button>
@@ -87,6 +87,8 @@ export default function PersonDetail({ person, teams, onClose, onChanged, toast 
             <div key={img.image_id} className="pd-thumb" onClick={() => setBig(img)} title={`${img.filename} · ${img.shoot}`}>
               <img loading="lazy" src={api.img(img.face_id ? `/api/faces/${img.face_id}/crop` : `/api/images/${img.image_id}/preview`)} />
               {img.via === "number" && <span className="pd-via">#</span>}
+              <button className="pd-del" title={`Das ist nicht ${name.split(" ")[0]}`}
+                onClick={(e) => { e.stopPropagation(); unassign(img); }}>✕</button>
             </div>
           ))}
         </div>
@@ -105,7 +107,7 @@ export default function PersonDetail({ person, teams, onClose, onChanged, toast 
             <div className="pd-big-bar" onClick={(e) => e.stopPropagation()}>
               <span>{big.filename} · {big.shoot}{big.capture_time ? ` · ${new Date(big.capture_time * 1000).toLocaleDateString()}` : ""}</span>
               <span className="spacer" />
-              {big.face_id && <button onClick={() => unassign(big)}>Das ist nicht {name.split(" ")[0]}</button>}
+              <button onClick={() => unassign(big)}>Das ist nicht {name.split(" ")[0]}</button>
               <button className="ghost" onClick={() => setBig(null)}>Zurück</button>
             </div>
           </div>

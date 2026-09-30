@@ -30,6 +30,7 @@ from ..analysis import import_folder, load_cached_preview, load_masks
 from ..config import Settings, cache_dir, load_settings, save_settings
 from ..culling.engine import REASONS_DE
 from ..vision.action import MOMENTS_DE
+from ..vision.tags import labels as tag_labels
 from ..db import Database
 from ..io import raw as raw_io
 from ..jobs import JobManager
@@ -56,6 +57,7 @@ class ImportReq(BaseModel):
     keep_ratio: float | None = None
     highlights: bool | None = None
     max_keep: int | None = None
+    burst_keep: int | None = None
     mode: str | None = None          # "full" (Standard) | "people" (nur Personen, z. B. fertige JPGs)
     run: bool = True
 
@@ -330,7 +332,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
             db.update_shoot_settings(sid, teams=req.teams)
         job_id = jobs.submit("pipeline", sid, keep_ratio=req.keep_ratio, profile=req.profile,
                              preset=req.preset, highlights=req.highlights,
-                             max_keep=req.max_keep, mode=req.mode) if req.run else None
+                             max_keep=req.max_keep, mode=req.mode,
+                             burst_keep=req.burst_keep) if req.run else None
         return {"shoot_id": sid, "job_id": job_id}
 
     @app.patch("/api/shoots/{sid}")
@@ -394,6 +397,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "faces": a.get("face_count", 0),
                 "moment": MOMENTS_DE.get(a.get("moment") or ""), "action": a.get("action"),
                 "people_check": a.get("people_check", []),
+                "tags": tag_labels(a.get("tags")),
             })
         return out
 
@@ -742,14 +746,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
         with db.tx() as c:
             c.execute("INSERT INTO numbers(image_id, text, confidence, bbox, person_id) VALUES(?,?,?,?,?)",
                       (iid, "#manuell", 1.0, None, pid))
+            c.execute("DELETE FROM person_rejects WHERE image_id=? AND person_id=?", (iid, pid))
         return {"person_id": pid}
 
     @app.delete("/api/images/{iid}/persons/{pid}")
     def remove_image_person(iid: int, pid: int) -> dict[str, Any]:
-        with db.tx() as c:
-            c.execute("DELETE FROM numbers WHERE image_id=? AND person_id=? AND text='#manuell'", (iid, pid))
-            c.execute("UPDATE numbers SET person_id=NULL WHERE image_id=? AND person_id=?", (iid, pid))
-            c.execute("UPDATE faces SET person_id=NULL, assigned_by=NULL WHERE image_id=? AND person_id=?", (iid, pid))
+        """Person aus dem Bild entfernen und merken (wird nicht wieder automatisch zugeordnet)."""
+        from ..people.registry import reject
+
+        reject(db, iid, pid)
         return {"ok": True}
 
     @app.post("/api/shoots/{sid}/clusters/{cid}/assign")
@@ -763,6 +768,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def assign_f(fid: int, req: AssignReq) -> dict[str, Any]:
         pid = _person_from(req)
         assign_face(db, fid, pid, "manual")
+        if pid is not None:
+            with db.tx() as c:          # du hast es selbst so benannt: frühere Ablehnung aufheben
+                c.execute("DELETE FROM person_rejects WHERE person_id=? AND image_id=(SELECT image_id FROM faces "
+                          "WHERE id=?)", (pid, fid))
         return {"person_id": pid}
 
     @app.post("/api/roster")
@@ -828,8 +837,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/faces/{fid}/unassign")
     def unassign_face(fid: int) -> dict[str, Any]:
-        """Falsch erkanntes Gesicht von der Person lösen."""
-        assign_face(db, fid, None)
+        """Falsch erkanntes Gesicht von der Person lösen (und merken, damit es nicht wiederkommt)."""
+        from ..people.registry import reject
+
+        f = db.one("SELECT image_id, person_id FROM faces WHERE id=?", (fid,))
+        if f and f["person_id"]:
+            reject(db, int(f["image_id"]), int(f["person_id"]))
+        else:
+            assign_face(db, fid, None)
         return {"ok": True}
 
     @app.get("/api/persons/{pid}/face")

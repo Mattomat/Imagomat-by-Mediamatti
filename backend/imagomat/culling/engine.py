@@ -146,11 +146,8 @@ def hard_reasons(f: dict[str, float], cs: CullingSettings) -> list[str]:
         r.append("bewegung")
     if f["has_face"] and f["face_size"] > 0.05 and f["eyes_open"] < 0.35:
         r.append("augen_zu")
-    if f["has_face"] and f["yaw"] > 75 and f["face_size"] > 0.08:
-        r.append("abgewandt")
-    if f["cut"] and f["has_face"] and f["face_size"] > 0.08:
-        r.append("angeschnitten")
-    if f["clip_hi"] > 0.12:
+    # Abgewandt/angeschnitten sind im Sport oft gerade die guten Bilder: kein harter Ausschluss mehr
+    if f["clip_hi"] > 0.3:
         r.append("ueberbelichtet")
     if f["median"] < 0.06 and f["clip_lo"] > 0.5:
         r.append("unterbelichtet")
@@ -222,7 +219,56 @@ def near_duplicate(a: CullItem, b: CullItem, window: float = 900.0) -> bool:
     return False
 
 
+def select_clean(items: list[CullItem], cs: CullingSettings) -> None:
+    """Nur Schlechte raus: technisch Misslungenes weg, aus jeder Serie (fast gleiches Motiv) nur die besten
+    ``burst_keep`` Bilder, die sich auch wirklich unterscheiden. Keine Prozent-Quote."""
+    by_series: dict[int, list[CullItem]] = {}
+    for it in items:
+        by_series.setdefault(it.series, []).append(it)
+    kept_all: list[CullItem] = []
+    for members in by_series.values():
+        members.sort(key=lambda x: -x.score)
+        kept: list[CullItem] = []
+        for it in members:
+            if it.hard:
+                continue
+            if not kept:
+                it.best = True
+                kept.append(it)
+                continue
+            if len(kept) >= max(1, cs.burst_keep):
+                it.reasons.append(_weaker_reason(it, kept[0]) or "serie")
+                continue
+            same = any((it.emb is not None and k.emb is not None and float(it.emb @ k.emb) > cs.duplicate_similarity)
+                       or _phash_dist(it.phash, k.phash) <= 6 for k in kept)
+            if same or it.score < kept[0].score * 0.75:
+                it.reasons.append(_weaker_reason(it, kept[0]) or ("duplikat" if same else "serie"))
+                continue
+            kept.append(it)
+        kept_all += kept
+    # Gleiches Bild über eine Seriengrenze hinweg (wenige Sekunden später): nur wenn fast identisch
+    kept_all.sort(key=lambda x: -(x.score + (0.05 if x.best else 0.0)))
+    final: list[CullItem] = []
+    for it in kept_all:
+        twin = next((k for k in final if abs(it.t - k.t) <= 5 and (
+            _phash_dist(it.phash, k.phash) <= 6 or (it.emb is not None and k.emb is not None
+                                                     and len(it.emb) == len(k.emb) and len(it.emb) >= 512
+                                                     and float(it.emb @ k.emb) >= 0.97))), None)
+        if twin is not None:
+            it.reasons.append("duplikat")
+            continue
+        if cs.max_keep and len(final) >= int(cs.max_keep):
+            it.reasons.append("strenge")
+            continue
+        it.keep = True
+        final.append(it)
+    for it in items:
+        it.reasons = it.hard + [r for r in it.reasons if r not in it.hard]
+
+
 def select(items: list[CullItem], cs: CullingSettings, w_action: float = 0.0) -> None:
+    if cs.burst_keep and not cs.highlights:
+        return select_clean(items, cs)
     n = len(items)
     ratio = min(cs.keep_ratio, cs.highlights_ratio) if cs.highlights else cs.keep_ratio
     target = max(1, int(round(ratio * n)))
@@ -326,7 +372,7 @@ def cull(items: list[CullItem], cs: CullingSettings, model: Any | None = None) -
 
 @job("cull")
 def cull_shoot(ctx: JobContext, shoot_id: int, keep_ratio: float | None = None, highlights: bool | None = None,
-               max_keep: int | None = None) -> None:
+               max_keep: int | None = None, burst_keep: int | None = None) -> None:
     from .calibrate import CullingModel
 
     db = ctx.db
@@ -336,7 +382,7 @@ def cull_shoot(ctx: JobContext, shoot_id: int, keep_ratio: float | None = None, 
     # Einstellungen pro Shoot merken, damit ein erneutes Culling dieselbe Auswahl-Art nutzt
     culling_opts = {**shoot_settings.get("culling", {}),
                     **{k: v for k, v in (("keep_ratio", keep_ratio), ("highlights", highlights),
-                                         ("max_keep", max_keep)) if v is not None}}
+                                         ("max_keep", max_keep), ("burst_keep", burst_keep)) if v is not None}}
     if max_keep == 0:
         culling_opts.pop("max_keep", None)
     if culling_opts != shoot_settings.get("culling", {}):
@@ -344,6 +390,10 @@ def cull_shoot(ctx: JobContext, shoot_id: int, keep_ratio: float | None = None, 
     if culling_opts.get("keep_ratio") is not None:
         cs.keep_ratio = float(culling_opts["keep_ratio"])
     cs.highlights = bool(culling_opts.get("highlights", cs.highlights))
+    if culling_opts.get("burst_keep") is not None:
+        cs.burst_keep = int(culling_opts["burst_keep"])
+    elif culling_opts.get("keep_ratio") is not None:
+        cs.burst_keep = 0          # ältere Shoots: mit Prozent-Auswahl angelegt
     if culling_opts.get("max_keep"):
         cs.max_keep = int(culling_opts["max_keep"])
     from ..analysis import ensure_action

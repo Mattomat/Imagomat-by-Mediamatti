@@ -108,6 +108,31 @@ def test_near_duplicates_not_kept_twice():
     for i, it in enumerate(items):
         it.t = i * 60.0                      # jede Minute ein Bild -> eigene Serien
         it.phash = "f" * 16 if i < 6 else format(i * 12345678901, "016x")[:16]
-    out = cull(items, CullingSettings(keep_ratio=0.5))
+    out = cull(items, CullingSettings(keep_ratio=0.5, burst_keep=0))
     kept_same = [it for it in out if it.keep and it.phash == "f" * 16]
     assert len(kept_same) == 1
+
+
+def test_clean_mode_only_drops_bad_and_bursts():
+    """Standard: keine Quote. Schlechte raus, aus 10 fast gleichen Bildern bleiben 2."""
+    items = _items(20)
+    for i, it in enumerate(items):
+        if i < 10:
+            it.t = i * 0.1                               # Serie: 10 Bilder in einer Sekunde, gleiches Motiv
+            it.phash = "f" * 16
+        else:
+            it.t = 100.0 + i * 30.0                      # verschiedene Szenen
+            it.phash = format(i * 12345678901, "016x")[:16]
+    out = cull(items, CullingSettings(burst_keep=2))
+    burst = [it for it in out[:10] if it.keep]
+    others = [it for it in out[10:] if it.keep or it.hard]
+    assert len(burst) <= 2 and len(others) == 10         # alles andere bleibt (ausser echte Fehler)
+
+
+def test_content_tags_from_scores():
+    from imagomat.vision.tags import labels, tags_from_scores
+
+    keys = ["fans", "fans", "team", "trainer", "_neg"]
+    assert tags_from_scores(keys, np.array([30.0, 29.0, 20.0, 18.0, 22.0])) == ["fans"]
+    assert tags_from_scores(keys, np.array([20.0, 20.0, 20.0, 20.0, 26.0])) == []      # nichts Eindeutiges
+    assert labels(["fans", "torhueter", "unbekannt"]) == ["Fans", "Torhüter"]

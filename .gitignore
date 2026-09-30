@@ -8,3 +8,5 @@ frontend/dist/
 src-tauri/target/
 .DS_Store
 *.tsbuildinfo
+
+frontend/src-tauri/wheels/*.whl

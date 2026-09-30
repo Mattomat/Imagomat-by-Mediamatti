@@ -239,7 +239,7 @@ def test_bottom_fade_adapts_per_image():
         return corr[0]["LocalExposure2012"] * 4
 
     bright, dark = fade(0.55, 0.4), fade(0.08, 0.3)
-    assert bright < -1.5 and -0.8 < dark < 0
+    assert bright < -1.2 and -0.6 < dark < 0 and bright < dark
 
 
 def test_punch_sets_white_point_and_background_contrast():

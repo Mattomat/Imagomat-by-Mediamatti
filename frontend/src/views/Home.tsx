@@ -98,7 +98,7 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
           <div className="max-keep">
             höchstens
             <input type="number" min={1} placeholder="–" value={maxKeep} onChange={(e) => setMaxKeep(e.target.value)} />
-            Bilder <span className="muted">(leer = nur Prozent)</span>
+            Bilder <span className="muted">(leer = kein Limit)</span>
           </div>
         </div></>}
         {ov && ov.teams.length > 0 && (

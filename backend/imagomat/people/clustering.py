@@ -19,7 +19,7 @@ from ..db import Database, blob_to_f32
 from ..jobs import JobContext, job
 from ..vision.faces import get_backend
 from ..vision.segmentation import body_boxes
-from .registry import MATCH_THRESHOLD, best_similarity, exemplars, match
+from .registry import MATCH_THRESHOLD, best_similarity, exemplars, match, rejected_pairs
 
 log = logging.getLogger(__name__)
 
@@ -169,8 +169,10 @@ def plausible_back_names(texts, ignored: set[str]) -> set[int]:
     return {rid for rid, (word, _nums) in near.items() if word not in sponsors}
 
 
-MAX_AUTO_YAW = 55.0      # Gesichter von der Seite/hinten nicht automatisch benennen (unsicher)
-MIN_AUTO_FACE = 0.035     # zu kleine Gesichter ebenso
+# Wie in den ersten Versionen: auch kleine Gesichter (Totale) und Halbprofile wiedererkennen.
+# Nur winzige Gesichter und reine Profile/Hinterköpfe bleiben unbenannt.
+MAX_AUTO_YAW = 75.0
+MIN_AUTO_FACE = 0.012
 FRONTAL_YAW = 35.0
 # Trikot sagt Person X, das Gesicht ähnelt X aber überhaupt nicht -> Trikot verwerfen
 SHIRT_VETO = {"insightface": 0.18, "yunet": 0.22, "haar": 0.5}
@@ -224,12 +226,16 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
         "JOIN images i ON i.id=f.image_id WHERE i.shoot_id=?", (shoot_id,))
     ctx.set_total(len(faces) + 2)
     ex, ids = exemplars(db, backend)
+    rejected = rejected_pairs(db, shoot_id)
+    not_on: dict[int, set[int]] = {}
+    for img, pid in rejected:
+        not_on.setdefault(img, set()).add(pid)
     # 1. Gesichter: die Hauptsache
     auto = 0
     for f in faces:
         if f["assigned_by"] in ("manual", "confirmed", "ignored") or f["embedding"] is None:
             continue
-        pid = match(blob_to_f32(f["embedding"]), ex, ids, thr)[0] if _clear(f) else None
+        pid = match(blob_to_f32(f["embedding"]), ex, ids, thr, not_on.get(f["image_id"]))[0] if _clear(f) else None
         with db.tx() as c:
             c.execute("UPDATE faces SET person_id=?, assigned_by=? WHERE id=?",
                       (pid, "auto" if pid else None, f["id"]))
@@ -270,7 +276,7 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
                 bb = json.loads(n["bbox"])
                 ok = (n["confidence"] or 0) >= SHIRT_MIN_CONF and bb[3] - bb[1] >= SHIRT_MIN_HEIGHT
                 pid = resolver.number(text) if ok else None
-            if pid is not None:
+            if pid is not None and (n["image_id"], pid) not in rejected:
                 evidence.setdefault((n["image_id"], pid), []).append(n)
     accepted: dict[int, int] = {}                 # numbers.id -> Person
     via_shirt = vetoed = 0

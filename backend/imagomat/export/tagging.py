@@ -40,8 +40,14 @@ def _face_regions(db, image_id: int) -> list[FaceRegion]:
 def tagged_doc(db, image_id: int, existing: bytes | None, dims: tuple[int, int] | None,
                with_regions: bool) -> XmpDoc:
     """Bestehende Stichwörter/Gesichter behalten, erkannte Personen ergänzen."""
+    from ..vision.tags import labels
+
     old = parse_xmp(existing) if existing else XmpDoc()
-    kws = list(dict.fromkeys([*old.keywords, *(p.keyword for p in image_people(db, image_id))]))
+    people = [p.keyword for p in image_people(db, image_id)]
+    mode = load_settings().keywords.content_keywords
+    content = labels(db.get_analysis(image_id).get("tags")) if mode == "always" or (
+        mode == "no_person" and not people) else []
+    kws = list(dict.fromkeys([*old.keywords, *people, *content]))
     regions = list(old.regions)
     if with_regions:
         known = {r.name for r in regions}
@@ -66,6 +72,11 @@ def tag_export(ctx: JobContext, shoot_id: int, target: str, only_with_people: bo
     rows = db.query("SELECT id, path, filename, orientation, width, height FROM images WHERE shoot_id=? "
                     "ORDER BY capture_time, filename", (shoot_id,))
     kw = load_settings().keywords
+    if kw.content_keywords != "off":
+        from ..vision.tags import ensure_tags
+
+        ctx.progress(0, "Bildinhalte erkennen (Fans, Team, Jubel …)")
+        ensure_tags(db, [r["id"] for r in rows])
     ctx.set_total(len(rows))
     written = named = 0
     for i, r in enumerate(rows):

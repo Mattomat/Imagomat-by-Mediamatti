@@ -58,7 +58,8 @@ def persons(db: Database) -> list[Person]:
 
 # Beispiele einer Person, die keinem anderen ihrer Beispiele ähneln, sind vermutlich falsch benannt
 # (z. B. eine gemischte Gruppe auf einmal benannt). Sie würden sonst fremde Gesichter anziehen.
-EXEMPLAR_SUPPORT = {"insightface": 0.25, "yunet": 0.25}
+# (nur klare Ausreisser: echte Beispiele derselben Person liegen meist deutlich über 0.3)
+EXEMPLAR_SUPPORT = {"insightface": 0.12, "yunet": 0.15}
 
 
 def _clean(lst: list[np.ndarray], min_support: float | None) -> list[np.ndarray]:
@@ -98,8 +99,8 @@ def exemplars(db: Database, backend: str | None = None) -> tuple[np.ndarray, np.
 
 
 def person_scores(emb: np.ndarray, ex: np.ndarray, ids: np.ndarray) -> dict[int, float]:
-    """Ähnlichkeit eines Gesichts zu jeder Person. Robust: Mittel der zwei besten Beispiele, damit ein
-    einzelnes falsches Beispiel nicht reicht."""
+    """Ähnlichkeit eines Gesichts zu jeder Person: bestes Beispiel (wie in den ersten Versionen, die am
+    besten erkannten). Falsch benannte Beispiele fängt die Ausreisser-Bereinigung ab."""
     if len(ids) == 0 or emb is None or ex.shape[1] != emb.shape[0]:
         return {}
     sims = ex @ (emb / (np.linalg.norm(emb) + 1e-9))
@@ -109,7 +110,7 @@ def person_scores(emb: np.ndarray, ex: np.ndarray, ids: np.ndarray) -> dict[int,
     out = {}
     for pid, lst in per.items():
         lst.sort(reverse=True)
-        out[pid] = (lst[0] + lst[1]) / 2 if len(lst) >= 2 else lst[0]
+        out[pid] = lst[0]
     return out
 
 
@@ -121,8 +122,11 @@ def best_similarity(emb: np.ndarray, ex: np.ndarray, ids: np.ndarray, pid: int) 
     return float((ex[mask] @ (emb / (np.linalg.norm(emb) + 1e-9))).max())
 
 
-def match(emb: np.ndarray, ex: np.ndarray, ids: np.ndarray, threshold: float) -> tuple[int | None, float]:
+def match(emb: np.ndarray, ex: np.ndarray, ids: np.ndarray, threshold: float,
+          exclude: set[int] | None = None) -> tuple[int | None, float]:
     scores = person_scores(emb, ex, ids)
+    for pid in exclude or ():
+        scores.pop(pid, None)            # "Das ist nicht X" für dieses Bild
     if not scores:
         return None, 0.0
     ranked = sorted(scores.items(), key=lambda kv: -kv[1])
@@ -219,3 +223,25 @@ def update_person(db: Database, pid: int, name: str | None = None, team: object 
         c.execute("UPDATE persons SET name=?, team=?, number=?, keyword=? WHERE id=?",
                   (new_name, new_team, new_number, keyword_for(new_name, new_team), pid))
     return pid
+
+
+def reject(db: Database, image_id: int, person_id: int) -> None:
+    """Person aus einem Bild entfernen und merken: dieses Bild nie wieder automatisch dieser Person zuordnen.
+    War das Gesicht ein bestätigtes Beispiel, zählt es danach nicht mehr fürs Wiedererkennen."""
+    with db.tx() as c:
+        face = c.execute("SELECT id FROM faces WHERE image_id=? AND person_id=?", (image_id, person_id)).fetchone()
+        c.execute("INSERT OR REPLACE INTO person_rejects(image_id, person_id, face_id, created_at) VALUES(?,?,?,?)",
+                  (image_id, person_id, face["id"] if face else None, time.time()))
+        c.execute("UPDATE faces SET person_id=NULL, assigned_by=NULL WHERE image_id=? AND person_id=?",
+                  (image_id, person_id))
+        c.execute("DELETE FROM numbers WHERE image_id=? AND person_id=? AND text LIKE '#%'", (image_id, person_id))
+        c.execute("UPDATE numbers SET person_id=NULL WHERE image_id=? AND person_id=?", (image_id, person_id))
+
+
+def rejected_pairs(db: Database, shoot_id: int | None = None) -> set[tuple[int, int]]:
+    if shoot_id is None:
+        rows = db.query("SELECT image_id, person_id FROM person_rejects")
+    else:
+        rows = db.query("SELECT r.image_id, r.person_id FROM person_rejects r JOIN images i ON i.id=r.image_id "
+                        "WHERE i.shoot_id=?", (shoot_id,))
+    return {(int(r[0]), int(r[1])) for r in rows}

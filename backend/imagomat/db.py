@@ -115,6 +115,15 @@ CREATE TABLE IF NOT EXISTS numbers (
   person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL
 );
 
+-- "Das ist nicht X": nie wieder automatisch zuordnen (Gesicht oder ganzes Bild)
+CREATE TABLE IF NOT EXISTS person_rejects (
+  image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+  person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+  face_id INTEGER,
+  created_at REAL,
+  PRIMARY KEY (image_id, person_id)
+);
+
 CREATE TABLE IF NOT EXISTS edits (
   image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
   profile TEXT,

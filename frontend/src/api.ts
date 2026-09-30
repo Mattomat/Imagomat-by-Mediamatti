@@ -74,6 +74,7 @@ export interface ImageItem {
   confidence: number | null;
   denoise: number | null;
   people: string[];
+  tags?: string[];
   notes: string[];
   preset: string | null;
   moment: string | null;

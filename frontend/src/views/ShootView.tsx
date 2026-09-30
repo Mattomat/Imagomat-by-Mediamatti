@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppCtx } from "../App";
-import { api, ImageItem, IS_APP, pickFolder, reveal, Shoot, waitForJob } from "../api";
+import { api, ImageItem, IS_APP, pickFolder, Preset, reveal, Shoot, waitForJob } from "../api";
 import PeoplePanel from "../components/PeoplePanel";
 import { SELECTION_HINT, SELECTION_PARAMS, SELECTIONS, Selection, selectionFromSettings } from "../selection";
 import { Modal, More, Progress, Segmented } from "../ui";
@@ -77,6 +77,8 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     api.get<StyleInfo>(`/api/shoots/${id}/style`).then(setStyle);
   };
   const [comparing, setComparing] = useState(false);
+  const [footballPresets, setFootballPresets] = useState<Preset[]>([]);
+  useEffect(() => { api.get<Preset[]>("/api/presets").then((ps) => setFootballPresets(ps.filter((p) => p.group === "Fussball"))).catch(() => undefined); }, []);
   const [teamsAll, setTeamsAll] = useState<string[]>([]);
   useEffect(() => { api.get<{ teams: string[] }>("/api/overview").then((o) => setTeamsAll(o.teams)).catch(() => undefined); }, []);
   const shootTeams: string[] = (() => { try { return JSON.parse(shoot?.settings || "{}").teams ?? []; } catch { return []; } })();
@@ -185,18 +187,19 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
           <div className="muted">{counts.keep} von {items.length} behalten{running ? " · wird noch bearbeitet …" : ""}</div>
           {!peopleMode && style?.used && (
             <div className={`style-chip ${style.is_preset ? "warn" : ""}`}>
-              {style.is_preset
-                ? <>Bearbeitet mit Standard-Preset, nicht mit deinem Stil. {style.profiles.length
-                  ? <select value="" onChange={(e) => e.target.value && redevelop(e.target.value)}>
-                      <option value="">Mit meinem Stil neu bearbeiten …</option>
-                      {style.profiles.map((p) => <option key={p}>{p}</option>)}
-                    </select>
-                  : <button className="link" onClick={() => ctx.go({ name: "style" })}>Eigenen Stil lernen →</button>}</>
-                : <>Stil: <b>{style.label ?? style.used}</b> <select value="" onChange={(e) => e.target.value && redevelop(e.target.value)}>
-                    <option value="">ändern …</option>
-                    {style.profiles.map((p) => <option key={p}>{p}</option>)}
-                  </select></>}
+              {style.is_preset ? <>Standard-Bearbeitung, nicht dein Stil.</> : <>Stil: <b>{style.label ?? style.used}</b></>}
+              {" "}<select value="" disabled={running} onChange={(e) => e.target.value && applyStyle(e.target.value)}>
+                <option value="">{style.is_preset ? "Stil wählen …" : "ändern …"}</option>
+                {style.profiles.length > 0 && (
+                  <optgroup label="Deine Stile">{style.profiles.map((p) => <option key={p} value={p}>{p}</option>)}</optgroup>
+                )}
+                {footballPresets.length > 0 && (
+                  <optgroup label="Fussball">{footballPresets.map((p) => <option key={p.key} value={`preset:${p.key}`}>{p.name}</option>)}</optgroup>
+                )}
+                <optgroup label="Standard"><option value="preset:auto">Automatisch</option></optgroup>
+              </select>
               {" "}<button className="link" disabled={running} onClick={() => setComparing(true)}>Stile vergleichen</button>
+              {style.profiles.length === 0 && <> · <button className="link" onClick={() => ctx.go({ name: "style" })}>Eigenen Stil lernen →</button></>}
             </div>
           )}
           {teamsAll.length > 0 && (
@@ -205,6 +208,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
                 <option value="">automatisch erkennen</option>
                 {teamsAll.map((t) => <option key={t}>{t}</option>)}
               </select>
+              {" "}<button className="link" disabled={running} onClick={() => setTeam(shootTeams[0] ?? "")}>Personen neu erkennen</button>
             </div>
           )}
         </div>
@@ -246,7 +250,8 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
                   : <span className="why">{i.reasons[0] ?? "aussortiert"}</span>}
                 {i.best && i.decision === "keep" && <span className="tag">Top</span>}
                 {i.moment && i.decision === "keep" && <span className="tag moment">{i.moment}</span>}
-                {i.people.length > 0 && <span className="who">{i.people.join(", ")}</span>}
+                {i.people.length > 0 ? <span className="who">{i.people.join(", ")}</span>
+                  : (i.tags?.length ?? 0) > 0 && <span className="who muted">{i.tags!.join(", ")}</span>}
               </div>
             </div>
           ))}

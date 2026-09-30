@@ -45,7 +45,7 @@ def _setup(tmp_path: Path, color=(200, 20, 30)):
         c.execute("INSERT INTO faces(image_id, bbox, embedding, person_id, assigned_by, yaw) VALUES(?,?,?,?,?,?)",
                   (ref, "[0.4,0.1,0.5,0.25]", f32_to_blob(emb), kehrer, "confirmed", 0.0))
         c.execute("INSERT INTO faces(image_id, bbox, embedding, yaw) VALUES(?,?,?,?)",
-                  (iid, "[0.2,0.2,0.3,0.3]", f32_to_blob(emb), 70.0))
+                  (iid, "[0.2,0.2,0.3,0.3]", f32_to_blob(emb), 88.0))       # Hinterkopf/Profil
     return db, sid, iid, maluvunu, kehrer
 
 

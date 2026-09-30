@@ -169,6 +169,9 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
     else:
         profile = profile or (shoot["profile"] if shoot else None) or settings.default_profile
     model = StyleModel.load(profile) if profile else None
+    from ..analysis import refresh_raw_metrics
+
+    refresh_raw_metrics(ctx, shoot_id)             # z. B. A7 V: jetzt mit echten RAW-Daten
     items = shoot_records(db, shoot_id, only_keep)
     ctx.set_total(len(items))
     ctx.progress(0, f"Entwickle {len(items)} Bilder mit {'Profil ' + profile if model else 'Preset'}")

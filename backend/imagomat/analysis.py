@@ -186,6 +186,7 @@ def iso_noise(path: Path) -> dict[str, Any]:
 def _stage1(db: Database, row: Any) -> None:
     image_id, path = row["id"], Path(row["path"])
     img, data, orientation, width, height, ph = compute_metrics(path)
+    data.setdefault("raw_error", None)           # alten Lesefehler überschreiben, falls es jetzt klappt
     pp = preview_path(image_id)
     cv2.imwrite(str(pp), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
     db.update_analysis(image_id, data, phash=ph)
@@ -361,9 +362,42 @@ def ensure_action(ctx: JobContext, shoot_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 @job("analyze")
+def refresh_raw_metrics(ctx: JobContext, shoot_id: int) -> int:
+    """Bilder, die früher nur über die eingebettete Vorschau gemessen wurden (Kamera damals unbekannt, z. B.
+    Sony A7 V), neu messen, sobald der RAW-Leser sie kennt. Danach stimmen Belichtung und Vorschau."""
+    import rawpy
+
+    db = ctx.db
+    rows = [r for r in db.images(shoot_id) if raw_io.is_raw(Path(r["path"]))
+            and db.get_analysis(r["id"]).get("raw_source") == "preview"]
+    if not rows:
+        return 0
+    try:
+        with rawpy.imread(rows[0]["path"]):
+            pass
+    except Exception:  # noqa: BLE001 - Kamera weiterhin unbekannt: nichts zu tun
+        return 0
+    n = 0
+    for i, r in enumerate(rows):
+        ctx.check()
+        try:
+            _stage1(db, r)
+            n += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning("Neu messen fehlgeschlagen für %s: %s", r["filename"], e)
+        for p in [cache_dir() / "linear" / f"{r['id']}.npz", *(cache_dir() / "renders").glob(f"{r['id']}_*.jpg")]:
+            p.unlink(missing_ok=True)
+        if i % 10 == 0:
+            ctx.progress(message=f"RAW-Daten neu lesen {i + 1}/{len(rows)}")
+    log.info("%d Bilder mit echten RAW-Daten neu gemessen (vorher nur Vorschau)", n)
+    return n
+
+
 def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False, light: bool = False) -> None:
     """light=True (nur Personen): ohne Bild-KI (CLIP) und Action-Momente, deutlich schneller."""
     db = ctx.db
+    if not light and not force:
+        refresh_raw_metrics(ctx, shoot_id)
     rows = db.images(shoot_id)
     total = len(rows) * 3
     ctx.set_total(total)

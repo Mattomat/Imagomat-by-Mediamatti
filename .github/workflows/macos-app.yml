@@ -53,6 +53,10 @@ jobs:
     name: DMG bauen
     runs-on: macos-14
     timeout-minutes: 45
+    env:
+      # rawpy + LibRaw-Entwicklerstand: kennt Kameras, die das offizielle rawpy noch nicht kann (Sony A7 V)
+      RAWPY_REF: a39c2e7a44911889c3360891012f862f904ba551
+      LIBRAW_REF: d0a7aa653fb5cbf27927d7bcd1851c3396622b58
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -70,6 +74,26 @@ jobs:
           curl -LsSf https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-apple-darwin.tar.gz | tar xz
           cp uv-aarch64-apple-darwin/uv frontend/src-tauri/bin/uv
           chmod +x frontend/src-tauri/bin/uv
+      - name: RAW-Leser mit neuester LibRaw (Sony A7 V u. a.) – Cache
+        id: rawpy-cache
+        uses: actions/cache@v4
+        with:
+          path: frontend/src-tauri/wheels/*.whl
+          key: rawpy-${{ env.RAWPY_REF }}-libraw-${{ env.LIBRAW_REF }}-py312-arm64
+      - name: RAW-Leser mit neuester LibRaw bauen
+        if: steps.rawpy-cache.outputs.cache-hit != 'true'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+        run: |
+          git clone -q https://github.com/letmaik/rawpy.git /tmp/rawpy
+          cd /tmp/rawpy
+          git checkout -q "$RAWPY_REF"
+          git submodule update --init -q external/LibRaw external/LibRaw-cmake
+          (cd external/LibRaw && git fetch -q --depth 1 origin "$LIBRAW_REF" && git checkout -q FETCH_HEAD)
+          grep -c "ILCE-7M5" external/LibRaw/src/tables/cameralist.cpp
+          "$GITHUB_WORKSPACE/frontend/src-tauri/bin/uv" build --wheel --python 3.12 \
+            --out-dir "$GITHUB_WORKSPACE/frontend/src-tauri/wheels" .
+          ls -la "$GITHUB_WORKSPACE/frontend/src-tauri/wheels"
       - name: Frontend + App bauen
         working-directory: frontend
         run: |
@@ -101,6 +125,11 @@ jobs:
               echo; echo "Backend läuft nach $((i*5)) s"
               curl -sf http://127.0.0.1:8765/api/licenses | head -c 400; echo
               osascript -e 'quit app "Imagomat"' || true
+              echo "--- RAW-Leser ---"
+              PY="$HOME/Library/Application Support/Imagomat/runtime/venv/bin/python"
+              "$PY" -c "import rawpy, os, glob; d=os.path.dirname(rawpy.__file__); print(rawpy.__version__, rawpy.libraw_version); print([os.path.basename(x) for x in glob.glob(d+'/libraw*')])"
+              LIB=$(ls "$HOME/Library/Application Support/Imagomat/runtime/venv/lib/python3.12/site-packages/rawpy/"libraw_r*.dylib | head -n 1)
+              if strings "$LIB" | grep -q "ILCE-7M5"; then echo "Sony A7 V (ILCE-7M5) wird gelesen"; else echo "::error::RAW-Leser kennt die A7 V nicht"; exit 1; fi
               echo "--- Einrichtung (Auszug) ---"
               grep -v "^\[KI-Pakete" ~/Library/Application\ Support/Imagomat/logs/setup.log | tail -n 40 || true
               grep -i "übersprungen\|error" ~/Library/Application\ Support/Imagomat/logs/setup.log | tail -n 20 || true
