@@ -50,3 +50,22 @@ def test_unreadable_raises_clear_error(tmp_path: Path):
     p.write_bytes(b"not a raw file at all" * 100)
     with pytest.raises(raw_io.RawReadError, match="kaputt.ARW"):
         raw_io.load_preview(p)
+
+
+def test_refresh_raw_metrics_after_reader_update(tmp_path):
+    """Früher nur über die Vorschau gemessen (Kamera unbekannt) -> sobald lesbar, echte RAW-Daten."""
+    from imagomat.analysis import import_folder, refresh_raw_metrics
+    from imagomat.db import Database
+    from imagomat.jobs import JobContext, JobManager
+
+    from .synth import write_shoot
+
+    write_shoot(tmp_path / "s", n=2)
+    db = Database(tmp_path / "r.db")
+    sid = import_folder(db, tmp_path / "s")
+    assert JobManager(db).run_sync(db.create_job("analyze", sid, {}))["status"] == "done"
+    iid = db.images(sid)[0]["id"]
+    db.update_analysis(iid, {"raw_source": "preview", "raw_error": "Unsupported file format"})
+    assert refresh_raw_metrics(JobContext(db, 0), sid) == 1
+    a = db.get_analysis(iid)
+    assert a["raw_source"] == "libraw" and not a.get("raw_error")

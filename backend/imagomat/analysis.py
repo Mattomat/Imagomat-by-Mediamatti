@@ -361,7 +361,6 @@ def ensure_action(ctx: JobContext, shoot_id: int) -> None:
 # Job
 # ---------------------------------------------------------------------------
 
-@job("analyze")
 def refresh_raw_metrics(ctx: JobContext, shoot_id: int) -> int:
     """Bilder, die früher nur über die eingebettete Vorschau gemessen wurden (Kamera damals unbekannt, z. B.
     Sony A7 V), neu messen, sobald der RAW-Leser sie kennt. Danach stimmen Belichtung und Vorschau."""
@@ -393,6 +392,7 @@ def refresh_raw_metrics(ctx: JobContext, shoot_id: int) -> int:
     return n
 
 
+@job("analyze")
 def analyze_shoot(ctx: JobContext, shoot_id: int, force: bool = False, light: bool = False) -> None:
     """light=True (nur Personen): ohne Bild-KI (CLIP) und Action-Momente, deutlich schneller."""
     db = ctx.db

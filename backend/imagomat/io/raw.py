@@ -286,6 +286,8 @@ def _failed(model: str, how: str) -> bool:
 
 
 def _mark_failed(model: str, how: str) -> None:
+    if model.startswith("."):
+        return                            # ohne Hersteller/Modell: keine Sammel-Sperre (jede Datei einzeln)
     _FAILED[(model, how)] = _FAILED.get((model, how), 0) + 1
 
 
