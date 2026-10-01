@@ -148,3 +148,28 @@ def test_shirt_name_resolves(tmp_path: Path):
     assert rows["@MALUVUNU"] == maluvunu
     face = db.one("SELECT person_id FROM faces WHERE image_id=?", (iid,))
     assert face["person_id"] == maluvunu
+
+
+def test_name_without_number_and_series_tracking(tmp_path: Path):
+    """Name klar lesbar, Nummer nicht -> trotzdem benannt; in der Serie bleibt die Person beim Wegdrehen."""
+    from imagomat.people.clustering import track_series
+
+    db, sid, iid, maluvunu, kehrer = _setup(tmp_path)
+    db.update_shoot_settings(sid, teams=["FCW Herren"])
+    with db.tx() as c:
+        c.execute("INSERT INTO numbers(image_id, text, confidence, bbox) VALUES(?,?,?,?)",
+                  (iid, "@MALUVUNU", 0.9, "[0.22,0.45,0.29,0.48]"))            # ohne Nummer daneben
+    assert JobManager(db).run_sync(db.create_job("people", sid, {}))["status"] == "done"
+    assert db.one("SELECT person_id FROM numbers WHERE image_id=?", (iid,))[0] == maluvunu
+    # Serie: Bild 1 Kehrer erkannt, Bild 2 (0.3 s später) Gesicht fast gleiche Stelle, unbekannt
+    a = db.upsert_image(sid, {"path": str(tmp_path / "s1.arw"), "filename": "s1.arw", "capture_time": 1000.0})
+    b = db.upsert_image(sid, {"path": str(tmp_path / "s2.arw"), "filename": "s2.arw", "capture_time": 1000.3})
+    c2 = db.upsert_image(sid, {"path": str(tmp_path / "s3.arw"), "filename": "s3.arw", "capture_time": 1010.0})
+    with db.tx() as c:
+        c.execute("INSERT INTO faces(image_id, bbox, person_id, assigned_by) VALUES(?,?,?,?)",
+                  (a, "[0.40,0.20,0.48,0.32]", kehrer, "auto"))
+        c.execute("INSERT INTO faces(image_id, bbox, yaw) VALUES(?,?,?)", (b, "[0.41,0.21,0.49,0.33]", 85.0))
+        c.execute("INSERT INTO faces(image_id, bbox, yaw) VALUES(?,?,?)", (c2, "[0.41,0.21,0.49,0.33]", 85.0))
+    assert track_series(db, sid) == 1
+    assert db.one("SELECT person_id, assigned_by FROM faces WHERE image_id=?", (b,))["person_id"] == kehrer
+    assert db.one("SELECT person_id FROM faces WHERE image_id=?", (c2,))[0] is None     # 10 s später: neue Szene

@@ -118,6 +118,14 @@ class ShirtResolver:
             cands = [c for c in cands if c[1] in self.scope]
         return cands[0][0] if len(cands) == 1 else None
 
+    def name_exact(self, text: str) -> int | None:
+        """Nur exakter Treffer auf einen Nachnamen im Team (für Namen ohne lesbare Nummer daneben)."""
+        t = self._norm(text).upper().replace(" ", "")
+        if len(t) < 5:
+            return None
+        hits = {pid for n, pid in self.names if n == t}
+        return hits.pop() if len(hits) == 1 else None
+
     def name(self, text: str) -> int | None:
         t = self._norm(text).upper().replace(" ", "")
         if len(t) < 4:
@@ -170,8 +178,13 @@ def plausible_back_names(texts, ignored: set[str]) -> set[int]:
 
 
 # Wie in den ersten Versionen: auch kleine Gesichter (Totale) und Halbprofile wiedererkennen.
-# Nur winzige Gesichter und reine Profile/Hinterköpfe bleiben unbenannt.
-MAX_AUTO_YAW = 75.0
+# Seitliche Gesichter (Profil) zählen auch, brauchen aber eine deutlich höhere Ähnlichkeit.
+MAX_AUTO_YAW = 90.0
+PROFILE_YAW = 55.0
+PROFILE_EXTRA = 0.08
+# Serien: Person von einem Bild aufs nächste übertragen, wenn das Gesicht fast an derselben Stelle ist
+TRACK_GAP_SECONDS = 2.5
+TRACK_MIN_IOU = 0.25
 MIN_AUTO_FACE = 0.012
 FRONTAL_YAW = 35.0
 # Trikot sagt Person X, das Gesicht ähnelt X aber überhaupt nicht -> Trikot verwerfen
@@ -213,6 +226,64 @@ def team_color_share(img: np.ndarray, bbox) -> float | None:
     return float((red | white | black).mean())
 
 
+def _iou(a, b) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def track_series(db: Database, shoot_id: int, rejected: set[tuple[int, int]] | None = None) -> int:
+    """Innerhalb einer Serie (Bilder wenige Sekunden auseinander) die Person eines erkannten Gesichts auf das
+    Gesicht an fast derselben Stelle im Nachbarbild übertragen, vorwärts und rückwärts. So bleiben Spieler
+    benannt, wenn sie sich zur Seite oder nach hinten drehen."""
+    rejected = rejected or set()
+    rows = db.query(
+        "SELECT f.id, f.image_id, f.bbox, f.person_id, f.assigned_by, i.capture_time FROM faces f "
+        "JOIN images i ON i.id=f.image_id WHERE i.shoot_id=? ORDER BY i.capture_time, i.filename", (shoot_id,))
+    frames: list[tuple[float | None, int, list[dict]]] = []
+    for r in rows:
+        d = dict(r)
+        d["box"] = json.loads(r["bbox"])
+        if frames and frames[-1][1] == r["image_id"]:
+            frames[-1][2].append(d)
+        else:
+            frames.append((r["capture_time"], r["image_id"], [d]))
+    changed: dict[int, int] = {}
+
+    def propagate(order: list[int]) -> None:
+        for a, b in zip(order, order[1:]):
+            ta, _ia, fa = frames[a]
+            tb, ib, fb = frames[b]
+            if ta is None or tb is None or abs(tb - ta) > TRACK_GAP_SECONDS:
+                continue                          # ohne Aufnahmezeit keine Serie (z. B. JPGs ohne EXIF)
+            present = {f["person_id"] for f in fb if f["person_id"]}
+            for f in fb:
+                if f["person_id"] or f["assigned_by"] == "ignored":
+                    continue
+                best, best_iou = None, TRACK_MIN_IOU
+                for g in fa:
+                    if g["person_id"] and g["person_id"] not in present and (ib, g["person_id"]) not in rejected:
+                        iou = _iou(f["box"], g["box"])
+                        if iou >= best_iou:
+                            best, best_iou = g, iou
+                if best is not None:
+                    f["person_id"], f["assigned_by"] = best["person_id"], "track"
+                    present.add(best["person_id"])
+                    changed[f["id"]] = best["person_id"]
+
+    idx = list(range(len(frames)))
+    propagate(idx)
+    propagate(idx[::-1])
+    if changed:
+        with db.tx() as c:
+            for fid, pid in changed.items():
+                c.execute("UPDATE faces SET person_id=?, assigned_by='track' WHERE id=? AND person_id IS NULL",
+                          (pid, fid))
+    return len(changed)
+
+
 @job("people")
 def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -> None:
     from ..analysis import ensure_ocr, load_cached_preview
@@ -235,7 +306,8 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
     for f in faces:
         if f["assigned_by"] in ("manual", "confirmed", "ignored") or f["embedding"] is None:
             continue
-        pid = match(blob_to_f32(f["embedding"]), ex, ids, thr, not_on.get(f["image_id"]))[0] if _clear(f) else None
+        t_face = thr + (PROFILE_EXTRA if abs(f["yaw"] or 0.0) > PROFILE_YAW else 0.0)
+        pid = match(blob_to_f32(f["embedding"]), ex, ids, t_face, not_on.get(f["image_id"]))[0] if _clear(f) else None
         with db.tx() as c:
             c.execute("UPDATE faces SET person_id=?, assigned_by=? WHERE id=?",
                       (pid, "auto" if pid else None, f["id"]))
@@ -271,7 +343,12 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
             if text.startswith("#") or not n["bbox"] or n["image_id"] in with_person:
                 continue
             if text.startswith("@"):
-                pid = resolver.name(text[1:]) if n["id"] in back_names else None
+                if n["id"] in back_names:
+                    pid = resolver.name(text[1:])
+                elif text[1:].upper() not in ignored:
+                    pid = resolver.name_exact(text[1:])      # Name klar lesbar, Nummer nicht gelesen
+                else:
+                    pid = None
             else:
                 bb = json.loads(n["bbox"])
                 ok = (n["confidence"] or 0) >= SHIRT_MIN_CONF and bb[3] - bb[1] >= SHIRT_MIN_HEIGHT
@@ -314,6 +391,10 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
     log.info("Personen Shoot %s: %d Gesichter erkannt, %d über Trikot, %d Trikot-Treffer verworfen, Team %s",
              shoot_id, auto, via_shirt, vetoed, resolver.scope or "unbekannt")
     ctx.progress(len(faces) + 1, f"{auto} Gesichter, {via_shirt} über Rückennummer/Trikotname")
+    # 2b. Serien-Verfolgung: Spieler, der sich wegdreht, behält seinen Namen
+    tracked = track_series(db, shoot_id, rejected)
+    if tracked:
+        log.info("Personen Shoot %s: %d Gesichter über Serien-Verfolgung benannt", shoot_id, tracked)
     # 3. Clustern der unbekannten Gesichter
     rest = db.query(
         "SELECT f.id, f.embedding FROM faces f JOIN images i ON i.id=f.image_id "
