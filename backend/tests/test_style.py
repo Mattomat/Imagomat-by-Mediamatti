@@ -249,7 +249,7 @@ def test_punch_sets_white_point_and_background_contrast():
     a = {"lin_log_p99": -2.0, "lin_log_p01": -6.0}
     crs = dict(flat)
     punch(crs, a, 1.0)
-    assert crs["Whites2012"] >= 30 and crs["Blacks2012"] < -5 and crs["Contrast2012"] == 18
+    assert crs["Whites2012"] >= 30 and crs["Blacks2012"] < -3 and crs["Contrast2012"] == 14
     bright = dict(flat, Whites2012=40)
     punch(bright, {"lin_log_p99": 0.0, "lin_log_p01": -9.0}, 1.0)
     assert bright["Whites2012"] == 40 and bright["Blacks2012"] == 0      # schon hell/dunkel genug

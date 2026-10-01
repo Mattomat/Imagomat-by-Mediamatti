@@ -120,7 +120,7 @@ def _crop(it: ImageDevelop, settings: Settings) -> dict[str, Any]:
     a = it.record.analysis
     ds = settings.develop
     angle = 0.0
-    if ds.auto_straighten and a.get("tilt_conf", 0) >= 0.5 and abs(a.get("tilt_angle", 0)) >= 0.3:
+    if ds.auto_straighten and a.get("tilt_conf", 0) >= 0.4 and abs(a.get("tilt_angle", 0)) >= 0.2:
         angle = float(np.clip(a["tilt_angle"], -ds.max_straighten_deg, ds.max_straighten_deg))
         it.notes.append(f"begradigt {angle:+.1f}°")
     W = int(a.get("preview_w") or 3)
@@ -129,6 +129,13 @@ def _crop(it: ImageDevelop, settings: Settings) -> dict[str, Any]:
     if ds.auto_crop and it.prediction is not None and it.prediction.has_crop_prob >= 0.5 \
             and it.prediction.crop_area < 0.97:
         zoom = math.sqrt(max(it.prediction.crop_area, 0.3))
+    elif ds.auto_crop and a.get("subject_bbox"):
+        # Ohne gelernten Zuschnitt (Presets, oder dein Stil schneidet dieses Bild nicht): sanft enger ums
+        # Geschehen, Spieler bleibt ganz im Bild, Gesicht aufs obere Drittel. Bei grossem Motiv nicht.
+        sb = a["subject_bbox"]
+        area = (sb[2] - sb[0]) * (sb[3] - sb[1])
+        if area < 0.35:
+            zoom = math.sqrt(0.82)
     if angle == 0.0 and zoom >= 0.999:
         return {"HasCrop": False, "CropAngle": 0.0}
     subject = tuple(a["subject_bbox"]) if a.get("subject_bbox") and zoom < 0.999 else None
@@ -193,7 +200,7 @@ def punch(crs: dict[str, Any], a: dict[str, Any], amount: float) -> list[str]:
     top = a["lin_log_p99"] + exp + whites / 60.0 + min(hl, 0.0) / 150.0
     dw = float(np.clip((-0.15 - top) * 30.0, 0.0, 45.0)) * amount
     bottom = (a.get("lin_log_p01") if a.get("lin_log_p01") is not None else -9.0) + exp + blacks / 40.0
-    db = -float(np.clip((bottom + 7.5) * 6.0, 0.0, 25.0)) * amount
+    db = -float(np.clip((bottom + 6.5) * 4.0, 0.0, 15.0)) * amount
     notes = []
     if dw >= 1:
         crs["Whites2012"] = int(round(min(whites + dw, 70)))
@@ -201,7 +208,7 @@ def punch(crs: dict[str, Any], a: dict[str, Any], amount: float) -> list[str]:
     if db <= -1:
         crs["Blacks2012"] = int(round(max(blacks + db, -70)))
         notes.append(f"Schwarz {db:.0f}")
-    crs["Contrast2012"] = int(round(min(num("Contrast2012") + 8 * amount, 70)))
+    crs["Contrast2012"] = int(round(min(num("Contrast2012") + 4 * amount, 60)))
     return notes
 
 

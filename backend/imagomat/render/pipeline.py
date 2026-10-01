@@ -84,6 +84,25 @@ def _tone_local(lin: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarra
     return lin * np.power(2.0, delta)[..., None]
 
 
+def _wb_mult(xyz_to_cam: np.ndarray, camera_wb: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
+    """Weissabgleich-Faktoren. Eigene Temperatur/Tint werden RELATIV zur Kamera-Einstellung umgesetzt: so führt
+    eine ungenaue Umrechnung Temperatur -> Kamerafaktoren nicht zu einem Farbstich."""
+    base = np.asarray(camera_wb[:3], dtype=np.float32)
+    base = base / max(float(base[1]), 1e-6)
+    if str(crs.get("WhiteBalance", "As Shot")) == "As Shot" or to_number(crs.get("Temperature")) is None:
+        return base
+    try:
+        from ..io.color import multipliers_to_temp_tint
+
+        t0, tint0 = multipliers_to_temp_tint(xyz_to_cam, base)
+        rel = wb_multipliers(xyz_to_cam, _n(crs, "Temperature", 5500), _n(crs, "Tint")) / \
+            wb_multipliers(xyz_to_cam, t0, tint0)
+        m = (base * rel).astype(np.float32)
+        return m / max(float(m[1]), 1e-6)
+    except Exception:  # noqa: BLE001
+        return base
+
+
 def _black_floor(lin: np.ndarray) -> np.ndarray:
     """Rausch-Sockel abziehen. Der RAW-Leser schneidet negative Rauschwerte am Schwarzpunkt ab; in dunklen
     Flächen (Nachthimmel) bleibt dadurch pro Kanal ein positiver Sockel, den Weissabgleich und Farbmatrix zu
@@ -401,14 +420,16 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
         if s < 1:
             img = cv2.resize(img, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
     scale = max(img.shape[:2]) / 1600
-    if str(crs.get("WhiteBalance", "As Shot")) == "As Shot" or to_number(crs.get("Temperature")) is None:
-        mult = np.asarray(camera_wb[:3], dtype=np.float32)
-    else:
-        mult = wb_multipliers(xyz_to_cam, _n(crs, "Temperature", 5500), _n(crs, "Tint")).astype(np.float32)
-    mult = mult / mult[1]
+    mult = _wb_mult(xyz_to_cam, camera_wb, crs)
+    clipped = _smoothstep(0.90, 0.99, img.max(axis=-1))[..., None]   # Sensor gesättigt (vor dem Weissabgleich)
     # Ohne Zwischen-Abschneiden bis das Farbrauschen weg ist (sonst entsteht ein Farbsockel in dunklen Flächen)
     img = _black_floor(img)
     img = img * mult[None, None, :]
+    # Ausgefressene Lichter (Flutlicht, LED-Tafel) neutral weiss statt magenta: ist ein Kanal gesättigt, sind
+    # die anderen nach dem Weissabgleich zu stark -> auf den hellsten gemeinsamen Wert ziehen
+    if clipped.max() > 0:
+        neutral = np.repeat(np.minimum(img, 1.0).max(axis=-1, keepdims=True), 3, axis=-1)
+        img = img * (1 - clipped) + neutral * clipped
     img = img @ cam_to_srgb(xyz_to_cam).T.astype(np.float32)
     img = img * (BASE_GAIN * 2.0 ** _n(crs, "Exposure2012"))
     img = _calm_shadows(img, scale)

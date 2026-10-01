@@ -21,7 +21,9 @@ from ..render.pipeline import render
 
 SIDE = 192
 HI_Q, HI_TARGET = 0.997, 0.975      # 0.3 % der Pixel ab ~97.5 % Helligkeit: "schlägt leicht an"
-LO_Q, LO_TARGET = 0.003, 0.02       # 0.3 % der Pixel unter ~2 %
+LO_Q, LO_TARGET = 0.003, 0.035      # 0.3 % der Pixel unter ~3.5 % (Schwarz satt, aber nicht zugelaufen)
+LO_ONLY_ABOVE = 0.07                # Schwarz nur nachführen, wenn das Bild unten wirklich flau ist
+MAX_DEEPEN = 25.0
 WHITES_RANGE = (-40.0, 70.0)
 BLACKS_RANGE = (-60.0, 25.0)
 MAX_CHANGE = 50.0                   # nie mehr als so viel von deinem (gelernten) Wert weg
@@ -83,8 +85,11 @@ def fit_scopes(crs: dict[str, Any], lin: np.ndarray, orientation: int = 1,
     def lo_at(b: float) -> float:
         return _measure(lin, {**crs, "Blacks2012": b}, orientation, seg)[1]
 
-    # Schwarz nur vertiefen, nie anheben: dunkle Nachthimmel sollen schwarz bleiben (sonst grauer Schleier)
-    b = _bisect(lo_at, max(BLACKS_RANGE[0], b0 - MAX_CHANGE), b0, LO_TARGET, increasing=True)
+    # Schwarz nur vertiefen, nie anheben (Nachthimmel bleibt schwarz), und nur bei flauen Bildern, sanft
+    if lo_at(b0) > LO_ONLY_ABOVE:
+        b = _bisect(lo_at, max(BLACKS_RANGE[0], b0 - MAX_DEEPEN), b0, LO_TARGET, increasing=True)
+    else:
+        b = b0
     b = b0 + (b - b0) * min(amount, 1.0)
     crs["Blacks2012"] = int(round(b))
     notes = []
