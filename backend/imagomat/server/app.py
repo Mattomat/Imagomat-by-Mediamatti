@@ -501,8 +501,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
             return FileResponse(str(pp), media_type="image/jpeg")
         return FileResponse(r["preview_path"], media_type="image/jpeg")
 
+    import threading
+
+    _decode_locks: dict[int, threading.Lock] = {}
+    _locks_guard = threading.Lock()
+
     def _linear(iid: int, path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-        """Lineare Bilddaten fürs Rendern (einmal dekodieren, dann aus dem Cache)."""
+        """Lineare Bilddaten fürs Rendern (einmal dekodieren, dann aus dem Cache). Mehrere gleichzeitige
+        Vorschauen desselben Bildes (Stil-Leiste) dekodieren die RAW nur einmal."""
+        with _locks_guard:
+            lock = _decode_locks.setdefault(iid, threading.Lock())
+        with lock:
+            return _linear_once(iid, path)
+
+    def _linear_once(iid: int, path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         lin_cache = cache_dir() / "linear" / f"{iid}.npz"
         lin_cache.parent.mkdir(parents=True, exist_ok=True)
         if lin_cache.exists():
@@ -590,6 +602,26 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except KeyError as e:
             raise HTTPException(404, "Bild ist noch nicht analysiert") from e
         return _render_file(iid, Path(r["path"]), crs, size, cache)
+
+    @app.post("/api/images/{iid}/style")
+    def apply_image_style(iid: int, body: dict[str, str]) -> dict[str, Any]:
+        """Stil nur für dieses eine Bild übernehmen."""
+        from ..style import compare as cmp
+
+        r = db.one("SELECT shoot_id FROM images WHERE id=?", (iid,))
+        if not r or not body.get("style"):
+            raise HTTPException(404)
+        try:
+            cmp.apply_to_image(db, r["shoot_id"], iid, body["style"])
+        except KeyError as e:
+            raise HTTPException(404, "Bild ist noch nicht analysiert") from e
+        return {"ok": True}
+
+    @app.get("/api/styles")
+    def all_styles() -> list[dict[str, Any]]:
+        from ..style import compare as cmp
+
+        return cmp.styles()
 
     def settings_version() -> float:
         from ..config import settings_path

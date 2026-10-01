@@ -105,3 +105,31 @@ def test_reset_keeps_only_people(tmp_path: Path):
     assert db.one("SELECT person_id FROM faces")[0] == pid
     visible = db.query("SELECT id FROM shoots WHERE name NOT LIKE '\\_\\_%' ESCAPE '\\'")
     assert visible == []
+
+
+def test_try_styles_on_one_image(tmp_path: Path):
+    """Stil-Leiste: dasselbe Bild in mehreren Stilen (mit Masken/Entrauschen), dann nur für dieses Bild übernehmen."""
+    from imagomat.analysis import import_folder
+    from imagomat.jobs import JobManager
+    from imagomat.server.app import create_app
+
+    from .synth import write_shoot
+
+    write_shoot(tmp_path / "s", n=3)
+    db = Database(tmp_path / "a.db")
+    sid = import_folder(db, tmp_path / "s")
+    jm = JobManager(db)
+    for k in ("analyze", "cull", "develop"):
+        assert jm.run_sync(db.create_job(k, sid, {}))["status"] == "done"
+    iid = db.images(sid)[0]["id"]
+    with TestClient(create_app(str(tmp_path / "a.db"))) as c:
+        styles = [s["key"] for s in c.get("/api/styles").json()]
+        assert "preset:fb_night" in styles and "preset:auto" in styles
+        sizes = set()
+        for st in ("preset:fb_night", "preset:fb_bw"):
+            r = c.get(f"/api/images/{iid}/styled", params={"style": st, "size": 400})
+            assert r.status_code == 200
+            sizes.add(len(r.content))
+        assert len(sizes) == 2                                   # verschiedene Stile -> verschiedene Bilder
+        assert c.post(f"/api/images/{iid}/style", json={"style": "preset:fb_bw"}).json()["ok"]
+    assert db.one("SELECT profile FROM edits WHERE image_id=?", (iid,))[0] == "preset:fb_bw"

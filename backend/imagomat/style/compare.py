@@ -81,3 +81,28 @@ def develop_preview(db: Database, shoot_id: int, image_id: int, style: str) -> d
     preset = style.split(":", 1)[1] if style.startswith("preset:") and style != AUTO else None
     develop_items(items, model, load_settings(), Dialect.load(), preset)
     return items[0].crs
+
+
+def apply_to_image(db: Database, shoot_id: int, image_id: int, style: str) -> dict[str, Any]:
+    """Einen Stil nur für ein Bild übernehmen (Bearbeitung wird gespeichert, wie beim Entwickeln)."""
+    import time
+
+    from ..db import dumps
+    from .jobs import shoot_records
+
+    items = shoot_records(db, shoot_id, only_keep=False, image_ids=[image_id])
+    if not items:
+        raise KeyError(image_id)
+    model = None if style.startswith("preset:") else load_model(style)
+    preset = style.split(":", 1)[1] if style.startswith("preset:") and style != AUTO else None
+    develop_items(items, model, load_settings(), Dialect.load(), preset)
+    it = items[0]
+    masks = it.crs.get("MaskGroupBasedCorrections")
+    with db.tx() as c:
+        c.execute("INSERT OR REPLACE INTO edits(image_id, profile, params, masks, confidence, denoise, user_params,"
+                  " updated_at) VALUES(?,?,?,?,?,?,(SELECT user_params FROM edits WHERE image_id=?),?)",
+                  (image_id, style if not style.startswith("preset:") else f"preset:{it.preset}",
+                   dumps({k: v for k, v in it.crs.items() if k != "MaskGroupBasedCorrections"}),
+                   dumps(masks) if masks else None, it.confidence, it.denoise, image_id, time.time()))
+    db.update_analysis(image_id, {"develop_notes": it.notes, "preset": it.preset})
+    return it.crs

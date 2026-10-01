@@ -77,6 +77,10 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     api.get<StyleInfo>(`/api/shoots/${id}/style`).then(setStyle);
   };
   const [comparing, setComparing] = useState(false);
+  const [tryStyle, setTryStyle] = useState<string | null>(null);
+  const [editV, setEditV] = useState(0);
+  const [styleOpts, setStyleOpts] = useState<{ key: string; label: string }[]>([]);
+  useEffect(() => { api.get<{ key: string; label: string }[]>("/api/styles").then(setStyleOpts).catch(() => undefined); }, [ctx.tick]);
   const [footballPresets, setFootballPresets] = useState<Preset[]>([]);
   useEffect(() => { api.get<Preset[]>("/api/presets").then((ps) => setFootballPresets(ps.filter((p) => p.group === "Fussball"))).catch(() => undefined); }, []);
   const [teamsAll, setTeamsAll] = useState<string[]>([]);
@@ -259,10 +263,40 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
       ) : cur && (
         <div className="loupe">
           <div className="stage" onClick={() => setBefore((b) => !b)}>
-            <img key={`${cur.id}-${before}`}
-              src={api.img(before || peopleMode || cur.decision !== "keep" ? `/api/images/${cur.id}/preview` : `/api/images/${cur.id}/render?size=2000`)} />
-            <div className="stage-badge">{before || peopleMode || cur.decision !== "keep" ? "Original" : "Bearbeitet (Vorschau)"}</div>
+            <StageImage key={`${cur.id}-${before}-${tryStyle ?? ""}-${editV}`}
+              src={api.img(before || peopleMode
+                ? `/api/images/${cur.id}/preview`
+                : tryStyle ? `/api/images/${cur.id}/styled?style=${encodeURIComponent(tryStyle)}&size=2000`
+                  : cur.decision !== "keep" ? `/api/images/${cur.id}/preview` : `/api/images/${cur.id}/render?size=2000&v=${editV}`)} />
+            <div className="stage-badge">{before || peopleMode ? "Original"
+              : tryStyle ? `Vorschau: ${styleOpts.find((o) => o.key === tryStyle)?.label ?? tryStyle}`
+                : cur.decision !== "keep" ? "Original" : "Bearbeitet (Vorschau)"}</div>
           </div>
+          {!peopleMode && styleOpts.length > 0 && (
+            <div className="style-strip">
+              <button className={`ss-item ${!tryStyle ? "on" : ""}`} onClick={() => setTryStyle(null)}>
+                <img loading="lazy" src={api.img(cur.decision === "keep" ? `/api/images/${cur.id}/render?size=360&v=${editV}` : `/api/images/${cur.id}/thumb`)} />
+                <span>Aktuell</span>
+              </button>
+              {styleOpts.map((o) => (
+                <button key={o.key} className={`ss-item ${tryStyle === o.key ? "on" : ""}`} onClick={() => { setBefore(false); setTryStyle(o.key); }}>
+                  <img loading="lazy" src={api.img(`/api/images/${cur.id}/styled?style=${encodeURIComponent(o.key)}&size=360`)} />
+                  <span>{o.label}</span>
+                </button>
+              ))}
+              {tryStyle && (
+                <div className="ss-actions">
+                  <button onClick={async () => {
+                    await api.post(`/api/images/${cur.id}/style`, { style: tryStyle });
+                    setTryStyle(null); setEditV((v) => v + 1);
+                    ctx.toast("Stil für dieses Bild übernommen");
+                  }}>Nur dieses Bild</button>
+                  <button className="primary" onClick={() => { const s = tryStyle; setTryStyle(null); applyStyle(s).then(() => setEditV((v) => v + 1)); }}>
+                    Für alle übernehmen</button>
+                </div>
+              )}
+            </div>
+          )}
           <PeoplePanel ctx={ctx} image={cur} onChanged={load} />
           <div className="loupe-bar">
             <span className="fname">{cur.filename}</span>
@@ -544,5 +578,17 @@ function StyleCompare({ shootId, current, onApply, onClose }: {
         </div>
       )}
     </Modal>
+  );
+}
+
+/** Grosses Bild mit Ladeanzeige (Vorschauen mit Masken und Entrauschen brauchen ein, zwei Sekunden). */
+function StageImage({ src }: { src: string }) {
+  const [state, setState] = useState<"load" | "ok" | "err">("load");
+  return (
+    <>
+      <img src={src} onLoad={() => setState("ok")} onError={() => setState("err")} style={state === "ok" ? undefined : { opacity: 0.35 }} />
+      {state === "load" && <div className="stage-loading">Vorschau wird berechnet …</div>}
+      {state === "err" && <div className="stage-loading">Vorschau nicht möglich (Protokoll in den Einstellungen)</div>}
+    </>
   );
 }

@@ -84,6 +84,30 @@ def _tone_local(lin: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarra
     return lin * np.power(2.0, delta)[..., None]
 
 
+def denoise_amount(crs: dict[str, Any]) -> float:
+    """Entrausch-Stärke (0..100) aus den Lightroom-Feldern (Schlüssel je nach Version verschieden)."""
+    for k, v in crs.items():
+        if "Denoise" in k and "Amount" in k:
+            x = to_number(v)
+            if x is not None:
+                return float(x)
+    return 0.0
+
+
+def _denoise(lin: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
+    """Vorschau wie nach "KI-Einstellungen aktualisieren": Rauschen entsprechend der Denoise-Stärke entfernen
+    (klassisches Verfahren, schnell genug für die Vorschau)."""
+    amt = denoise_amount(crs)
+    if amt <= 0 or min(lin.shape[:2]) < 16:
+        return lin
+    from ..denoise.local import classical
+
+    k = max(float(np.percentile(lin, 99.9)), 1e-3)
+    g = np.power(np.clip(lin / k, 0, 1), 1 / 2.2).astype(np.float32)
+    out = classical(g, 0.004 + 0.022 * min(amt, 100) / 100)
+    return (np.power(np.clip(out, 0, 1), 2.2) * k).astype(np.float32)
+
+
 def _white_black(disp: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
     """Weiss/Schwarz verschieben die Endpunkte (Anzeige-Raum): Weiss hebt/senkt vor allem das obere
     Drittel bis zum Anschlag, Schwarz das untere. Näherung an Lightroom (PV2012)."""
@@ -344,6 +368,7 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
     img = img * mult[None, None, :]
     img = np.clip(img @ cam_to_srgb(xyz_to_cam).T.astype(np.float32), 0, None)
     img = img * (BASE_GAIN * 2.0 ** _n(crs, "Exposure2012"))
+    img = _denoise(img, crs)
     img = _tone_local(img, crs, scale)
     img = _apply_local(img, crs.get("MaskGroupBasedCorrections") or [], orientation, seg, scale)
     disp = base_curve(img, _n(crs, "Contrast2012")).astype(np.float32)
