@@ -240,6 +240,29 @@ FOOTBALL: list[Preset] = [
                              "has_subject"),
                   SPOTLIGHT, BOTTOM_FADE], fade=1.2, group="Fussball"),
 ]
+# Nach den Referenzbildern des Nutzers (Nachtspiele FC Winterthur): tiefschwarzer, leicht navyblauer Himmel,
+# helle knackige Spieler mit geschützten Weisstönen, sattes dunkles Rasengrün, sehr dunkler weicher Verlauf
+# unten, ruhiger dunkler Hintergrund, kein Rauschen.
+SIGNATURE_NIGHT = Preset(
+    "fb_signature", "Flutlicht Signature", "Nach deinen Referenzbildern: tiefschwarzer Himmel, helle knackige "
+    "Spieler, sattes Rasengrün, starker weicher Verlauf unten.",
+    target_log=-2.5, subject_weight=0.95, wb_mode="neutralize", neutralize=0.45, warm_mired=-6, tint_fix=0.6,
+    highlight_protect=1.3, shadow_lift=0.6, denoise_bias=10,
+    look={"Contrast2012": 30, "Highlights2012": -20, "Whites2012": 12, "Blacks2012": -30, "Clarity2012": 10,
+          "Texture": 15, "Dehaze": 10, "Vibrance": 15, "Sharpness": 50, "PostCropVignetteAmount": -25,
+          **_hsl(hue_Green=8, sat_Green=6, lum_Green=-18, hue_Yellow=-6, sat_Yellow=-15, lum_Orange=6,
+                 sat_Orange=4, sat_Blue=-12, lum_Blue=-30, sat_Aqua=-15, lum_Aqua=-15, sat_Red=6, lum_Red=-3),
+          **_grade(shadow=(225, 10), high=(40, 8))},
+    curve=[-12, -10, -5, 0, 4, 6, 3],
+    masks=[MaskRecipe("subject", "Spieler", {"Exposure2012": 0.45, "Clarity2012": 15, "Texture": 15,
+                                             "Whites2012": 10, "Shadows2012": 12}, "has_subject"),
+           MaskRecipe("background", "Hintergrund", {"Exposure2012": -0.5, "Contrast2012": 15, "Dehaze": 10,
+                                                    "Saturation": -10, "Clarity2012": -10}, "has_subject"),
+           MaskRecipe("sky", "Himmel", {"Exposure2012": -0.8, "Blacks2012": -30, "Saturation": -10}, "always"),
+           MaskRecipe("gradient_top", "Verlauf oben", {"Exposure2012": -0.6, "Blacks2012": -20, "Saturation": -10},
+                      "always"),
+           BOTTOM_FADE], fade=1.4, group="Fussball")
+FOOTBALL.insert(0, SIGNATURE_NIGHT)
 PRESETS.update({p.key: p for p in FOOTBALL})
 
 

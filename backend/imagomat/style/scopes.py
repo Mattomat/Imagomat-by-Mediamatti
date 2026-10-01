@@ -83,8 +83,8 @@ def fit_scopes(crs: dict[str, Any], lin: np.ndarray, orientation: int = 1,
     def lo_at(b: float) -> float:
         return _measure(lin, {**crs, "Blacks2012": b}, orientation, seg)[1]
 
-    b = _bisect(lo_at, max(BLACKS_RANGE[0], b0 - MAX_CHANGE), min(BLACKS_RANGE[1], b0 + MAX_CHANGE),
-                LO_TARGET, increasing=True)
+    # Schwarz nur vertiefen, nie anheben: dunkle Nachthimmel sollen schwarz bleiben (sonst grauer Schleier)
+    b = _bisect(lo_at, max(BLACKS_RANGE[0], b0 - MAX_CHANGE), b0, LO_TARGET, increasing=True)
     b = b0 + (b - b0) * min(amount, 1.0)
     crs["Blacks2012"] = int(round(b))
     notes = []

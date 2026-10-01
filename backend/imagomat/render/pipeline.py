@@ -84,6 +84,43 @@ def _tone_local(lin: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarra
     return lin * np.power(2.0, delta)[..., None]
 
 
+def _black_floor(lin: np.ndarray) -> np.ndarray:
+    """Rausch-Sockel abziehen. Der RAW-Leser schneidet negative Rauschwerte am Schwarzpunkt ab; in dunklen
+    Flächen (Nachthimmel) bleibt dadurch pro Kanal ein positiver Sockel, den Weissabgleich und Farbmatrix zu
+    einem kräftigen Farbschleier (meist blau) verstärken. Lightroom rechnet ohne dieses Abschneiden.
+    Geschätzt wird der Sockel aus den dunkelsten Flächen eines geglätteten Bildes (Rauschen gemittelt)."""
+    small = cv2.blur(lin.astype(np.float32), (9, 9))
+    flat = small.reshape(-1, lin.shape[-1])
+    step = max(1, flat.shape[0] // 200_000)
+    floor = np.clip(np.percentile(flat[::step], 0.5, axis=0), 0, 0.01).astype(np.float32)
+    return lin - floor                       # bewusst ohne Abschneiden: Rauschen bleibt mittelwertfrei
+
+
+def _calm_shadows(lin: np.ndarray, scale: float = 1.0) -> np.ndarray:
+    """Farbrauschen entfernen, solange die Werte noch nicht abgeschnitten sind: Farbanteil glätten und in tiefen
+    Schatten ganz entsättigen (dort ist Farbe fast nur Rauschen; Lightroom hält Schwarz neutral)."""
+    L = _lum(lin)[..., None]
+    chroma = lin - L
+    sigma = max(1.0, 2.0 * scale)
+    chroma = np.stack([cv2.GaussianBlur(chroma[..., c], (0, 0), sigma) for c in range(chroma.shape[-1])], -1)
+    Ls = cv2.GaussianBlur(L[..., 0], (0, 0), sigma)[..., None]
+    w = _smoothstep(0.006, 0.05, Ls)
+    return L + chroma * w
+
+
+def _chroma_nr(disp: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarray:
+    """Farbrauschen entfernen (Lightroom: Farbe-Rauschreduzierung, Standard 25)."""
+    amt = to_number(crs.get("ColorNoiseReduction"))
+    amt = 25.0 if amt is None else float(amt)
+    if amt <= 0:
+        return disp
+    ycc = cv2.cvtColor(np.clip(disp, 0, 1).astype(np.float32), cv2.COLOR_RGB2YCrCb)
+    sigma = max(0.6, (0.6 + amt / 25.0) * scale * 1.6)
+    for c in (1, 2):
+        ycc[..., c] = cv2.GaussianBlur(ycc[..., c], (0, 0), sigma)
+    return cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB)
+
+
 def denoise_amount(crs: dict[str, Any]) -> float:
     """Entrausch-Stärke (0..100) aus den Lightroom-Feldern (Schlüssel je nach Version verschieden)."""
     for k, v in crs.items():
@@ -104,7 +141,11 @@ def _denoise(lin: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
 
     k = max(float(np.percentile(lin, 99.9)), 1e-3)
     g = np.power(np.clip(lin / k, 0, 1), 1 / 2.2).astype(np.float32)
-    out = classical(g, 0.004 + 0.022 * min(amt, 100) / 100)
+    # Stärke nach gemessenem Rauschen (robust: Median des Hochpasses) und gewünschter Denoise-Stärke
+    y = g.mean(axis=2)
+    hp = y - cv2.blur(y, (3, 3))
+    sigma = float(np.median(np.abs(hp))) / 0.6745 * 1.5
+    out = classical(g, max(0.004 + 0.022 * min(amt, 100) / 100, sigma * (0.3 + 0.4 * min(amt, 100) / 100)))
     return (np.power(np.clip(out, 0, 1), 2.2) * k).astype(np.float32)
 
 
@@ -365,15 +406,20 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
     else:
         mult = wb_multipliers(xyz_to_cam, _n(crs, "Temperature", 5500), _n(crs, "Tint")).astype(np.float32)
     mult = mult / mult[1]
+    # Ohne Zwischen-Abschneiden bis das Farbrauschen weg ist (sonst entsteht ein Farbsockel in dunklen Flächen)
+    img = _black_floor(img)
     img = img * mult[None, None, :]
-    img = np.clip(img @ cam_to_srgb(xyz_to_cam).T.astype(np.float32), 0, None)
+    img = img @ cam_to_srgb(xyz_to_cam).T.astype(np.float32)
     img = img * (BASE_GAIN * 2.0 ** _n(crs, "Exposure2012"))
+    img = _calm_shadows(img, scale)
+    img = np.clip(img, 0, None)
     img = _denoise(img, crs)
     img = _tone_local(img, crs, scale)
     img = _apply_local(img, crs.get("MaskGroupBasedCorrections") or [], orientation, seg, scale)
     disp = base_curve(img, _n(crs, "Contrast2012")).astype(np.float32)
     disp = _white_black(disp, crs)
     disp = _presence(disp, crs, scale)
+    disp = _chroma_nr(disp, crs, scale)
     disp = _hsl_and_color(disp, crs)
     disp = _apply_curve(disp, crs)
     disp = _vignette(disp, crs)

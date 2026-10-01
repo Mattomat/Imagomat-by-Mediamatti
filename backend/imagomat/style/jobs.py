@@ -55,6 +55,30 @@ def load_samples(profile: str) -> list[Record]:
     return list(by_path.values())
 
 
+def _why_no_samples(samples: list[TrainingSample], catalog: str | None, folders: list[str] | None,
+                    min_rating: int) -> str:
+    """Verständliche Meldung, warum in der Quelle (fast) keine bearbeiteten Bilder gefunden wurden."""
+    from .sources import is_edited, process_version_ok
+
+    src = f"Katalog „{Path(catalog).name}“" if catalog else (
+        f"Ordner „{Path(folders[0]).name}“" if folders else "keine Quelle")
+    n = len(samples)
+    missing = [s for s in samples if not s.path.exists()]
+    edited = [s for s in samples if s.path.exists() and process_version_ok(s.crs) and is_edited(s.crs)]
+    msg = f"Zu wenige bearbeitete Bilder in {src}: {n} Bilder mit Einstellungen gefunden"
+    if missing:
+        msg += f", davon {len(missing)} Dateien nicht auffindbar (z. B. {missing[0].path})"
+        msg += " – ist die Festplatte/OneDrive verbunden und sind die Dateien heruntergeladen?"
+    if n and not missing:
+        msg += f", davon nur {len(edited)} wirklich bearbeitet"
+    if folders and n == 0:
+        msg += (". Im Ordner liegen keine XMP-Dateien mit Bearbeitungen – in Lightroom alle Bilder wählen und "
+                "„Metadaten in Datei speichern“ (⌘S), oder den Lightroom-Katalog als Quelle nehmen")
+    if min_rating:
+        msg += f". Filter: nur Bilder ab {min_rating} Sternen"
+    return msg + "."
+
+
 @job("train_profile")
 def train_profile(ctx: JobContext, name: str, catalog: str | None = None, folders: list[str] | None = None,
                   presets: list[str] | None = None, base_preset: str | None = None, min_rating: int = 0,
@@ -75,6 +99,8 @@ def train_profile(ctx: JobContext, name: str, catalog: str | None = None, folder
     dialect = learn_dialect([s.crs for s in samples], labels, Dialect.load())
     dialect.save()
     good = filter_samples(samples, min_rating=min_rating, only_picked=only_picked)
+    if len(good) < 3:
+        raise ValueError(_why_no_samples(samples, catalog, folders, min_rating))
     ctx.set_total(len(good) + 1)
     recs: list[Record] = []
     for i, s in enumerate(good):
@@ -83,7 +109,8 @@ def train_profile(ctx: JobContext, name: str, catalog: str | None = None, folder
             cached_only = True          # "Jetzt fertigstellen": nur noch bereits berechnete Bilder nutzen
         try:
             src = analysis_source(s.path)
-            r = cached_record(src) if cached_only else image_record(src)
+            # Mindestens 30 Bilder wirklich messen, auch bei "Jetzt fertigstellen" (sonst kein Modell möglich)
+            r = cached_record(src) if cached_only and len(recs) >= 30 else image_record(src)
             if r is None:
                 ctx.progress(i + 1)
                 continue
