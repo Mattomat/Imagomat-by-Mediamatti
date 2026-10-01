@@ -601,6 +601,117 @@ def create_app(db_path: str | None = None) -> FastAPI:
             crs["MaskGroupBasedCorrections"] = json.loads(r["masks"])
         return _render_file(iid, Path(r["path"]), crs, size, cache)
 
+    # ------------------------------------------------------------------ Eigener Edit (Editor in der Lupe)
+    def _edit_row(iid: int) -> tuple[Any, dict[str, Any], int]:
+        r = db.one("SELECT i.*, e.params, e.masks, e.profile FROM images i LEFT JOIN edits e ON e.image_id=i.id "
+                   "WHERE i.id=?", (iid,))
+        if not r:
+            raise HTTPException(404)
+        crs = json.loads(r["params"]) if r["params"] else {}
+        if r["masks"]:
+            crs["MaskGroupBasedCorrections"] = json.loads(r["masks"])
+        return r, crs, int(r["orientation"] or 1)
+
+    @app.get("/api/images/{iid}/editor")
+    def editor_get(iid: int) -> dict[str, Any]:
+        from ..style.editor import LOCAL_KEYS, crs_to_model
+
+        r, crs, orient = _edit_row(iid)
+        a = db.get_analysis(iid) or {}
+        return {"model": crs_to_model(crs, orient), "manual": r["profile"] == "manual", "orientation": orient,
+                "has_subject": load_masks(iid) is not None, "local_keys": LOCAL_KEYS,
+                "as_shot": [a.get("as_shot_temp"), a.get("as_shot_tint")]}
+
+    @app.post("/api/images/{iid}/editor/preview")
+    def editor_preview(iid: int, body: dict[str, Any]) -> Response:
+        """Live-Vorschau für den Editor (ohne Zuschnitt, damit Verläufe auf dem ganzen Bild liegen)."""
+        from ..render.pipeline import correction_mask
+        from ..style.editor import model_to_crs
+
+        r, base, orient = _edit_row(iid)
+        if not raw_io.is_raw(Path(r["path"])):
+            raise HTTPException(400, "Nur RAW-Dateien lassen sich bearbeiten")
+        crs = model_to_crs(body.get("model") or {}, base, orient)
+        flat = {**crs, "HasCrop": "False", "CropAngle": 0}
+        lin, xyz, wb, lorient = _linear(iid, Path(r["path"]))
+        m = load_masks(iid)
+        seg = {"subject": m[0], "sky": m[1]} if m else {}
+        detail = None
+        if r["preview_path"] and Path(r["preview_path"]).exists():
+            d = cv2.imread(str(r["preview_path"]), cv2.IMREAD_COLOR)
+            detail = cv2.cvtColor(d, cv2.COLOR_BGR2RGB) if d is not None else None
+        size = int(min(max(int(body.get("size") or 1400), 400), 2400))
+        img = render_hybrid(lin, xyz, wb, _with_as_shot(iid, flat), detail, lorient, seg, size)
+        ov = body.get("overlay")
+        corrs = flat.get("MaskGroupBasedCorrections") or []
+        if isinstance(ov, int) and 0 <= ov < len(corrs):
+            mk = correction_mask({**corrs[ov], "CorrectionAmount": 1}, img.shape[:2], lorient, seg)[..., None]
+            red = np.array([235, 40, 60], np.float32)
+            img = (img.astype(np.float32) * (1 - 0.55 * mk) + red * 0.55 * mk).clip(0, 255).astype(np.uint8)
+        ok, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return Response(buf.tobytes(), media_type="image/jpeg")
+
+    def _save_edit(iid: int, model: dict[str, Any]) -> dict[str, Any]:
+        from ..db import dumps
+        from ..style.editor import model_to_crs
+
+        _r, base, orient = _edit_row(iid)
+        crs = model_to_crs(model, base, orient)
+        masks = crs.get("MaskGroupBasedCorrections")
+        with db.tx() as c:
+            c.execute("INSERT OR REPLACE INTO edits(image_id, profile, params, masks, confidence, denoise, user_params,"
+                      " updated_at) VALUES(?, 'manual', ?, ?, 1.0, (SELECT denoise FROM edits WHERE image_id=?),"
+                      " (SELECT user_params FROM edits WHERE image_id=?), ?)",
+                      (iid, dumps({k: v for k, v in crs.items() if k != "MaskGroupBasedCorrections"}),
+                       dumps(masks) if masks else None, iid, iid, time.time()))
+        db.update_analysis(iid, {"develop_notes": ["von Hand bearbeitet"]})
+        return crs
+
+    @app.put("/api/images/{iid}/editor")
+    def editor_save(iid: int, body: dict[str, Any]) -> dict[str, Any]:
+        _save_edit(iid, body.get("model") or {})
+        return {"ok": True}
+
+    @app.delete("/api/images/{iid}/editor")
+    def editor_reset(iid: int) -> dict[str, Any]:
+        """Eigenen Edit verwerfen: wieder automatisch mit dem Stil des Shoots."""
+        from ..style import compare as cmp
+
+        r = db.one("SELECT i.shoot_id, s.profile FROM images i JOIN shoots s ON s.id=i.shoot_id WHERE i.id=?", (iid,))
+        if not r:
+            raise HTTPException(404)
+        style = r["profile"] or load_settings().default_profile or cmp.AUTO
+        try:
+            cmp.apply_to_image(db, r["shoot_id"], iid, style)
+        except KeyError as e:
+            raise HTTPException(404, "Stil nicht gefunden") from e
+        return {"ok": True}
+
+    @app.post("/api/images/{iid}/editor/sync")
+    def editor_sync(iid: int, body: dict[str, Any]) -> dict[str, Any]:
+        """Diesen Edit auf alle Bilder des Shoots übertragen: als Vorlage (1:1, pro Bild Belichtung, Weissabgleich,
+        Begradigen angepasst). Von Hand bearbeitete Bilder bleiben, wie sie sind."""
+        from ..style.editor import template_from_edit
+        from ..style.template import subject_level
+
+        crs = _save_edit(iid, body.get("model") or {})
+        r, _crs, orient = _edit_row(iid)
+        a = dict(db.get_analysis(iid) or {})
+        if a.get("subj_level") is None and r["preview_path"] and Path(r["preview_path"]).exists():
+            m = load_masks(iid)
+            img = cv2.imread(str(r["preview_path"]), cv2.IMREAD_REDUCED_COLOR_4)
+            if m is not None and img is not None:
+                a["subj_level"] = subject_level(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), m[0])
+        a["filename"] = r["filename"]
+        name = str(body.get("name") or "").strip() or f"Edit {r['filename']}"
+        exif = {"iso": r["iso"], "exposure_time": r["exposure_time"], "aperture": r["aperture"]}
+        template_from_edit(name, crs, a, exif, orient)
+        key = f"tpl:{name}"
+        with db.tx() as c:
+            c.execute("UPDATE shoots SET profile=? WHERE id=?", (key, r["shoot_id"]))
+        job_id = jobs.submit("develop", r["shoot_id"], profile=key, only_keep=False)
+        return {"job_id": job_id, "template": name}
+
     @app.get("/api/images/{iid}/thumb")
     def thumb(iid: int) -> Response:
         """Kleine Kachel fürs Raster (statt der grossen Vorschau): lädt viel schneller."""

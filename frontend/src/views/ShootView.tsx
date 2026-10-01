@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppCtx } from "../App";
 import { api, ImageItem, IS_APP, pickFolder, Preset, reveal, Shoot, waitForJob } from "../api";
 import PeoplePanel from "../components/PeoplePanel";
+import Editor from "../components/Editor";
 import { SELECTION_HINT, SELECTION_PARAMS, SELECTIONS, Selection, selectionFromSettings } from "../selection";
 import { Modal, More, Progress, Segmented } from "../ui";
 
@@ -50,6 +51,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const [sel, setSel] = useState(0);
   const [loupe, setLoupe] = useState(false);
   const [before, setBefore] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [scopesOn, setScopesOn] = useState(() => { try { return localStorage.getItem("imagomat.scopes") === "1"; } catch { return false; } });
   const toggleScopes = () => setScopesOn((v) => { try { localStorage.setItem("imagomat.scopes", v ? "0" : "1"); } catch { /* egal */ } return !v; });
   const [exporting, setExporting] = useState(false);
@@ -141,6 +143,8 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (["INPUT", "SELECT", "TEXTAREA"].includes(t.tagName) || exporting || !cur) return;
+      if (editing) { if (e.key === "Escape") setEditing(false); return; }
+      if ((e.key === "e" || e.key === "E") && loupe && !peopleMode) { setEditing(true); return; }
       const cols = gridRef.current ? Math.max(1, Math.floor(gridRef.current.clientWidth / 236)) : 5;
       const k = e.key;
       if (k === "ArrowRight") setSel((s) => Math.min(shown.length - 1, s + 1));
@@ -159,7 +163,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [cur, shown.length, loupe, exporting]);
+  }, [cur, shown.length, loupe, exporting, editing]);
 
   useEffect(() => {
     document.getElementById(`t-${cur?.id}`)?.scrollIntoView({ block: "nearest" });
@@ -285,6 +289,21 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
             </div>
           ))}
         </div>
+      ) : cur && editing ? (
+        <div className="loupe">
+          <Editor iid={cur.id} filename={cur.filename} toast={ctx.toast} onClose={() => { setEditing(false); setEditV((v) => v + 1); }}
+            onSaved={async (jobId) => {
+              setEditV((v) => v + 1);
+              if (jobId) {
+                ctx.refreshJobs();
+                const j = await waitForJob(jobId);
+                ctx.toast(j.status === "done" ? "Auf alle Bilder übertragen" : (j.error?.split("\n")[0] ?? "Übertragen fehlgeschlagen"),
+                  j.status === "done" ? "ok" : "error");
+                load(); setEditV((v) => v + 1);
+                api.get<StyleInfo>(`/api/shoots/${id}/style`).then(setStyle).catch(() => undefined);
+              }
+            }} />
+        </div>
       ) : cur && (
         <div className="loupe">
           <div className="stage" onClick={() => setBefore((b) => !b)}>
@@ -334,6 +353,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
             <span className="spacer" />
             <button onClick={() => patch(cur, { decision: "keep" })} className={cur.decision === "keep" ? "on" : ""}>Behalten</button>
             <button onClick={() => patch(cur, { decision: "reject" })} className={cur.decision === "reject" ? "on bad" : ""}>Aussortieren</button>
+            {!peopleMode && <button className="primary" onClick={() => setEditing(true)} title="Regler und Masken selbst einstellen (Taste E)">Bearbeiten</button>}
             <button onClick={() => setSocial("one")}>Für Story speichern</button>
             {!peopleMode && <button onClick={toggleScopes} className={scopesOn ? "on" : ""} title="Waveform wie Lumetri (Taste W)">Waveform</button>}
             <button className="ghost" onClick={() => setLoupe(false)}>Zurück</button>
@@ -341,7 +361,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         </div>
       )}
       <div className="keyhint">
-        ← → blättern · Enter gross · Leertaste Vorher/Nachher · W Waveform · 1–5 Sterne · X aussortieren · P behalten
+        ← → blättern · Enter gross · Leertaste Vorher/Nachher · E bearbeiten · W Waveform · 1–5 Sterne · X aussortieren · P behalten
       </div>
       {exporting && <ExportDialog ctx={ctx} shoot={shoot} kept={counts.keep} onClose={() => setExporting(false)} />}
       {tagging && <TagExportDialog ctx={ctx} shoot={shoot} total={items.length} onClose={() => setTagging(false)} />}
