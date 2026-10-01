@@ -118,3 +118,15 @@ def test_develop_shoot_with_template(tmp_path: Path):
     iid = db.images(sid)[0]["id"]
     crs = compare.develop_preview(db, sid, iid, "tpl:Meine")
     assert str(crs["Vibrance"]) == "15"
+
+
+def test_template_brightens_dark_players(tmp_path: Path):
+    """Interview im Dunkeln: Spieler deutlich dunkler als in der Vorlage -> kräftiger aufhellen (bis 1.5 EV)."""
+    from imagomat.style.template import adjust, learn_template
+
+    _write(tmp_path / "x", "A")
+    t = learn_template("T", [tmp_path / "x"])
+    exif = {"iso": 4000, "exposure_time": 1 / 800, "aperture": 2.8}
+    a = {"lin_log_median": -6.8, "lin_log_p75": -5.8, "subj_level": -5.0}
+    vals, notes = adjust(t, a, exif, {"subj_level": -3.8, "level": -6.3})
+    assert abs(vals["Exposure2012"] - (1.03 + 0.85 * 1.2)) < 0.011 and "Spieler" in notes[0]

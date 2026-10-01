@@ -46,6 +46,14 @@ def cache_dir() -> Path:
     return p
 
 
+def image_key(image_id: int, path: str | Path) -> str:
+    """Name für Zwischenspeicher eines Bildes: Nummer + Pfad. Nach Löschen/Neuimport kann eine Nummer an ein
+    anderes Bild gehen; mit dem Pfad im Namen wird nie die Vorschau eines anderen Bildes gezeigt."""
+    import zlib
+
+    return f"{image_id}_{zlib.crc32(str(path).encode('utf-8')):08x}"
+
+
 def profiles_dir() -> Path:
     p = data_dir() / "profiles"
     p.mkdir(parents=True, exist_ok=True)

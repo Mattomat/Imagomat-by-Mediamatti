@@ -128,3 +128,22 @@ def test_straighten_uses_ad_boards_not_legs():
     t = estimate_tilt(img)
     assert t.source in ("horizontal", "both")
     assert abs(abs(t.angle) - 2.0) < 0.5 and t.confidence >= 0.4
+
+
+def test_hybrid_handles_camera_tone_curve():
+    """Sony-JPEG mit steiler Kurve und anderer Farbe: Struktur im Publikum wie in der RAW-Entwicklung
+    (vorher Flecken/Lichthöfe, weil das Verhältnis JPEG/RAW von der Helligkeit abhing)."""
+    rng = np.random.default_rng(2)
+    clean, _ = _scene(600, 900)
+    tex = cv2.GaussianBlur(rng.random((600, 900)).astype(np.float32), (0, 0), 2.5)
+    tex = (tex - tex.mean()) / tex.std()
+    band = ((np.arange(600) / 600 > 0.3) & (np.arange(600) / 600 < 0.55))[:, None]
+    clean = clean * np.where(band, np.exp(0.9 * tex), 1)[..., None].astype(np.float32)   # Zuschauer
+    g = _srgb_encode(np.clip(clean * np.array([2.6, 2.2, 1.6], np.float32), 0, 1))
+    camera_jpeg = (np.clip(0.5 + (g - 0.5) * 1.5, 0, 1) * 255).astype(np.uint8)   # steil, Tiefen abgeschnitten
+    crs = {"Exposure2012": 0.8, "Shadows2012": 30, "Highlights2012": -60}
+    hyb = render_hybrid(clean, XYZ_TO_SRGB, np.ones(3), crs, camera_jpeg, 1, {}, 900).astype(np.float32)
+    ideal = render(clean, XYZ_TO_SRGB, np.ones(3), crs, 1, {}, 900).astype(np.float32)
+    crowd = (slice(200, 320), slice(50, 850))
+    assert np.abs(hyb[crowd] - ideal[crowd]).mean() < 5.5             # alte Übertragung: ~7.2
+    assert np.abs(hyb[crowd].mean((0, 1)) - ideal[crowd].mean((0, 1))).max() < 4

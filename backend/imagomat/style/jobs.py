@@ -233,7 +233,10 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
                        dumps({k: v for k, v in it.crs.items() if k != "MaskGroupBasedCorrections"}),
                        dumps(masks) if masks else None, it.confidence, it.denoise, it.image_id, time.time()))
     for it in items:
-        db.update_analysis(it.image_id, {"develop_notes": it.notes, "preset": it.preset})
+        upd = {"develop_notes": it.notes, "preset": it.preset}
+        if it.record.analysis.get("subj_level") is not None:
+            upd["subj_level"] = it.record.analysis["subj_level"]      # Bezug für Einzelbild-Vorschauen
+        db.update_analysis(it.image_id, upd)
     ctx.progress(len(items), "Entwicklung fertig")
 
 

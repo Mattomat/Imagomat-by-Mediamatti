@@ -458,6 +458,7 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
 # Saubere Vorschau: Details aus dem Kamera-JPEG, Licht und Farbe aus der RAW-Entwicklung
 # ---------------------------------------------------------------------------
 
+RENDER_VERSION = "h2"          # ändern, wenn die Vorschau anders aussieht: alte Zwischenspeicher verfallen
 HYBRID_LO_SIDE = 560          # Auflösung der RAW-Entwicklung für Licht/Farbe (rauscht dort kaum)
 
 
@@ -496,6 +497,47 @@ def _soften_local(img: np.ndarray, corrections: list[dict[str, Any]], orientatio
     return img
 
 
+def _match_curves(src: np.ndarray, dst: np.ndarray, bins: int = 48) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Monotone Kurve pro Kanal (log-Werte), die ``src`` (Kamera-JPEG) auf ``dst`` (RAW-Entwicklung) abbildet."""
+    out = []
+    for c in range(src.shape[-1]):
+        x, y = src[..., c].ravel(), dst[..., c].ravel()
+        qs = np.unique(np.quantile(x, np.linspace(0, 1, bins + 1)))
+        if len(qs) < 3:
+            out.append((np.array([x.min(), x.max() + 1e-3]), np.array([0.0, 0.0])))
+            continue
+        idx = np.clip(np.searchsorted(qs, x, side="right") - 1, 0, len(qs) - 2)
+        xs, ys = [], []
+        for i in range(len(qs) - 1):
+            sel = idx == i
+            if sel.sum() >= 8:
+                xs.append(float(np.median(x[sel])))
+                ys.append(float(np.median(y[sel] - x[sel])))       # Versatz statt Wert: glatter
+        if len(xs) < 2:
+            out.append((np.array([x.min(), x.max() + 1e-3]), np.full(2, float(np.median(y - x)))))
+            continue
+        xs_a, ys_a = np.array(xs), np.array(ys)
+        # monoton halten (Ausgabe x + Versatz darf nicht fallen), leicht glätten
+        ys_a = np.convolve(np.pad(ys_a, 1, mode="edge"), [0.25, 0.5, 0.25], mode="valid")
+        v = xs_a + ys_a
+        # Steigung begrenzen: wo das JPEG die Tiefen abgeschnitten hat, würde eine steile Kurve nur dessen
+        # Rauschen und Blockartefakte verstärken (Rest gleicht das grossflächige Verhältnis aus)
+        dx = np.maximum(np.diff(xs_a), 1e-6)
+        dv = np.clip(np.diff(v), 0.3 * dx, 1.6 * dx)
+        mid = len(v) // 2
+        v2 = np.empty_like(v)
+        v2[mid] = v[mid]
+        v2[mid + 1:] = v[mid] + np.cumsum(dv[mid:])
+        v2[:mid] = v[mid] - np.cumsum(dv[:mid][::-1])[::-1]
+        out.append((xs_a, v2 - xs_a))
+    return out
+
+
+def _apply_curves(x: np.ndarray, curves: list[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
+    return np.stack([x[..., c] + np.interp(x[..., c], xs, off).astype(np.float32)
+                     for c, (xs, off) in enumerate(curves)], -1).astype(np.float32)
+
+
 def render_hybrid(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, crs: dict[str, Any],
                   detail: np.ndarray | None, orientation: int = 1, seg: dict[str, np.ndarray] | None = None,
                   max_side: int | None = 1600) -> np.ndarray:
@@ -520,7 +562,13 @@ def render_hybrid(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.nda
     det_lin = _srgb_decode(det)
     lo_det = cv2.resize(det_lin, (lo.shape[1], lo.shape[0]), interpolation=cv2.INTER_AREA)
     eps = 0.004
-    logr = np.log((lo + eps) / (lo_det + eps)).astype(np.float32)
+    # Kamera-JPEG hat eigene Tonkurve/Farbe (Sony: steiler, DRO, satter). Erst punktweise pro Kanal auf die
+    # RAW-Entwicklung abbilden, sonst hängt das Verhältnis von der Helligkeit ab und erzeugt Lichthöfe/Flecken.
+    curves = _match_curves(np.log(lo_det + eps), np.log(lo + eps))
+    det_log = _apply_curves(np.log(det_lin + eps), curves)
+    lo_log = _apply_curves(np.log(lo_det + eps), curves)
+    det_lin = np.exp(det_log) - eps
+    logr = (np.log(lo + eps) - lo_log).astype(np.float32)
     logr = np.clip(cv2.GaussianBlur(logr, (0, 0), 0.7), -3.5, 3.5)
     H, W = det.shape[:2]
     logr = cv2.resize(logr, (W, H), interpolation=cv2.INTER_LINEAR)

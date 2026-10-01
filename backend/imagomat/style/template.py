@@ -43,7 +43,9 @@ DROP_KEYS = {"FilterList", "HasCrop", "CropTop", "CropLeft", "CropBottom", "Crop
 # Bildbezogene Felder in KI-Masken: ohne sie berechnet Lightroom die Maske für das neue Bild
 AI_IMAGE_KEYS = {"InputDigest", "InputDigestVersion", "LocalInputDigest", "LocalInputDigestVersion", "MaskDigest",
                  "WholeImageArea", "Origin", "FullMaskSize", "ReferencePoint"}
-MAX_SCENE_EV = 0.35            # Szenen-Korrektur der Belichtung (heller/dunkler als die Vorlage)
+MAX_SCENE_EV = 0.35            # Szenen-Korrektur der Belichtung (heller/dunkler als die Vorlage), ohne Spieler
+MAX_SUBJECT_EV = 1.5           # mit gemessener Helligkeit der Spieler (z. B. Interview im Dunkeln)
+SUBJECT_GAIN = 0.85
 MAX_CAMERA_EV = 4.0
 MAX_WB_MIRED, MAX_WB_TINT = 40.0, 20.0
 
@@ -142,7 +144,15 @@ def _measure_raw(path: Path) -> dict[str, float] | None:
 
         lin, info = raw_io.read_linear_any(path, max_side=1024)
         s = linear_stats(lin, info.camera_wb)
-        return {"level": scene_level(s), "as_shot_temp": info.as_shot_temp, "as_shot_tint": info.as_shot_tint}
+        out = {"level": scene_level(s), "as_shot_temp": info.as_shot_temp, "as_shot_tint": info.as_shot_tint}
+        try:
+            from ..vision.segmentation import segment
+
+            img, _ = raw_io.load_preview(path, 1024)
+            out["subj_level"] = subject_level(img, segment(img).subject)
+        except Exception as e:  # noqa: BLE001
+            log.info("Spieler der Vorlage nicht gemessen (%s): %s", path.name, e)
+        return out
     except Exception as e:  # noqa: BLE001 - Vorlage geht auch ohne RAW
         log.info("RAW zur Vorlage nicht lesbar (%s): %s", path.name, e)
         return None
@@ -188,7 +198,7 @@ def build_template(name: str, docs: list[tuple[str, dict[str, Any], dict[str, An
     ref: dict[str, Any] = {"iso": mid("iso", exifs), "exposure_time": mid("exposure_time", exifs),
                            "aperture": mid("aperture", exifs), "orientation": int(best[2].get("orientation") or 1)}
     refs = [r for r in refs or [] if r]
-    for k in ("level", "as_shot_temp", "as_shot_tint"):
+    for k in ("level", "as_shot_temp", "as_shot_tint", "subj_level"):
         ref[k] = mid(k, refs)
     from .changes import describe
 
@@ -259,6 +269,37 @@ def scene_level(a: dict[str, Any]) -> float | None:
     if m is None:
         return None
     return float(m) if p75 is None else 0.5 * float(m) + 0.5 * float(p75)
+
+
+def subject_level(img: np.ndarray | None, subject: np.ndarray | None) -> float | None:
+    """Helligkeit der Spieler (log2, linear) in der Kamera-Vorschau. Sie enthält Licht UND Kamera-Einstellung."""
+    import cv2
+
+    if img is None or subject is None:
+        return None
+    m = cv2.resize(subject.astype(np.float32), (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR) > 0.5
+    if m.mean() < 0.005:
+        return None
+    x = img[m].astype(np.float32) / 255.0
+    lin = np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+    y = 0.2126 * lin[:, 0] + 0.7152 * lin[:, 1] + 0.0722 * lin[:, 2]
+    return float(np.log2(max(float(np.median(y)), 1e-5)))
+
+
+def _subject_level_of(it: Any) -> float | None:
+    a = it.record.analysis
+    if a.get("subj_level") is not None:
+        return float(a["subj_level"])
+    if not getattr(it, "preview", None) or getattr(it, "subject_mask", None) is None:
+        return None
+    import cv2
+
+    img = cv2.imread(it.preview, cv2.IMREAD_REDUCED_COLOR_4)
+    if img is None:
+        return None
+    v = subject_level(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), it.subject_mask)
+    a["subj_level"] = v
+    return v
 
 
 def camera_ev(exif: dict[str, Any]) -> float | None:
@@ -351,7 +392,12 @@ def adjust(tpl: dict[str, Any], analysis: dict[str, Any], exif: dict[str, Any],
         cam_ref is not None else 0.0
     level = scene_level(analysis)
     d_scene = 0.0
-    if level is not None and ref.get("level") is not None:
+    subj, subj_ref = analysis.get("subj_level"), ref.get("subj_level")
+    if subj is not None and subj_ref is not None:
+        # Spieler gemessen (Kamera-Vorschau): enthält schon die Kamera-Einstellung
+        d_cam = 0.0
+        d_scene = float(np.clip(SUBJECT_GAIN * (float(subj_ref) - float(subj)), -MAX_SUBJECT_EV, MAX_SUBJECT_EV))
+    elif level is not None and ref.get("level") is not None:
         # Szene = RAW-Helligkeit ohne den Einfluss der Kamera-Einstellung
         s_now = level - (cam_now if cam_now is not None and cam_ref is not None else 0.0)
         s_ref = float(ref["level"]) - (cam_ref if cam_now is not None and cam_ref is not None else 0.0)
@@ -360,7 +406,8 @@ def adjust(tpl: dict[str, Any], analysis: dict[str, Any], exif: dict[str, Any],
     if abs(d_cam) >= 0.05:
         notes.append(f"Belichtung {d_cam:+.2f} (andere Kamera-Einstellung)")
     if abs(d_scene) >= 0.05:
-        notes.append(f"Belichtung {d_scene:+.2f} (Szene {'dunkler' if d_scene > 0 else 'heller'})")
+        what = "Spieler" if subj is not None and subj_ref is not None else "Szene"
+        notes.append(f"Belichtung {d_scene:+.2f} ({what} {'dunkler' if d_scene > 0 else 'heller'} als in der Vorlage)")
     temp, tint = _num(crs.get("Temperature")), _num(crs.get("Tint"))
     if str(crs.get("WhiteBalance", "As Shot")) != "As Shot" and temp:
         a_t, a_tint = analysis.get("as_shot_temp"), analysis.get("as_shot_tint")
@@ -387,6 +434,7 @@ def shoot_reference(items: list[Any]) -> dict[str, float | None]:
 
     recs = [it.record for it in items]
     return {"level": med([scene_level(r.analysis) for r in recs]),
+            "subj_level": med([r.analysis.get("subj_level") for r in recs]),
             "as_shot_temp": med([r.analysis.get("as_shot_temp") for r in recs]),
             "as_shot_tint": med([r.analysis.get("as_shot_tint") for r in recs]),
             "iso": med([r.exif.get("iso") for r in recs]),
@@ -411,6 +459,8 @@ def develop_items(items: list[Any], tpl: dict[str, Any], settings: Any, dialect:
     from ..lightroom.params import BASE_FLAGS
     from .develop import _crop
 
+    for it in items:
+        _subject_level_of(it)
     ref_all = shoot_ref if shoot_ref is not None else shoot_reference(items)
     for it in items:
         a = it.record.analysis

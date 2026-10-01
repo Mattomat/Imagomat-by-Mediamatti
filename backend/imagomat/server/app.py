@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from .. import __version__
 from .. import pipeline  # noqa: F401  (registriert alle Jobs)
 from ..analysis import import_folder, load_cached_preview, load_masks
-from ..config import Settings, cache_dir, load_settings, save_settings
+from ..config import Settings, cache_dir, image_key, load_settings, save_settings
 from ..culling.engine import REASONS_DE
 from ..vision.action import MOMENTS_DE
 from ..vision.tags import labels as tag_labels
@@ -37,7 +37,7 @@ from ..jobs import JobManager
 from ..lightroom.dialect import Dialect, learn_dialect
 from ..people import roster
 from ..people.registry import assign_cluster, assign_face, persons, upsert_person
-from ..render.pipeline import render_hybrid
+from ..render.pipeline import RENDER_VERSION, render_hybrid
 from ..style.jobs import export_profile, import_profile
 from ..style.model import list_profiles
 from ..style.presets import PRESETS
@@ -167,6 +167,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:1420", "http://127.0.0.1:1420",
                                                       "tauri://localhost", "http://tauri.localhost"],
                        allow_methods=["*"], allow_headers=["*"])
+
+    @app.middleware("http")
+    async def no_stale_images(request: Any, call_next: Any) -> Any:
+        """Bilder nie ungeprüft aus dem Browser-Cache zeigen: nach Löschen/Neuimport bekommt ein anderes Bild
+        dieselbe Nummer, und die Vorschau-Engine ändert sich mit neuen Versionen."""
+        resp = await call_next(request)
+        if request.url.path.startswith("/api/images/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
     sockets: set[WebSocket] = set()
 
     def on_event(evt: dict[str, Any]) -> None:
@@ -515,7 +525,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             return _linear_once(iid, path)
 
     def _linear_once(iid: int, path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-        lin_cache = cache_dir() / "linear" / f"{iid}.npz"
+        lin_cache = cache_dir() / "linear" / f"{image_key(iid, path)}.npz"
         lin_cache.parent.mkdir(parents=True, exist_ok=True)
         if lin_cache.exists():
             z = np.load(lin_cache)
@@ -551,7 +561,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
                    "ON e.image_id=i.id WHERE i.id=?", (iid,))
         if not r:
             raise HTTPException(404)
-        cache = cache_dir() / "renders" / f"{iid}_{size}_{int((r['updated_at'] or 0) * 1000)}.jpg"
+        cache = cache_dir() / "renders" / \
+            f"{image_key(iid, r['path'])}_{size}_{int((r['updated_at'] or 0) * 1000)}_{RENDER_VERSION}.jpg"
         if cache.exists():
             return FileResponse(cache, media_type="image/jpeg")
         crs = json.loads(r["params"]) if r["params"] else {}
@@ -562,13 +573,13 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/images/{iid}/thumb")
     def thumb(iid: int) -> Response:
         """Kleine Kachel fürs Raster (statt der grossen Vorschau): lädt viel schneller."""
-        r = db.one("SELECT preview_path FROM images WHERE id=?", (iid,))
+        r = db.one("SELECT path, preview_path FROM images WHERE id=?", (iid,))
         if not r:
             raise HTTPException(404)
         src = Path(r["preview_path"]) if r["preview_path"] else None
         if src is None or not src.exists():
             return preview(iid)
-        t = cache_dir() / "thumbs" / f"{iid}.jpg"
+        t = cache_dir() / "thumbs" / f"{image_key(iid, r['path'])}.jpg"
         if not t.exists() or t.stat().st_mtime < src.stat().st_mtime:
             img = cv2.imread(str(src), cv2.IMREAD_REDUCED_COLOR_2)
             if img is None:
@@ -650,7 +661,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         r = db.one("SELECT path, shoot_id FROM images WHERE id=?", (iid,))
         if not r:
             raise HTTPException(404)
-        tag = hashlib.sha1(f"{style}|{cmp.model_version(style)}|{settings_version()}".encode()).hexdigest()[:12]
+        tag = hashlib.sha1(f"{style}|{cmp.model_version(style)}|{settings_version()}|{RENDER_VERSION}|"
+                           f"{r['path']}".encode()).hexdigest()[:12]
         cache = cache_dir() / "renders" / f"{iid}_cmp_{tag}_{size}.jpg"
         if cache.exists():
             return FileResponse(cache, media_type="image/jpeg")

@@ -384,7 +384,8 @@ def refresh_raw_metrics(ctx: JobContext, shoot_id: int) -> int:
             n += 1
         except Exception as e:  # noqa: BLE001
             log.warning("Neu messen fehlgeschlagen für %s: %s", r["filename"], e)
-        for p in [cache_dir() / "linear" / f"{r['id']}.npz", *(cache_dir() / "renders").glob(f"{r['id']}_*.jpg")]:
+        for p in [cache_dir() / "linear" / f"{r['id']}.npz", *(cache_dir() / "linear").glob(f"{r['id']}_*.npz"),
+                  *(cache_dir() / "renders").glob(f"{r['id']}_*.jpg")]:
             p.unlink(missing_ok=True)
         if i % 10 == 0:
             ctx.progress(message=f"RAW-Daten neu lesen {i + 1}/{len(rows)}")

@@ -14,7 +14,8 @@ def _cache_files(image_id: int) -> list[Path]:
     c = cache_dir()
     files = [c / "previews" / sub / f"{image_id}.jpg", c / "masks" / sub / f"{image_id}.npy",
              c / "linear" / f"{image_id}.npz", c / "thumbs" / f"{image_id}.jpg"]
-    files += list((c / "renders").glob(f"{image_id}_*.jpg")) if (c / "renders").exists() else []
+    for d, pat in (("renders", f"{image_id}_*.jpg"), ("linear", f"{image_id}_*.npz"), ("thumbs", f"{image_id}_*.jpg")):
+        files += list((c / d).glob(pat)) if (c / d).exists() else []
     return files
 
 
