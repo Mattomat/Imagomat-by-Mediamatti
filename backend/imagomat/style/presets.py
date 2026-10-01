@@ -60,6 +60,8 @@ class Preset:
     night_target: float | None = None         # Ziel bei Nacht/Flutlicht (None: target_log + night_shift)
     night_shift: float = 0.0                  # Flutlicht-Stile: NIGHT_SHIFT (an echten Bearbeitungen gemessen)
     group: str = ""                           # z. B. "Fussball": in der Auswahl gruppiert, nie automatisch
+    judge: bool = True                        # jedes Bild an der Probe-Entwicklung beurteilen (style.judge)
+    judge_l75: float | None = None            # Ziel-Helligkeit (75 %-Quantil L*), None = Tag/Nacht-Standard
 
 
 # Nachtbilder bleiben Nachtbilder: Unter Flutlicht belichtest du nur leicht auf (an deinen eigenen Lightroom-
@@ -299,6 +301,23 @@ for _p in FOOTBALL + [PRESETS["sport_floodlight"]]:
     if _p.night_target is None:
         _p.night_shift = NIGHT_SHIFT
 PRESETS.update({p.key: p for p in FOOTBALL})
+
+# Weissabgleich pro Bild: helles Weiss an den Spielern (Trikots, Hosen, Stutzen) neutral; ohne erkannte
+# Spieler bleibt er wie aufgenommen. Feste Effekte der Fussball-Stile gedämpft: zu viel Klarheit, Dunst,
+# Vignette und Farbtönung wirkten auf echten Bildern hart und künstlich (Lichthöfe, Rauschen, fleckig).
+for _p in FOOTBALL + [PRESETS["sport_floodlight"], PRESETS["sport_day"]]:
+    if _p.wb_mode == "as_shot":
+        _p.wb_mode = "white"
+    if _p is MEDIAMATTI:
+        continue
+    for _k, _f in (("Clarity2012", 0.5), ("Dehaze", 0.4), ("Texture", 0.6), ("PostCropVignetteAmount", 0.5),
+                   ("GrainAmount", 0.5), ("Contrast2012", 0.7)):
+        if _k in _p.look:
+            _p.look[_k] = round(_p.look[_k] * _f)
+    for _k in [k for k in _p.look if k.startswith("grade_")]:
+        _p.look[_k] *= 0.5
+    _p.masks = [MaskRecipe(r.kind, r.name, {k: (v * 0.5 if k in ("Clarity2012", "Dehaze", "Texture") else v)
+                                            for k, v in r.local.items()}, r.condition) for r in _p.masks]
 
 
 # Weissabgleich bei Sport/Flutlicht: wie aufgenommen (Kamera-Automatik unter LED-Flutlicht ist gut).

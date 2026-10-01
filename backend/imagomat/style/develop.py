@@ -373,7 +373,26 @@ def develop_items(items: list[ImageDevelop], model: StyleModel | None, settings:
     for it in items:
         build_settings(it, settings, dialect)
         if look is None or not apply_look(it, look, dialect):
+            if it.prediction is None:
+                judge_image(it)
             fit_white_black(it, settings)
+
+
+def judge_image(it: ImageDevelop) -> None:
+    """Preset-Werte am tatsächlichen Aussehen dieses Bildes nachregeln (Helligkeit, Lichter, Tiefen)."""
+    preset = PRESETS.get(it.preset)
+    if preset is None or not preset.judge or not it.preview:
+        return
+    from .judge import judge
+    from .scopes import preview_linear
+
+    try:
+        lin = preview_linear(it.preview, 224)
+        if lin is None:
+            return
+        it.notes += judge(it.crs, lin, it.record.analysis, it.orientation, it.subject_mask, preset.judge_l75)
+    except Exception as e:  # noqa: BLE001 - dann bleiben die geschätzten Werte
+        log.warning("Beurteilung fehlgeschlagen für Bild %s: %s", it.image_id, e)
 
 
 def apply_look(it: ImageDevelop, look: dict[str, Any], dialect: Dialect) -> bool:
@@ -397,6 +416,10 @@ def apply_look(it: ImageDevelop, look: dict[str, Any], dialect: Dialect) -> bool
     return True
 
 
+NIGHT_SCOPE_HI = 0.78
+NIGHT_WHITES_MAX = 30
+
+
 def fit_white_black(it: ImageDevelop, settings: Settings) -> None:
     """Weiss/Schwarz wie am Lumetri-Waveform: oben und unten leicht anschlagen lassen."""
     if settings.develop.punch <= 0 or not it.preview:
@@ -411,11 +434,24 @@ def fit_white_black(it: ImageDevelop, settings: Settings) -> None:
         kw: dict[str, Any] = {}
         if preset is not None and preset.scope_hi is not None:
             kw["hi_target"] = preset.scope_hi
+        elif preset is not None:
+            # Nacht: Weiss nicht bis an den Rand ziehen (deine Bearbeitungen: oberste 0.3 % bei 66–89 %)
+            from .presets import night_weight
+
+            nw = night_weight(it.record.analysis)
+            if nw > 0:
+                kw["hi_target"] = (1 - nw) * 0.975 + nw * NIGHT_SCOPE_HI
         if preset is not None and preset.scope_lo is not None:
             kw.update(lo_target=preset.scope_lo, free_blacks=True)
         if preset is not None and not preset.deepen_blacks:
             kw["deepen"] = False
         notes = fit_scopes(it.crs, lin, it.orientation, it.subject_mask, settings.develop.punch, **kw)
+        if preset is not None and preset.scope_hi is None and kw.get("hi_target", 1.0) < 0.9:
+            # Nacht ohne helle Flächen im Bild: Weiss nicht bis zum Anschlag hochziehen (graue, flaue Lichter)
+            from ..lightroom.params import to_number
+
+            if float(to_number(it.crs.get("Whites2012")) or 0) > NIGHT_WHITES_MAX:
+                it.crs["Whites2012"] = NIGHT_WHITES_MAX
     except Exception as e:  # noqa: BLE001 - dann bleibt die Schätzung aus punch()
         log.debug("Waveform-Anpassung fehlgeschlagen für %s: %s", it.image_id, e)
         return
