@@ -581,6 +581,58 @@ def create_app(db_path: str | None = None) -> FastAPI:
             cv2.imwrite(str(t), img, [cv2.IMWRITE_JPEG_QUALITY, 82])
         return FileResponse(t, media_type="image/jpeg")
 
+    # ------------------------------------------------------------------ Waveform (Lumetri) und Änderungen
+    def _jpeg_for(iid: int, src: str) -> Path:
+        if src == "before":
+            resp = preview(iid)
+        elif src.startswith("style:"):
+            resp = styled(iid, src[6:], 900)
+        else:
+            resp = render_after(iid, 900)
+        p = getattr(resp, "path", None)
+        if not p:
+            raise HTTPException(404, "Bild nicht verfügbar")
+        return Path(p)
+
+    @app.get("/api/images/{iid}/waveform")
+    def waveform_png(iid: int, src: str = "after", v: int = 0) -> Response:
+        """Helligkeits-Waveform wie in Premiere (Lumetri): vorher (Kamera) oder nachher (Bearbeitung)."""
+        from ..style.scopes import scopes as _scopes, waveform
+
+        img = cv2.imread(str(_jpeg_for(iid, src)), cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(404, "Bild nicht lesbar")
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        ok, png = cv2.imencode(".png", cv2.cvtColor(waveform(rgb), cv2.COLOR_RGB2BGR))
+        sc = _scopes(rgb)
+        return Response(png.tobytes(), media_type="image/png",
+                        headers={"X-White-Clip": f"{sc['white_clip']:.4f}", "X-Black-Clip": f"{sc['black_clip']:.4f}",
+                                 "Cache-Control": "no-store"})
+
+    @app.get("/api/images/{iid}/changes")
+    def changes(iid: int, style: str | None = None) -> dict[str, Any]:
+        """Was die Bearbeitung konkret ändert (Regler, Masken, Hinweise) – für die Anzeige neben der Waveform."""
+        from ..style import compare as cmp
+        from ..style.changes import describe
+
+        r = db.one("SELECT i.shoot_id, e.params, e.masks FROM images i LEFT JOIN edits e ON e.image_id=i.id "
+                   "WHERE i.id=?", (iid,))
+        if not r:
+            raise HTTPException(404)
+        a = db.get_analysis(iid)
+        if style:
+            try:
+                crs = cmp.develop_preview(db, r["shoot_id"], iid, style)
+            except KeyError as e:
+                raise HTTPException(404, "Bild ist noch nicht analysiert") from e
+            notes: list[str] = []
+        else:
+            crs = json.loads(r["params"]) if r["params"] else {}
+            if r["masks"]:
+                crs["MaskGroupBasedCorrections"] = json.loads(r["masks"])
+            notes = list(a.get("develop_notes") or [])
+        return {**describe(crs, a.get("as_shot_temp"), a.get("as_shot_tint")), "notes": notes}
+
     # ------------------------------------------------------------------ Stile vergleichen
     @app.get("/api/shoots/{sid}/compare")
     def compare(sid: int, n: int = 3) -> dict[str, Any]:

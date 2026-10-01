@@ -59,6 +59,27 @@ def predict_all(items: list[ImageDevelop], model: StyleModel | None, settings: S
             it.targets = apply_preset(PRESETS[key], {**it.record.analysis, "iso": it.record.exif.get("iso")},
                                       settings.denoise)
             it.confidence = 0.5
+            if PRESETS[key].wb_mode == "white":
+                _white_balance(it)
+
+
+def _white_balance(it: ImageDevelop) -> None:
+    """Weissabgleich so, dass Weiss an den Spielern (Trikots, Hosen) neutral ist."""
+    if not it.preview or it.subject_mask is None or not it.record.analysis.get("as_shot_temp"):
+        return
+    import cv2
+
+    from .whitebalance import white_patch_shift
+
+    img = cv2.imread(it.preview, cv2.IMREAD_REDUCED_COLOR_2)
+    if img is None:
+        return
+    sh = white_patch_shift(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), it.subject_mask)
+    if sh is None:
+        return
+    it.targets["wb_dmired"], it.targets["wb_dtint"], it.targets["wb_custom"] = sh[0], sh[1], 1.0
+    if abs(sh[0]) >= 3 or abs(sh[1]) >= 3:
+        it.notes.append(f"Weissabgleich auf neutrales Weiss: {sh[0]:+.0f} Mired, Tint {sh[1]:+.0f}")
 
 
 def light_groups(items: list[ImageDevelop], gap_s: float = 120.0, dmired: float = 25.0,
@@ -180,9 +201,14 @@ def bottom_fade(it: ImageDevelop, settings: Settings) -> dict[str, Any] | None:
     if sb:
         start = float(np.clip(sb[1] + (sb[3] - sb[1]) * 0.85, 0.55, 0.8))
     soft = float(np.clip(ds.bottom_fade_strength, 0.3, 1.5))
-    local = {"Exposure2012": round(ev, 2), "Highlights2012": -20, "Saturation": -10,
-             "Sharpness": round(-50 * soft), "Clarity2012": round(-25 * soft), "Texture": round(-35 * soft)}
-    comp = mk.gradient_component((0.5, start), (0.5, 1.0), it.orientation, "Verlauf unten")
+    preset = PRESETS.get(it.preset) if it.prediction is None else None
+    if preset is not None and preset.fade_local is not None:
+        local = {"Exposure2012": round(ev, 2), **{k: round(v * min(soft, 1.0)) for k, v in preset.fade_local.items()}}
+    else:
+        local = {"Exposure2012": round(ev, 2), "Highlights2012": -20, "Saturation": -10,
+                 "Sharpness": round(-50 * soft), "Clarity2012": round(-25 * soft), "Texture": round(-35 * soft)}
+    full = min(1.0, start + preset.fade_span) if preset is not None and preset.fade_span else 1.0
+    comp = mk.gradient_component((0.5, start), (0.5, full), it.orientation, "Verlauf unten")
     return mk.correction("Verlauf unten", local, [comp])
 
 
@@ -361,7 +387,7 @@ def apply_look(it: ImageDevelop, look: dict[str, Any], dialect: Dialect) -> bool
     except Exception as e:  # noqa: BLE001 - dann wie bisher ohne Look-Anpassung
         log.warning("Look-Anpassung fehlgeschlagen für Bild %s: %s", it.image_id, e)
         return False
-    it.notes = [n for n in it.notes if not n.startswith(("Weiss", "Schwarz"))] + notes
+    it.notes = [n for n in it.notes if not n.startswith(("Weiss ", "Schwarz "))] + notes
     return True
 
 
@@ -375,8 +401,16 @@ def fit_white_black(it: ImageDevelop, settings: Settings) -> None:
         lin = preview_linear(it.preview)
         if lin is None:
             return
-        notes = fit_scopes(it.crs, lin, it.orientation, it.subject_mask, settings.develop.punch)
+        preset = PRESETS.get(it.preset) if it.prediction is None else None
+        kw: dict[str, Any] = {}
+        if preset is not None and preset.scope_hi is not None:
+            kw["hi_target"] = preset.scope_hi
+        if preset is not None and preset.scope_lo is not None:
+            kw.update(lo_target=preset.scope_lo, free_blacks=True)
+        if preset is not None and not preset.deepen_blacks:
+            kw["deepen"] = False
+        notes = fit_scopes(it.crs, lin, it.orientation, it.subject_mask, settings.develop.punch, **kw)
     except Exception as e:  # noqa: BLE001 - dann bleibt die Schätzung aus punch()
         log.debug("Waveform-Anpassung fehlgeschlagen für %s: %s", it.image_id, e)
         return
-    it.notes = [n for n in it.notes if not n.startswith(("Weiss", "Schwarz"))] + notes
+    it.notes = [n for n in it.notes if not n.startswith(("Weiss ", "Schwarz "))] + notes

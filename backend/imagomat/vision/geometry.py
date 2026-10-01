@@ -7,8 +7,10 @@
   speichert die zwei Eckpunkte des gedrehten Rechtecks normiert im *Sensor*-Koordinatensystem
   (vor der EXIF-Drehung); vgl. darktable src/develop/lightroom.c.
 
-Vorzeichen von CropAngle: positiv = Bild im Uhrzeigersinn drehen (wie der Lightroom-
-Geraderichten-Regler). Muss im Roundtrip-Test bestätigt werden (docs/lightroom-roundtrip.md).
+Vorzeichen: intern (Tilt.angle, CropPlan.angle) heisst positiv "Bild im Uhrzeigersinn drehen". Lightroom
+speichert in crs:CropAngle die Drehung des Zuschnittrahmens, d. h. positiv = Bildinhalt gegen den Uhrzeigersinn.
+Bestätigt an echten Lightroom-Bearbeitungen (Sony A7 V, Hochformat, CropAngle +2.8 begradigt Werbebanden, die
+intern mit -2.6 gemessen werden): CROP_ANGLE_SIGN = -1.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-CROP_ANGLE_SIGN = 1.0
+CROP_ANGLE_SIGN = -1.0
 
 
 @dataclass

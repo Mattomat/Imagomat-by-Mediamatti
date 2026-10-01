@@ -39,9 +39,9 @@ class Preset:
     key: str
     name: str
     description: str
-    target_log: float              # gewünschter linearer Median (log2) nach Belichtung
+    target_log: float              # gewünschter linearer Median (log2) nach Belichtung (helle Szenen)
     subject_weight: float = 0.5    # 0 = ganzes Bild, 1 = nur Motiv
-    wb_mode: str = "as_shot"       # as_shot | neutralize | warm
+    wb_mode: str = "as_shot"       # as_shot | neutralize | warm | white (Weiss an den Spielern neutral)
     neutralize: float = 0.0        # Anteil der Grauwelt-Korrektur
     warm_mired: float = 0.0        # negativ = wärmer
     tint_fix: float = 0.0          # Anteil der Tint-Korrektur Richtung 0 (Flutlicht-Grünstich)
@@ -52,7 +52,21 @@ class Preset:
     curve: list[float] | None = None          # Abweichung an CURVE_X
     masks: list[MaskRecipe] = field(default_factory=list)
     fade: float = 1.0                         # Stärke des Verlaufs unten (mal Einstellung)
+    fade_local: dict[str, float] | None = None   # eigene Werte im Verlauf unten (statt Standard-Unschärfe)
+    fade_span: float | None = None            # Verlauf erreicht volle Wirkung so weit unter dem Start
+    scope_hi: float | None = None             # Waveform-Ziel oben (Anteil 0..1), None = Standard (leicht anschlagen)
+    scope_lo: float | None = None             # Waveform-Ziel unten; gesetzt = Schwarz darf auch angehoben werden
+    deepen_blacks: bool = True                # flaue Bilder unten automatisch satter machen
+    night_target: float | None = None         # Ziel bei Nacht/Flutlicht (None: target_log + night_shift)
+    night_shift: float = 0.0                  # Flutlicht-Stile: NIGHT_SHIFT (an echten Bearbeitungen gemessen)
     group: str = ""                           # z. B. "Fussball": in der Auswahl gruppiert, nie automatisch
+
+
+# Nachtbilder bleiben Nachtbilder: Unter Flutlicht belichtest du nur leicht auf (an deinen eigenen Lightroom-
+# Bearbeitungen gemessen: +0.5 bis +1.1 EV bei einem RAW-Median um 2^-6). Ein Tageslicht-Ziel würde Nachtbilder
+# um ~3 EV aufhellen und dann die Lichter zerdrücken (flau, verrauscht). Zwischen hell und dunkel wird übergeblendet.
+NIGHT_SHIFT = -2.6
+NIGHT_FROM, NIGHT_FULL = -4.0, -5.5          # RAW-Median (log2): ab hier Nacht-Ziel, ab hier ganz
 
 
 def _hsl(**kw: float) -> dict[str, float]:
@@ -263,6 +277,27 @@ SIGNATURE_NIGHT = Preset(
            MaskRecipe("gradient_top", "Verlauf oben", {"Exposure2012": -0.35, "Saturation": -10}, "always"),
            BOTTOM_FADE], fade=1.3, group="Fussball")
 FOOTBALL.insert(0, SIGNATURE_NIGHT)
+
+# Direkt aus deinen eigenen Lightroom-Bearbeitungen (4 Nachtspiele, Sony A7 V, ISO 4000): Weissabgleich so, dass
+# Weiss neutral ist, kaum Kontrast, Lichter stark runter, Tiefen hoch, Rasen entsättigt und dunkler, Spieler
+# per Motiv-Maske mit viel Weiss und etwas Tiefen/Klarheit, ein kräftiger (−1.5 bis −2 EV), ganz weicher
+# Verlauf unten. Keine Himmel-/Hintergrund-Maske, keine Vignette, keine Farbtönung.
+MEDIAMATTI = Preset(
+    "fb_mediamatti", "Mediamatti Flutlicht", "Aus deinen eigenen Lightroom-Werten: neutrales Weiss, Lichter "
+    "runter, Tiefen hoch, Rasen ruhiger, Spieler mit viel Weiss, starker weicher Verlauf unten.",
+    target_log=-2.2, night_target=-4.8, subject_weight=0.5, wb_mode="white", highlight_protect=1.0, shadow_lift=0.0,
+    look={"Contrast2012": 2, "Highlights2012": -20, "Shadows2012": 40, "Whites2012": -15, "Blacks2012": -15,
+          "Vibrance": 15, "Saturation": -2, "Sharpness": 40, "SharpenRadius": 1.0, "SharpenDetail": 25,
+          **_hsl(sat_Red=-8, sat_Green=-33, lum_Green=-19, hue_Green=-2)},
+    masks=[MaskRecipe("subject", "Spieler", {"Shadows2012": 33, "Whites2012": 84, "Clarity2012": 10,
+                                             "Texture": 8}, "has_subject"),
+           MaskRecipe("gradient_bottom", "Verlauf unten", {}, "always")],
+    fade=1.35, fade_local={"Sharpness": -100, "Clarity2012": -100, "Texture": -100}, fade_span=0.3,
+    scope_hi=0.78, deepen_blacks=False, group="Fussball")
+FOOTBALL.insert(0, MEDIAMATTI)
+for _p in FOOTBALL + [PRESETS["sport_floodlight"]]:
+    if _p.night_target is None:
+        _p.night_shift = NIGHT_SHIFT
 PRESETS.update({p.key: p for p in FOOTBALL})
 
 
@@ -290,6 +325,15 @@ def _neutralize(a: dict[str, Any]) -> tuple[float, float] | None:
         return multipliers_to_temp_tint(mat, mult)
     except (np.linalg.LinAlgError, ValueError, ZeroDivisionError):
         return None
+
+
+
+
+def night_weight(a: dict[str, Any]) -> float:
+    lm = a.get("lin_log_median")
+    if lm is None:
+        return 0.0
+    return float(np.clip((NIGHT_FROM - float(lm)) / (NIGHT_FROM - NIGHT_FULL), 0.0, 1.0))
 
 
 def measured_log(a: dict[str, Any], subject_weight: float) -> float | None:
@@ -332,7 +376,10 @@ def apply(preset: Preset, a: dict[str, Any], ds: DenoiseSettings | None = None) 
     t.update(preset.look)
     m = measured_log(a, preset.subject_weight)
     if m is not None:
-        exp = float(np.clip(preset.target_log - m, -2.0, 3.0))
+        nw = night_weight(a)
+        night = preset.night_target if preset.night_target is not None else preset.target_log + preset.night_shift
+        target = (1 - nw) * preset.target_log + nw * night
+        exp = float(np.clip(target - m, -2.0, 3.0))
     else:
         med = max(float(a.get("median") or 0.45), 0.02)
         exp = float(np.clip(2.2 * math.log2(0.45 / med) * 0.8, -2.0, 2.5))

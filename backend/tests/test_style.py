@@ -63,7 +63,7 @@ def test_preset_adapts_exposure_and_denoise():
               "noise_sigma_mid": 0.002, "median": 0.6}
     p = PRESETS["sport_floodlight"]
     td, tb = apply(p, dark), apply(p, bright)
-    assert td["Exposure2012"] > 2 and tb["Exposure2012"] < 0
+    assert td["Exposure2012"] > 1.5 and tb["Exposure2012"] < 0   # Nacht bleibt Nacht (siehe NIGHT_SHIFT)
     assert tb["Highlights2012"] < td["Highlights2012"]
     assert td["denoise"] > tb["denoise"]
 
@@ -148,7 +148,7 @@ def test_build_settings_preset_only():
     predict_all([it], None, s)
     build_settings(it, s, Dialect())
     assert it.preset == "concert_stage"
-    assert it.crs["HasCrop"] is True and abs(it.crs["CropAngle"] - 2.0) < 1e-6
+    assert it.crs["HasCrop"] is True and abs(it.crs["CropAngle"] + 2.0) < 1e-6   # Lightroom: Rahmen gegen den Bildinhalt
     assert it.crs["MaskGroupBasedCorrections"][0]["CorrectionMasks"][0]["What"] == "Mask/Image"
     assert it.denoise and it.crs["EnhanceDenoiseLumaAmount"] == str(it.denoise)
     assert it.crs["Exposure2012"] > 1

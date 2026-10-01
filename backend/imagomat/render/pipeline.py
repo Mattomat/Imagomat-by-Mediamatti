@@ -20,7 +20,7 @@ import numpy as np
 
 from ..io.color import XYZ_TO_SRGB, wb_multipliers
 from ..lightroom.params import LOCAL_PARAMS, parse_curve, to_number
-from ..vision.geometry import sensor_to_display
+from ..vision.geometry import CROP_ANGLE_SIGN, sensor_to_display
 
 HUE_CENTERS = {"Red": 0, "Orange": 30, "Yellow": 60, "Green": 120, "Aqua": 180, "Blue": 240, "Purple": 275,
                "Magenta": 315}
@@ -347,6 +347,12 @@ def _apply_local(lin: np.ndarray, corrections: list[dict[str, Any]], orientation
             logL = np.log2(np.maximum(_lum(lin), 1e-6))
             d = hl * 1.2 * _smoothstep(-2.8, 0.5, logL) + sh * 1.4 * (1 - _smoothstep(-7.5, -3.0, logL))
             lin = lin * np.power(2.0, d * m[..., 0])[..., None]
+        wh, bl = _n(corr, "LocalWhites2012"), _n(corr, "LocalBlacks2012")
+        if wh or bl:
+            # Weiss: hellste Töne (z. B. Trikots in der Spieler-Maske), Schwarz: tiefste Töne
+            logL = np.log2(np.maximum(_lum(lin), 1e-6))
+            d = wh * 0.9 * _smoothstep(-3.0, 0.0, logL) + bl * 1.0 * (1 - _smoothstep(-8.5, -4.5, logL))
+            lin = lin * np.power(2.0, d * m[..., 0])[..., None]
         soft = -min(0.0, _n(corr, "LocalSharpness")) + 0.5 * -min(0.0, _n(corr, "LocalTexture"))
         if soft:
             # negative Schärfe/Struktur: weichzeichnen (Vorschau-Näherung an Lightroom)
@@ -360,7 +366,7 @@ def _apply_local(lin: np.ndarray, corrections: list[dict[str, Any]], orientation
 
 def crop_rect(crs: dict[str, Any], orientation: int, W: int, H: int) -> tuple[float, tuple[float, ...]] | None:
     """-> (Winkel, (x0, y0, x1, y1) im gedrehten Bild in Pixel) oder None."""
-    angle = _n(crs, "CropAngle")
+    angle = _n(crs, "CropAngle") * CROP_ANGLE_SIGN     # Lightroom-Wert -> intern (positiv = im Uhrzeigersinn)
     if orientation in (2, 4, 5, 7):
         angle = -angle
     if str(crs.get("HasCrop", "False")).lower() != "true":

@@ -312,3 +312,18 @@ table.list td { border-bottom: 1px solid var(--line); padding: 7px 4px; font-siz
 .style-chip { margin-top: 6px; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .style-chip.warn { color: #f0b43c; }
 .style-chip select { font-size: 12px; padding: 2px 6px; }
+
+/* Waveform (Lumetri) */
+.scopes { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; padding: 10px 0; }
+.scope-pair { display: flex; gap: 10px; align-items: stretch; }
+.scope-pair figure { margin: 0; }
+.scope-pair img { display: block; width: 300px; max-width: 42vw; height: auto; border-radius: 6px; background: #111113; }
+.scope-pair figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.scope-legend { font-size: 10px; line-height: 1.05; color: var(--muted); padding-top: 2px; }
+.scope-changes { flex: 1; min-width: 260px; font-size: 13px; }
+.sc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 2px 14px; }
+.sc-row { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line, rgba(127,127,127,.15)); padding: 2px 0; }
+.sc-row span { color: var(--muted); }
+.sc-masks { margin-top: 8px; display: grid; gap: 3px; }
+.sc-notes { margin-top: 8px; color: var(--muted); }
+.scopes .hint { flex-basis: 100%; }

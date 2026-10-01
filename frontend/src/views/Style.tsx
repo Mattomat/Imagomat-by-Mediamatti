@@ -109,7 +109,9 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
   const setDefault = async (p: string | null) => {
     await api.put("/api/settings", { default_profile: p });
     setDef(p);
-    ctx.toast(p ? `„${p}“ ist jetzt dein Standard-Stil` : "Standard: automatisch");
+    const label = p?.startsWith("preset:") ? (presets.find((x) => `preset:${x.key}` === p)?.name ?? p)
+      : p?.startsWith("look:") ? `Look: ${p.slice(5)}` : p;
+    ctx.toast(p ? `„${label}“ ist jetzt dein Standard-Stil` : "Standard: automatisch");
   };
 
   const feedback = async (profile: string, shootId: number) => {
@@ -223,7 +225,8 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
         Belichtung, Weiss/Schwarz, Verlauf und Denoise passen sich weiterhin jedem Bild an.</p>
       <div className="preset-list">
         {presets.filter((p) => p.group === "Fussball").map((p) => (
-          <div key={p.key} className="preset"><b>{p.name}</b><span>{p.description}</span></div>
+          <div key={p.key} className="preset"><b>{p.name}</b><span>{p.description}
+            {" · "}{def === `preset:${p.key}` ? "Standard" : <button className="link" onClick={() => setDefault(`preset:${p.key}`)}>als Standard</button>}</span></div>
         ))}
       </div>
       <h2 className="mt">Mitgelieferte Stile</h2>

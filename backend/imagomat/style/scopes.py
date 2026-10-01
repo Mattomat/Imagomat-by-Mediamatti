@@ -67,7 +67,7 @@ def _bisect(fn, lo: float, hi: float, target: float, increasing: bool = True, st
 
 def fit_scopes(crs: dict[str, Any], lin: np.ndarray, orientation: int = 1,
                subject: np.ndarray | None = None, amount: float = 1.0, hi_target: float = HI_TARGET,
-               lo_target: float = LO_TARGET, free_blacks: bool = False) -> list[str]:
+               lo_target: float = LO_TARGET, free_blacks: bool = False, deepen: bool = True) -> list[str]:
     """Setzt Whites2012/Blacks2012 in ``crs`` so, dass oben und unten leicht angeschlagen wird.
     ``free_blacks``: Schwarz auch anheben (wenn ein Referenz-Look weichere Tiefen hat)."""
     if amount <= 0:
@@ -91,7 +91,7 @@ def fit_scopes(crs: dict[str, Any], lin: np.ndarray, orientation: int = 1,
     if free_blacks:
         b = _bisect(lo_at, max(BLACKS_RANGE[0], b0 - MAX_DEEPEN), min(BLACKS_RANGE[1], b0 + MAX_DEEPEN),
                     lo_target, increasing=True)
-    elif lo_at(b0) > LO_ONLY_ABOVE:
+    elif deepen and lo_at(b0) > LO_ONLY_ABOVE:
         b = _bisect(lo_at, max(BLACKS_RANGE[0], b0 - MAX_DEEPEN), b0, lo_target, increasing=True)
     else:
         b = b0
@@ -110,3 +110,30 @@ def scopes(img_u8: np.ndarray) -> dict[str, float]:
     y = _luma(img_u8)
     return {"white_clip": float((y >= 0.985).mean()), "black_clip": float((y <= 0.015).mean()),
             "p_hi": float(np.quantile(y, HI_Q)), "p_lo": float(np.quantile(y, LO_Q))}
+
+
+def waveform(img_u8: np.ndarray, width: int = 360, height: int = 200) -> np.ndarray:
+    """Luma-Waveform wie Lumetri: x = Bildspalte, y = Helligkeit 0–100 (oben weiss, unten schwarz).
+    Rückgabe: RGB uint8 (height x width). Angeschlagene Spitzen (≥ 99 % / ≤ 1 %) sind rot markiert."""
+    h0, w0 = img_u8.shape[:2]
+    small = cv2.resize(img_u8, (width, max(8, int(h0 * width / w0))), interpolation=cv2.INTER_AREA)
+    y = _luma(small)
+    rows = np.clip(((1.0 - y) * (height - 1)).round().astype(int), 0, height - 1)
+    cols = np.broadcast_to(np.arange(width)[None, :], rows.shape)
+    count = np.zeros((height, width), np.float32)
+    np.add.at(count, (rows.ravel(), cols.ravel()), 1.0)
+    ref = max(float(np.quantile(count[count > 0], 0.98)) if (count > 0).any() else 1.0, 1.0)
+    d = np.clip(np.log1p(count) / np.log1p(ref), 0, 1)
+    out = np.zeros((height, width, 3), np.float32)
+    out[:] = (17, 17, 19)
+    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):            # Hilfslinien 0/25/50/75/100
+        r = int(round(frac * (height - 1)))
+        out[r, :] = (60, 60, 66)
+    trace = np.array([170, 235, 170], np.float32)       # helles Grün wie Lumetri
+    out = out * (1 - d[..., None]) + trace * d[..., None]
+    hot = (y >= 0.99) | (y <= 0.01)
+    if hot.any():
+        clip_rows = rows[hot]
+        clip_cols = cols[hot]
+        out[clip_rows, clip_cols] = (255, 80, 80)
+    return np.clip(out, 0, 255).astype(np.uint8)

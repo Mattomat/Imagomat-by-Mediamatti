@@ -32,6 +32,8 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const [sel, setSel] = useState(0);
   const [loupe, setLoupe] = useState(false);
   const [before, setBefore] = useState(false);
+  const [scopesOn, setScopesOn] = useState(() => { try { return localStorage.getItem("imagomat.scopes") === "1"; } catch { return false; } });
+  const toggleScopes = () => setScopesOn((v) => { try { localStorage.setItem("imagomat.scopes", v ? "0" : "1"); } catch { /* egal */ } return !v; });
   const [exporting, setExporting] = useState(false);
   const [social, setSocial] = useState<"none" | "all" | "one">("none");
   const gridRef = useRef<HTMLDivElement>(null);
@@ -133,6 +135,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
       else if (k === "Enter") setLoupe((l) => !l);
       else if (k === "Escape") setLoupe(false);
       else if (k === " " && loupe) setBefore((b) => !b);
+      else if ((k === "w" || k === "W") && loupe) toggleScopes();
       else return;
       e.preventDefault();
     };
@@ -297,6 +300,9 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
               )}
             </div>
           )}
+          {scopesOn && !peopleMode && (
+            <ScopesPanel iid={cur.id} style={tryStyle} v={editV} edited={cur.decision === "keep"} />
+          )}
           <PeoplePanel ctx={ctx} image={cur} onChanged={load} />
           <div className="loupe-bar">
             <span className="fname">{cur.filename}</span>
@@ -307,12 +313,13 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
             <button onClick={() => patch(cur, { decision: "keep" })} className={cur.decision === "keep" ? "on" : ""}>Behalten</button>
             <button onClick={() => patch(cur, { decision: "reject" })} className={cur.decision === "reject" ? "on bad" : ""}>Aussortieren</button>
             <button onClick={() => setSocial("one")}>Für Story speichern</button>
+            {!peopleMode && <button onClick={toggleScopes} className={scopesOn ? "on" : ""} title="Waveform wie Lumetri (Taste W)">Waveform</button>}
             <button className="ghost" onClick={() => setLoupe(false)}>Zurück</button>
           </div>
         </div>
       )}
       <div className="keyhint">
-        ← → blättern · Enter gross · Leertaste Vorher/Nachher · 1–5 Sterne · X aussortieren · P behalten
+        ← → blättern · Enter gross · Leertaste Vorher/Nachher · W Waveform · 1–5 Sterne · X aussortieren · P behalten
       </div>
       {exporting && <ExportDialog ctx={ctx} shoot={shoot} kept={counts.keep} onClose={() => setExporting(false)} />}
       {tagging && <TagExportDialog ctx={ctx} shoot={shoot} total={items.length} onClose={() => setTagging(false)} />}
@@ -578,6 +585,50 @@ function StyleCompare({ shootId, current, onApply, onClose }: {
         </div>
       )}
     </Modal>
+  );
+}
+
+type Changes = { sliders: { label: string; value: string }[]; masks: { name: string; effects: string[] }[]; notes: string[] };
+
+/** Waveform wie Lumetri (vorher = Kamera, nachher = Bearbeitung) und was die Bearbeitung konkret ändert. */
+function ScopesPanel({ iid, style, v, edited }: { iid: number; style: string | null; v: number; edited: boolean }) {
+  const [ch, setCh] = useState<Changes | null>(null);
+  const after = style ? `style:${style}` : "after";
+  useEffect(() => {
+    setCh(null);
+    if (!style && !edited) return;
+    api.get<Changes>(`/api/images/${iid}/changes${style ? `?style=${encodeURIComponent(style)}` : ""}`).then(setCh).catch(() => setCh(null));
+  }, [iid, style, v, edited]);
+  return (
+    <div className="scopes">
+      <div className="scope-pair">
+        <figure>
+          <img src={api.img(`/api/images/${iid}/waveform?src=before`)} alt="Waveform vorher" />
+          <figcaption>Vorher (Kamera)</figcaption>
+        </figure>
+        {(style || edited) && (
+          <figure>
+            <img key={`${after}-${v}`} src={api.img(`/api/images/${iid}/waveform?src=${encodeURIComponent(after)}&v=${v}`)} alt="Waveform nachher" />
+            <figcaption>{style ? "Vorschau Stil" : "Nachher (Bearbeitung)"}</figcaption>
+          </figure>
+        )}
+        <div className="scope-legend">100<br /><br />75<br /><br />50<br /><br />25<br /><br />0</div>
+      </div>
+      {ch && (
+        <div className="scope-changes">
+          <div className="sc-grid">
+            {ch.sliders.map((s) => <div key={s.label} className="sc-row"><span>{s.label}</span><b>{s.value}</b></div>)}
+          </div>
+          {ch.masks.length > 0 && (
+            <div className="sc-masks">
+              {ch.masks.map((m, i) => <div key={i}><b>{m.name}:</b> {m.effects.join(", ")}</div>)}
+            </div>
+          )}
+          {ch.notes.length > 0 && <div className="sc-notes">{ch.notes.join(" · ")}</div>}
+        </div>
+      )}
+      <div className="hint">Rot = schlägt an (reines Weiss bzw. Schwarz). Gut bearbeitet: oben und unten leicht anschlagen.</div>
+    </div>
   );
 }
 
