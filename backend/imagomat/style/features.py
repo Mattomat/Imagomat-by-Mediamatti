@@ -113,6 +113,20 @@ def _cache_file(key: str) -> Path:
     return d / f"{key}.json"
 
 
+def is_stale(rec: dict[str, Any] | None) -> bool:
+    """Früher nur über die eingebettete Vorschau gemessen (Kamera damals unbekannt, z. B. Sony A7 V), der
+    RAW-Leser kann die Datei aber inzwischen öffnen -> mit echten RAW-Daten neu messen."""
+    from ..io import raw as raw_io
+
+    if not rec:
+        return False
+    a = rec.get("analysis") or {}
+    if a.get("raw_source") != "preview" and not a.get("raw_error"):
+        return False
+    path = Path(rec.get("path") or "")
+    return raw_io.is_raw(path) and path.exists() and raw_io.libraw_can_read(path)
+
+
 def image_record(path: Path, exif: dict[str, Any] | None = None) -> dict[str, Any]:
     """Analyse + Embedding für eine beliebige Bilddatei (gecacht)."""
     from ..analysis import compute_content, compute_metrics
@@ -123,7 +137,9 @@ def image_record(path: Path, exif: dict[str, Any] | None = None) -> dict[str, An
     cf = _cache_file(key)
     if cf.exists():
         try:
-            return json.loads(cf.read_text("utf-8"))
+            rec = json.loads(cf.read_text("utf-8"))
+            if not is_stale(rec):
+                return rec
         except json.JSONDecodeError:
             pass
     img, data, orientation, width, height, ph = compute_metrics(path)

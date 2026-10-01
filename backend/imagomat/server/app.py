@@ -211,7 +211,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "AND updated_at > ? ORDER BY updated_at DESC LIMIT 10", (time.time() - 86400,))]
         for f in failed:
             f["error"] = (f["error"] or "")[-4000:]
-        return {"dir": str(logs_dir()), "version": __version__, "platform": sys.platform,
+        sample = next((r["path"] for r in db.query(
+            "SELECT i.path FROM images i JOIN shoots s ON s.id=i.shoot_id ORDER BY s.created_at DESC, i.id DESC "
+            "LIMIT 200") if raw_io.is_raw(Path(r["path"])) and Path(r["path"]).exists()), None)
+        try:
+            raw = raw_io.raw_status(sample)
+        except Exception as e:  # noqa: BLE001
+            raw = {"error": str(e)}
+        return {"dir": str(logs_dir()), "version": __version__, "platform": sys.platform, "raw": raw,
                 "failed_jobs": failed, "log": tail(log_file(), 400),
                 "setup": tail(logs_dir() / "setup.log", 60), "backend": tail(logs_dir() / "backend.log", 80)}
 

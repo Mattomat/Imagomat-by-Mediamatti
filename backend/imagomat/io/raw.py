@@ -295,6 +295,44 @@ def _mark_ok(model: str, how: str) -> None:
     _OK.add((model, how))
 
 
+_CAN_READ: dict[str, bool] = {}
+
+
+def libraw_can_read(path: str | Path) -> bool:
+    """Kann der eingebaute RAW-Leser (LibRaw) diese Kamera öffnen? (einmal pro Kameramodell geprüft)"""
+    model = _model_key(path)
+    if model.startswith(".") or model not in _CAN_READ:
+        try:
+            with rawpy.imread(str(path)) as r:
+                r.raw_image_visible.shape  # noqa: B018 - Daten wirklich entpacken
+            ok = True
+        except Exception:  # noqa: BLE001
+            ok = False
+        if model.startswith("."):
+            return ok
+        _CAN_READ[model] = ok
+    return _CAN_READ[model]
+
+
+def raw_status(sample: str | Path | None = None) -> dict:
+    """Für das Protokoll: welcher RAW-Leser ist installiert, und liest er eine echte Datei des Nutzers?"""
+    out: dict = {"rawpy": getattr(rawpy, "__version__", "?"),
+                 "libraw": ".".join(str(x) for x in getattr(rawpy, "libraw_version", ()))}
+    if sample is None:
+        return out
+    p = Path(sample)
+    out["sample"] = p.name
+    out["camera"] = _model_key(p)
+    try:
+        with rawpy.imread(str(p)) as r:
+            out["size"] = list(r.raw_image_visible.shape)
+        out["libraw_ok"] = True
+    except Exception as e:  # noqa: BLE001
+        out["libraw_ok"] = False
+        out["error"] = str(e)
+    return out
+
+
 def read_linear_any(path: str | Path, max_side: int | None = 1600,
                     reference: np.ndarray | None = None) -> tuple[np.ndarray, RawInfo]:
     """Wie ``read_linear``, aber für jede Kamera: LibRaw, sonst Apples RAW-Engine, sonst Adobe DNG Converter.

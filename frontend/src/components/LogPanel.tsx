@@ -5,6 +5,7 @@ type Logs = {
   dir: string;
   version: string;
   platform: string;
+  raw?: { rawpy?: string; libraw?: string; sample?: string; camera?: string; libraw_ok?: boolean; error?: string };
   failed_jobs: { id: number; kind: string; error: string | null; message: string | null; updated_at: number }[];
   log: string;
   setup: string;
@@ -20,8 +21,17 @@ export default function LogPanel({ toast }: { toast: (m: string, k?: "ok" | "err
   }, []);
   if (!logs) return null;
 
+  const r = logs.raw ?? {};
+  const rawLine = r.sample
+    ? (r.libraw_ok ? `${r.camera}: wird mit echten RAW-Daten gelesen (${r.sample})`
+      : `${r.camera}: RAW-Leser kann ${r.sample} NICHT lesen (${r.error ?? "?"})`)
+    : "noch keine RAW-Datei zum Testen";
   const report = [
     `Imagomat ${logs.version} (${logs.platform})`,
+    "",
+    "== RAW-Leser ==",
+    `rawpy ${r.rawpy ?? "?"}, LibRaw ${r.libraw ?? "?"}`,
+    rawLine,
     "",
     "== Fehlgeschlagene Aufgaben ==",
     ...logs.failed_jobs.map((j) => `#${j.id} ${j.kind} ${new Date(j.updated_at * 1000).toLocaleString()}\n${j.error ?? ""}`),
@@ -60,6 +70,7 @@ export default function LogPanel({ toast }: { toast: (m: string, k?: "ok" | "err
           <button className="ghost" onClick={load}>Aktualisieren</button>
         </div>
       </div>
+      <div className={r.sample && !r.libraw_ok ? "failed-job" : "hint"}>RAW-Leser: {rawLine}</div>
       {logs.failed_jobs.slice(0, 3).map((j) => (
         <div key={j.id} className="failed-job">
           <b>{j.kind}</b>: {(j.error ?? "").split("\n")[0]}

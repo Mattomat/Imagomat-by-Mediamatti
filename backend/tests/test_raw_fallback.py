@@ -69,3 +69,25 @@ def test_refresh_raw_metrics_after_reader_update(tmp_path):
     assert refresh_raw_metrics(JobContext(db, 0), sid) == 1
     a = db.get_analysis(iid)
     assert a["raw_source"] == "libraw" and not a.get("raw_error")
+
+
+def test_stale_training_features_are_recomputed(tmp_path):
+    """Lern-Merkmale, die früher nur über die Vorschau entstanden, werden neu gemessen, sobald lesbar."""
+    import json
+
+    from imagomat.io import raw as raw_io
+    from imagomat.style import features
+
+    from .synth import write_shoot
+
+    p = write_shoot(tmp_path / "s", n=1)[0]
+    rec = features.image_record(p)
+    assert rec["analysis"]["raw_source"] == "libraw" and not features.is_stale(rec)
+    cf = features._cache_file(features._cache_key(p))
+    rec["analysis"].update(raw_source="preview", raw_error="Unsupported file format")
+    cf.write_text(json.dumps(rec))
+    assert features.is_stale(json.loads(cf.read_text()))
+    again = features.image_record(p)
+    assert again["analysis"]["raw_source"] == "libraw"
+    st = raw_io.raw_status(p)
+    assert st["libraw_ok"] and st["sample"] == p.name
