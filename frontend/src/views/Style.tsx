@@ -18,6 +18,10 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
   const [onlyGood, setOnlyGood] = useState(false);
   const [job, setJob] = useState<JobInfo | null>(null);
   const [shoots, setShoots] = useState<Shoot[]>([]);
+  const [looks, setLooks] = useState<{ name: string; n: number; base: string }[]>([]);
+  const [lookName, setLookName] = useState("Mein Look");
+  const [lookBase, setLookBase] = useState("fb_signature");
+  const [lookJob, setLookJob] = useState<JobInfo | null>(null);
 
   const load = () => {
     api.get<Overview>("/api/overview").then((o) => {
@@ -25,6 +29,7 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
       setSource((s) => (s.catalog || s.folder ? s : o.catalogs[0] ? { catalog: o.catalogs[0] } : {}));
     });
     api.get<{ default_profile: string | null }>("/api/settings").then((s) => setDef(s.default_profile));
+    api.get<{ name: string; n: number; base: string }[]>("/api/looks").then(setLooks).catch(() => setLooks([]));
   };
   useEffect(load, [ctx.tick]);
   useEffect(() => {
@@ -39,6 +44,30 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
     });
     return () => setDrop(null);
   }, [setDrop]);
+
+  const learnLook = async () => {
+    const folder = await pickFolder("Ordner mit deinen fertigen Bildern (JPEG)");
+    if (!folder) return;
+    try {
+      const r = await api.post<{ job_id: number }>("/api/jobs", {
+        kind: "learn_look", shoot_id: null, params: { name: lookName.trim() || "Mein Look", folder, base: lookBase },
+      });
+      ctx.refreshJobs();
+      const j = await waitForJob(r.job_id, setLookJob);
+      setLookJob(null);
+      if (j.status === "done") ctx.toast(j.message ?? "Look gelernt");
+      else ctx.toast(j.error?.split("\n")[0] ?? "Look lernen fehlgeschlagen", "error");
+      load();
+    } catch (e) {
+      setLookJob(null);
+      ctx.toast((e as Error).message, "error");
+    }
+  };
+
+  const deleteLook = async (n: string) => {
+    await api.del(`/api/looks/${encodeURIComponent(n)}`);
+    load();
+  };
 
   const learn = async () => {
     try {
@@ -120,6 +149,41 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
           <button className="primary big" disabled={!source.catalog && !source.folder} onClick={learn}>Stil lernen</button>
         )}
         {job && <div className="hint">Beim ersten Mal dauert das je nach Anzahl Bilder einige Minuten.</div>}
+      </div>
+
+      <div className="card learn-card">
+        <div className="ac-title">Look aus deinen fertigen Bildern</div>
+        <p className="ac-text">
+          Lege 10–50 deiner fertig bearbeiteten Bilder (JPEG-Export) in einen Ordner. Imagomat misst daran, wie hell
+          Spieler, Himmel, Zuschauer und der Rand unten sind, wie neutral Weiss ist, wie satt jede Farbe ist und wo Weiss
+          und Schwarz anschlagen, und bringt dann jedes neue Bild genau dorthin.
+        </p>
+        <More>
+          <label>Name des Looks</label>
+          <input value={lookName} onChange={(e) => setLookName(e.target.value)} />
+          <label>Grundlage (Masken, Verlauf, Kurve)</label>
+          <select value={lookBase} onChange={(e) => setLookBase(e.target.value)}>
+            {presets.map((p) => <option key={p.key} value={p.key}>{p.group ? `${p.group}: ` : ""}{p.name}</option>)}
+          </select>
+        </More>
+        {lookJob ? (
+          <Progress value={lookJob.total ? lookJob.progress / lookJob.total : 0.03} label={lookJob.message ?? "Messe …"} />
+        ) : (
+          <button className="primary big" onClick={learnLook}>Ordner wählen und Look lernen</button>
+        )}
+        {looks.length > 0 && (
+          <div className="preset-list mt">
+            {looks.map((l) => (
+              <div key={l.name} className="preset">
+                <b>Look: {l.name}</b>
+                <span>aus {l.n} Bildern · im Shoot unter „Stil“ wählbar
+                  {" · "}{def === `look:${l.name}` ? "Standard" : <button className="link" onClick={() => setDefault(`look:${l.name}`)}>als Standard</button>}
+                  {" · "}<button className="link" style={{ color: "var(--bad)" }} onClick={() => deleteLook(l.name)}>Löschen</button>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {ov && ov.profiles.length > 0 && (

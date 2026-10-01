@@ -37,7 +37,7 @@ from ..jobs import JobManager
 from ..lightroom.dialect import Dialect, learn_dialect
 from ..people import roster
 from ..people.registry import assign_cluster, assign_face, persons, upsert_person
-from ..render.pipeline import render
+from ..render.pipeline import render_hybrid
 from ..style.jobs import export_profile, import_profile
 from ..style.model import list_profiles
 from ..style.presets import PRESETS
@@ -535,7 +535,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
         lin, xyz, wb, orient = _linear(iid, path)
         m = load_masks(iid)
         seg = {"subject": m[0], "sky": m[1]} if m else {}
-        img = render(lin, xyz, wb, crs, orient, seg, size)
+        pr = db.one("SELECT preview_path FROM images WHERE id=?", (iid,))
+        detail = None
+        if pr and pr["preview_path"] and Path(pr["preview_path"]).exists():
+            d = cv2.imread(str(pr["preview_path"]), cv2.IMREAD_COLOR)
+            detail = cv2.cvtColor(d, cv2.COLOR_BGR2RGB) if d is not None else None
+        img = render_hybrid(lin, xyz, wb, crs, detail, orient, seg, size)
         cache.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(cache), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
         return FileResponse(cache, media_type="image/jpeg")
@@ -651,6 +656,24 @@ def create_app(db_path: str | None = None) -> FastAPI:
         for j in db.query("SELECT id FROM jobs WHERE status IN ('running','queued')"):
             jobs.cancel(int(j["id"]))
         return reset_keep_people(db)
+
+    @app.get("/api/looks")
+    def looks() -> list[dict[str, Any]]:
+        from ..style.look import list_looks
+
+        return list_looks()
+
+    @app.delete("/api/looks/{name}")
+    def delete_look(name: str) -> dict[str, Any]:
+        from ..style.look import delete_look as _delete
+
+        if not _delete(name):
+            raise HTTPException(404, "Look nicht gefunden")
+        s = load_settings()
+        if s.default_profile == f"look:{name}":
+            s.default_profile = None
+            save_settings(s)
+        return {"ok": True}
 
     @app.delete("/api/profiles/{name}")
     def delete_profile(name: str) -> dict[str, Any]:

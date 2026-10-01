@@ -65,24 +65,35 @@ def estimate_tilt(img: np.ndarray, max_deg: float = 8.0) -> Tilt:
         support = float(wts[np.abs(dev - med) < 0.75].sum() / max(wts.sum(), 1e-6))
         return med, support
 
-    # Senkrechte: Abweichung von 90°. Eine Linie mit Winkel > 90 kippt oben nach links
-    vmask = (np.abs(ang - 90) < max_deg + 2) & (length > 0.04 * diag)
-    hmask = ((ang < max_deg + 2) | (ang > 180 - max_deg - 2)) & (length > 0.12 * diag)
+    # Senkrechte: Abweichung von 90°. Nur lange Linien (Masten, Pfosten, Tribünenkanten) – kurze Stücke sind oft
+    # Beine, Stutzen oder Netzmaschen und kippen mit der Bewegung. Waagrechte: lange Linien wie Werbebanden.
+    vmask = (np.abs(ang - 90) < max_deg + 2) & (length > 0.08 * diag)
+    hmask = ((ang < max_deg + 2) | (ang > 180 - max_deg - 2)) & (length > 0.15 * diag)
+    cands: list[Tilt] = []
     if vmask.sum() >= 3:
         dev = ang[vmask] - 90.0
         med, support = robust(dev, length[vmask])
         total = float(length[vmask].sum() / diag)
-        conf = support * min(1.0, total / 1.5)
         # Inhalt um a gegen den Uhrzeigersinn verdreht -> Senkrechte hat Winkel 90 - a
         # -> Korrektur: um a = -dev im Uhrzeigersinn drehen (gilt analog für Waagrechte).
-        return Tilt(float(np.clip(-med, -max_deg, max_deg)), conf, "vertical")
+        cands.append(Tilt(float(np.clip(-med, -max_deg, max_deg)), support * min(1.0, total / 1.5), "vertical"))
     if hmask.sum() >= 1:
         dev = np.where(ang[hmask] > 90, ang[hmask] - 180, ang[hmask])
         med, support = robust(dev, length[hmask])
         total = float(length[hmask].sum() / diag)
-        conf = support * min(1.0, total / 1.0) * 0.8
-        return Tilt(float(np.clip(-med, -max_deg, max_deg)), conf, "horizontal")
-    return Tilt(0.0, 0.0, "none")
+        cands.append(Tilt(float(np.clip(-med, -max_deg, max_deg)), support * min(1.0, total / 1.0) * 0.8,
+                          "horizontal"))
+    if not cands:
+        return Tilt(0.0, 0.0, "none")
+    if len(cands) == 2:
+        v, hz = cands
+        if abs(v.angle - hz.angle) <= 1.0:          # beide einig: sicher
+            wv, wh = v.confidence, hz.confidence
+            ang_ = (v.angle * wv + hz.angle * wh) / max(wv + wh, 1e-6)
+            return Tilt(ang_, min(1.0, max(wv, wh) + 0.2), "both")
+        best = max(cands, key=lambda t: t.confidence)   # uneinig (Perspektive?): nur zögerlich
+        return Tilt(best.angle, best.confidence * 0.5, best.source)
+    return cands[0]
 
 
 # ---------------------------------------------------------------------------

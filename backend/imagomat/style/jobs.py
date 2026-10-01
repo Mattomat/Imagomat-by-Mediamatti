@@ -189,20 +189,30 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
     db = ctx.db
     settings = load_settings()
     shoot = db.one("SELECT * FROM shoots WHERE id=?", (shoot_id,))
-    if profile and profile.startswith("preset:"):
+    look, look_key = None, None
+    if not (profile and profile.startswith(("look:", "preset:"))):
+        profile = profile or (shoot["profile"] if shoot else None) or settings.default_profile
+    if profile and profile.startswith("look:"):
+        from .look import load_look
+
+        look = load_look(profile[5:])
+        if look is None:
+            raise ValueError(f"Look „{profile[5:]}“ nicht gefunden")
+        preset = look.get("base") if look.get("base") in PRESETS else preset
+        look_key, profile = profile, None
+    elif profile and profile.startswith("preset:"):
         key = profile.split(":", 1)[1]      # ausdrücklich ohne eigenen Stil: Standard oder ein Preset
         preset = key if key in PRESETS else preset
         profile = None
-    else:
-        profile = profile or (shoot["profile"] if shoot else None) or settings.default_profile
     model = StyleModel.load(profile) if profile else None
     from ..analysis import refresh_raw_metrics
 
     refresh_raw_metrics(ctx, shoot_id)             # z. B. A7 V: jetzt mit echten RAW-Daten
     items = shoot_records(db, shoot_id, only_keep)
     ctx.set_total(len(items))
-    ctx.progress(0, f"Entwickle {len(items)} Bilder mit {'Profil ' + profile if model else 'Preset'}")
-    develop_items(items, model, settings, Dialect.load(), preset)
+    what = f"Look {look['name']}" if look else ("Profil " + profile if model else "Preset")
+    ctx.progress(0, f"Entwickle {len(items)} Bilder mit {what}")
+    develop_items(items, model, settings, Dialect.load(), preset, look)
     import time
 
     with db.tx() as c:
@@ -211,7 +221,7 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
             c.execute("INSERT OR REPLACE INTO edits(image_id, profile, params, masks, confidence, denoise,"
                       " user_params, updated_at) VALUES(?,?,?,?,?,?,"
                       " (SELECT user_params FROM edits WHERE image_id=?),?)",
-                      (it.image_id, profile or f"preset:{it.preset}",
+                      (it.image_id, (look_key if look else profile) or f"preset:{it.preset}",
                        dumps({k: v for k, v in it.crs.items() if k != "MaskGroupBasedCorrections"}),
                        dumps(masks) if masks else None, it.confidence, it.denoise, it.image_id, time.time()))
     for it in items:
@@ -309,3 +319,18 @@ def import_profile(archive: Path, name: str | None = None) -> str:
 def profile_info(name: str) -> dict[str, Any]:
     p = profiles_dir() / name / "meta.json"
     return json.loads(p.read_text("utf-8")) if p.exists() else {}
+
+
+@job("learn_look")
+def learn_look_job(ctx: JobContext, name: str, folder: str, base: str = "fb_signature") -> None:
+    """Look-Signatur aus einem Ordner mit fertig bearbeiteten Bildern messen."""
+    from .look import learn_look
+
+    ctx.progress(0, f"Look „{name}“: fertige Bilder messen")
+
+    def step(i: int, n: int) -> None:
+        ctx.set_total(n)
+        ctx.progress(i, f"Look „{name}“: {i}/{n} Bilder gemessen")
+
+    look = learn_look(name, Path(folder), base if base in PRESETS else "fb_signature", step)
+    ctx.progress(look["n"], f"Look „{name}“ gelernt aus {look['n']} Bildern")

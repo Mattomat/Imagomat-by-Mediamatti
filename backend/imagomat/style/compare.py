@@ -12,6 +12,27 @@ from .develop import develop_items
 from .model import StyleModel, list_profiles
 
 AUTO = "preset:auto"
+LOOK = "look:"
+
+
+def resolve(style: str | None) -> tuple[StyleModel | None, str | None, dict[str, Any] | None]:
+    """Stil-Schlüssel -> (gelerntes Profil, Preset, Referenz-Look)."""
+    from .presets import PRESETS
+
+    if not style or style == AUTO:
+        return None, None, None
+    if style.startswith(LOOK):
+        from .look import load_look
+
+        look = load_look(style[len(LOOK):])
+        if look is None:
+            raise KeyError(style)
+        base = look.get("base")
+        return None, (base if base in PRESETS else None), look
+    if style.startswith("preset:"):
+        key = style.split(":", 1)[1]
+        return None, (key if key in PRESETS else None), None
+    return load_model(style), None, None
 
 
 @lru_cache(maxsize=8)
@@ -20,6 +41,10 @@ def _model(name: str, mtime: float) -> StyleModel | None:   # mtime: neu laden, 
 
 
 def model_version(name: str) -> float:
+    if name.startswith(LOOK):
+        from .look import look_version
+
+        return look_version(name[len(LOOK):])
     p = profiles_dir() / name / "model.pkl"
     return p.stat().st_mtime if p.exists() else 0.0
 
@@ -31,7 +56,11 @@ def load_model(name: str) -> StyleModel | None:
 def styles() -> list[dict[str, Any]]:
     from .presets import PRESETS
 
-    out = [{"key": p["name"], "label": p["name"], "n": p.get("n"), "group": "Deine Stile"} for p in list_profiles()]
+    from .look import list_looks
+
+    out = [{"key": f"{LOOK}{lk['name']}", "label": f"Look: {lk['name']}", "n": lk.get("n"), "group": "Deine Stile",
+            "description": "Jedes Bild wird auf deine fertigen Referenzbilder abgeglichen."} for lk in list_looks()]
+    out += [{"key": p["name"], "label": p["name"], "n": p.get("n"), "group": "Deine Stile"} for p in list_profiles()]
     out += [{"key": f"preset:{p.key}", "label": p.name, "n": None, "group": p.group, "description": p.description}
             for p in PRESETS.values() if p.group]
     out.append({"key": AUTO, "label": "Standard (automatisch)", "n": None, "group": "Standard"})
@@ -44,6 +73,8 @@ def label(key: str | None) -> str | None:
     if key and key.startswith("preset:") and key[7:] in PRESETS:
         p = PRESETS[key[7:]]
         return f"{p.group}: {p.name}" if p.group else p.name
+    if key and key.startswith(LOOK):
+        return f"Look: {key[len(LOOK):]}"
     return key
 
 
@@ -77,9 +108,8 @@ def develop_preview(db: Database, shoot_id: int, image_id: int, style: str) -> d
     items = shoot_records(db, shoot_id, only_keep=False, image_ids=[image_id])
     if not items:
         raise KeyError(image_id)
-    model = None if style.startswith("preset:") else load_model(style)
-    preset = style.split(":", 1)[1] if style.startswith("preset:") and style != AUTO else None
-    develop_items(items, model, load_settings(), Dialect.load(), preset)
+    model, preset, look = resolve(style)
+    develop_items(items, model, load_settings(), Dialect.load(), preset, look)
     return items[0].crs
 
 
@@ -93,9 +123,8 @@ def apply_to_image(db: Database, shoot_id: int, image_id: int, style: str) -> di
     items = shoot_records(db, shoot_id, only_keep=False, image_ids=[image_id])
     if not items:
         raise KeyError(image_id)
-    model = None if style.startswith("preset:") else load_model(style)
-    preset = style.split(":", 1)[1] if style.startswith("preset:") and style != AUTO else None
-    develop_items(items, model, load_settings(), Dialect.load(), preset)
+    model, preset, look = resolve(style)
+    develop_items(items, model, load_settings(), Dialect.load(), preset, look)
     it = items[0]
     masks = it.crs.get("MaskGroupBasedCorrections")
     with db.tx() as c:

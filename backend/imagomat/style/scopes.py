@@ -66,8 +66,10 @@ def _bisect(fn, lo: float, hi: float, target: float, increasing: bool = True, st
 
 
 def fit_scopes(crs: dict[str, Any], lin: np.ndarray, orientation: int = 1,
-               subject: np.ndarray | None = None, amount: float = 1.0) -> list[str]:
-    """Setzt Whites2012/Blacks2012 in ``crs`` so, dass oben und unten leicht angeschlagen wird."""
+               subject: np.ndarray | None = None, amount: float = 1.0, hi_target: float = HI_TARGET,
+               lo_target: float = LO_TARGET, free_blacks: bool = False) -> list[str]:
+    """Setzt Whites2012/Blacks2012 in ``crs`` so, dass oben und unten leicht angeschlagen wird.
+    ``free_blacks``: Schwarz auch anheben (wenn ein Referenz-Look weichere Tiefen hat)."""
     if amount <= 0:
         return []
     seg = {"subject": subject} if subject is not None else {}
@@ -78,7 +80,7 @@ def fit_scopes(crs: dict[str, Any], lin: np.ndarray, orientation: int = 1,
         return _measure(lin, {**crs, "Whites2012": w}, orientation, seg)[0]
 
     w = _bisect(hi_at, max(WHITES_RANGE[0], w0 - MAX_CHANGE), min(WHITES_RANGE[1], w0 + MAX_CHANGE),
-                HI_TARGET, increasing=True)
+                hi_target, increasing=True)
     w = w0 + (w - w0) * min(amount, 1.0)
     crs["Whites2012"] = int(round(w))
 
@@ -86,8 +88,11 @@ def fit_scopes(crs: dict[str, Any], lin: np.ndarray, orientation: int = 1,
         return _measure(lin, {**crs, "Blacks2012": b}, orientation, seg)[1]
 
     # Schwarz nur vertiefen, nie anheben (Nachthimmel bleibt schwarz), und nur bei flauen Bildern, sanft
-    if lo_at(b0) > LO_ONLY_ABOVE:
-        b = _bisect(lo_at, max(BLACKS_RANGE[0], b0 - MAX_DEEPEN), b0, LO_TARGET, increasing=True)
+    if free_blacks:
+        b = _bisect(lo_at, max(BLACKS_RANGE[0], b0 - MAX_DEEPEN), min(BLACKS_RANGE[1], b0 + MAX_DEEPEN),
+                    lo_target, increasing=True)
+    elif lo_at(b0) > LO_ONLY_ABOVE:
+        b = _bisect(lo_at, max(BLACKS_RANGE[0], b0 - MAX_DEEPEN), b0, lo_target, increasing=True)
     else:
         b = b0
     b = b0 + (b - b0) * min(amount, 1.0)

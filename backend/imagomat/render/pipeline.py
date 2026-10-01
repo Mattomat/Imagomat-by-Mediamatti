@@ -446,3 +446,84 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
     disp = _vignette(disp, crs)
     disp = _geometry(disp, crs, orientation)
     return (np.clip(disp, 0, 1) * 255 + 0.5).astype(np.uint8)
+
+
+# ---------------------------------------------------------------------------
+# Saubere Vorschau: Details aus dem Kamera-JPEG, Licht und Farbe aus der RAW-Entwicklung
+# ---------------------------------------------------------------------------
+
+HYBRID_LO_SIDE = 560          # Auflösung der RAW-Entwicklung für Licht/Farbe (rauscht dort kaum)
+
+
+def _box(x: np.ndarray, r: int) -> np.ndarray:
+    return cv2.blur(x, (2 * r + 1, 2 * r + 1), borderType=cv2.BORDER_REFLECT)
+
+
+def guided_filter(guide: np.ndarray, src: np.ndarray, r: int, eps: float) -> np.ndarray:
+    """Kantenerhaltendes Glätten (He et al.): ``src`` folgt den Kanten von ``guide`` (keine Lichthöfe).
+    Mehrkanalig: Kanal c von ``src`` folgt Kanal c von ``guide`` (trennt z. B. Rot von Grün gleicher Helligkeit)."""
+    out = []
+    for c in range(src.shape[-1]):
+        g = guide[..., c] if guide.ndim == 3 else guide
+        p = src[..., c]
+        mi, mp = _box(g, r), _box(p, r)
+        a = (_box(g * p, r) - mi * mp) / (_box(g * g, r) - mi * mi + eps)
+        b = mp - a * mi
+        out.append(_box(a, r) * g + _box(b, r))
+    return np.stack(out, -1)
+
+
+def _soften_local(img: np.ndarray, corrections: list[dict[str, Any]], orientation: int,
+                  seg: dict[str, np.ndarray], scale: float) -> np.ndarray:
+    """Negative Schärfe/Struktur/Klarheit in Masken (z. B. Verlauf unten) als echte Unschärfe."""
+    for corr in corrections:
+        if not isinstance(corr, dict) or str(corr.get("CorrectionActive", "true")).lower() == "false":
+            continue
+        soft = (-min(0.0, _n(corr, "LocalSharpness")) + 0.5 * -min(0.0, _n(corr, "LocalTexture"))
+                + 0.3 * -min(0.0, _n(corr, "LocalClarity2012")))
+        if soft <= 0:
+            continue
+        m = correction_mask(corr, img.shape[:2], orientation, seg)[..., None]
+        if m.max() <= 0:
+            continue
+        img = img + (_blur(img, 3.5 * scale) - img) * np.clip(soft * 1.2, 0, 1) * m
+    return img
+
+
+def render_hybrid(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, crs: dict[str, Any],
+                  detail: np.ndarray | None, orientation: int = 1, seg: dict[str, np.ndarray] | None = None,
+                  max_side: int | None = 1600) -> np.ndarray:
+    """Vorschau ohne RAW-Rauschen: Die Bildstruktur stammt aus der (in der Kamera entrauschten und geschärften)
+    eingebetteten JPEG-Vorschau ``detail`` (RGB uint8, Anzeigeorientierung). Helligkeit, Weissabgleich, Farben,
+    Masken und Verläufe stammen aus der RAW-Entwicklung, übertragen als kantenerhaltendes, grossflächiges
+    Verhältnis. Ohne passende Vorschau: normale RAW-Entwicklung."""
+    seg = seg or {}
+    if detail is None or detail.ndim != 3:
+        return render(lin_cam, xyz_to_cam, camera_wb, crs, orientation, seg, max_side)
+    h, w = lin_cam.shape[:2]
+    dh, dw = detail.shape[:2]
+    if abs(math.log((dw / dh) / (w / h))) > 0.03:        # anderes Seitenverhältnis: nicht dasselbe Bild
+        return render(lin_cam, xyz_to_cam, camera_wb, crs, orientation, seg, max_side)
+    flat = {**crs, "HasCrop": "False", "CropAngle": 0}
+    side = min(max_side or max(dh, dw), max(dh, dw))
+    s = side / max(dh, dw)
+    det = detail if s >= 1 else cv2.resize(detail, (int(dw * s), int(dh * s)), interpolation=cv2.INTER_AREA)
+    det = det.astype(np.float32) / 255.0
+    lo = render(lin_cam, xyz_to_cam, camera_wb, flat, orientation, seg, min(HYBRID_LO_SIDE, side))
+    lo = _srgb_decode(lo.astype(np.float32) / 255.0)
+    det_lin = _srgb_decode(det)
+    lo_det = cv2.resize(det_lin, (lo.shape[1], lo.shape[0]), interpolation=cv2.INTER_AREA)
+    eps = 0.004
+    logr = np.log((lo + eps) / (lo_det + eps)).astype(np.float32)
+    logr = np.clip(cv2.GaussianBlur(logr, (0, 0), 0.7), -3.5, 3.5)
+    H, W = det.shape[:2]
+    logr = cv2.resize(logr, (W, H), interpolation=cv2.INTER_LINEAR)
+    guide = det.astype(np.float32)
+    r = max(4, int(round(max(H, W) / 150)))
+    logr = guided_filter(guide, logr, r, 4e-4)
+    out = (det_lin + eps) * np.exp(logr) - eps      # aufgehellte Tiefen kommen auch aus reinem Schwarz zurück
+    scale = max(H, W) / 1600
+    out = _soften_local(out, crs.get("MaskGroupBasedCorrections") or [], orientation, seg, scale)
+    disp = _srgb_encode(np.clip(out, 0, 1))
+    disp = _geometry(disp, crs, orientation)
+    return (np.clip(disp, 0, 1) * 255 + 0.5).astype(np.uint8)

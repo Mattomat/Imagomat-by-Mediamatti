@@ -335,12 +335,34 @@ def _ai_to_paint(corr: dict[str, Any], it: ImageDevelop) -> dict[str, Any] | Non
 
 
 def develop_items(items: list[ImageDevelop], model: StyleModel | None, settings: Settings, dialect: Dialect,
-                  preset_key: str | None = None) -> None:
+                  preset_key: str | None = None, look: dict[str, Any] | None = None) -> None:
     predict_all(items, model, settings, preset_key)
     smooth_shoot(items, settings.develop.shoot_consistency)
     for it in items:
         build_settings(it, settings, dialect)
-        fit_white_black(it, settings)
+        if look is None or not apply_look(it, look, dialect):
+            fit_white_black(it, settings)
+
+
+def apply_look(it: ImageDevelop, look: dict[str, Any], dialect: Dialect) -> bool:
+    """Bild auf deinen Referenz-Look bringen (gemessen an deinen fertigen Bildern)."""
+    if not it.preview:
+        return False
+    from .look import fit_look
+    from .scopes import preview_linear
+
+    try:
+        lin = preview_linear(it.preview, 224)
+        if lin is None:
+            return False
+        a = it.record.analysis
+        notes = fit_look(it.crs, lin, look, it.orientation, it.subject_mask, a.get("as_shot_temp"),
+                         a.get("as_shot_tint"), dialect)
+    except Exception as e:  # noqa: BLE001 - dann wie bisher ohne Look-Anpassung
+        log.warning("Look-Anpassung fehlgeschlagen für Bild %s: %s", it.image_id, e)
+        return False
+    it.notes = [n for n in it.notes if not n.startswith(("Weiss", "Schwarz"))] + notes
+    return True
 
 
 def fit_white_black(it: ImageDevelop, settings: Settings) -> None:

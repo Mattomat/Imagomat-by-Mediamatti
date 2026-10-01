@@ -1,6 +1,6 @@
 [package]
 name = "imagomat"
-version = "0.4.9"
+version = "0.5.0"
 description = "Imagomat – lokale AI-Foto-Workflow-App"
 edition = "2021"
 
