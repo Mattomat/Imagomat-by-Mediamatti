@@ -296,7 +296,7 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
         "SELECT f.id, f.image_id, f.bbox, f.embedding, f.person_id, f.assigned_by, f.yaw FROM faces f "
         "JOIN images i ON i.id=f.image_id WHERE i.shoot_id=?", (shoot_id,))
     ctx.set_total(len(faces) + 2)
-    ex, ids = exemplars(db, backend)
+    ex, ids = exemplars(db, backend, shoot_teams(db, shoot_id))      # nur das gewählte Team
     rejected = rejected_pairs(db, shoot_id)
     not_on: dict[int, set[int]] = {}
     for img, pid in rejected:

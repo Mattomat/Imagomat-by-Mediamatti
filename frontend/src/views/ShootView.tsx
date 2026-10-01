@@ -81,6 +81,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     return needsCheck(i);
   }), [items, tab, person]);
   const cur = shown[Math.min(sel, Math.max(0, shown.length - 1))];
+  const curIdx = Math.min(sel, Math.max(0, shown.length - 1));
 
   const selection = selectionFromSettings(shoot?.settings);
   const peopleMode = (() => { try { return JSON.parse(shoot?.settings || "{}").mode === "people"; } catch { return false; } })();
@@ -103,6 +104,8 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const [editV, setEditV] = useState(0);
   const [styleOpts, setStyleOpts] = useState<{ key: string; label: string }[]>([]);
   useEffect(() => { api.get<{ key: string; label: string }[]>("/api/styles").then(setStyleOpts).catch(() => undefined); }, [ctx.tick]);
+  usePrefetch(loupe && !peopleMode ? [1, -1, 2].map((d) => shown[curIdx + d]).filter((x) => x && x.decision === "keep")
+    .map((x) => api.img(`/api/images/${x!.id}/render?size=2000&v=${editV}`)) : []);
   const [footballPresets, setFootballPresets] = useState<Preset[]>([]);
   useEffect(() => { api.get<Preset[]>("/api/presets").then((ps) => setFootballPresets(ps.filter((p) => p.group === "Fussball"))).catch(() => undefined); }, []);
   const [teamsAll, setTeamsAll] = useState<string[]>([]);
@@ -307,7 +310,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
       ) : cur && (
         <div className="loupe">
           <div className="stage" onClick={() => setBefore((b) => !b)}>
-            <StageImage key={`${cur.id}-${before}-${tryStyle ?? ""}-${editV}`}
+            <StageImage key={`${cur.id}-${before}-${tryStyle ?? ""}-${editV}`} placeholder={api.img(`/api/images/${cur.id}/preview`)}
               src={api.img(before || peopleMode
                 ? `/api/images/${cur.id}/preview`
                 : tryStyle ? `/api/images/${cur.id}/styled?style=${encodeURIComponent(tryStyle)}&size=2000`
@@ -382,8 +385,10 @@ function ExportDialog({ ctx, shoot, kept, onClose }: { ctx: AppCtx; shoot: Shoot
   const target = folderName.trim() ? `${root.replace(/\/$/, "")}/${folderName.trim()}` : root;
   const setTarget = (v: string) => { setRoot(v); store("imagomat.exportRoot", v); };
   const [jpeg, setJpeg] = useState(false);
-  const [mode, setMode] = useState<"hardlink" | "inplace">("hardlink");
-  const [withRejected, setWithRejected] = useState(false);
+  // Am Ablageort importiert: RAWs liegen schon richtig, nur die Einstellungen (XMP) daneben schreiben
+  const inLibrary = (() => { try { return !!JSON.parse(shoot.settings || "{}").library; } catch { return false; } })();
+  const [mode, setMode] = useState<"hardlink" | "inplace">(inLibrary ? "inplace" : "hardlink");
+  const [withRejected, setWithRejected] = useState(inLibrary);
   const [openLr, setOpenLr] = useState(stored("imagomat.openLr") !== "0");
   const [final, setFinal] = useState<string | null>(null);
   const [state, setState] = useState<"form" | "busy" | "done">("form");
@@ -675,13 +680,27 @@ function ScopesPanel({ iid, style, v, edited }: { iid: number; style: string | n
 }
 
 /** Grosses Bild mit Ladeanzeige (Vorschauen mit Masken und Entrauschen brauchen ein, zwei Sekunden). */
-function StageImage({ src }: { src: string }) {
+function StageImage({ src, placeholder }: { src: string; placeholder?: string }) {
+  // Sofort die Kamera-Vorschau zeigen, die Bearbeitung blendet darüber, sobald sie fertig ist
   const [state, setState] = useState<"load" | "ok" | "err">("load");
+  const showPh = placeholder && placeholder !== src && state !== "ok";
   return (
     <>
-      <img src={src} onLoad={() => setState("ok")} onError={() => setState("err")} style={state === "ok" ? undefined : { opacity: 0.35 }} />
-      {state === "load" && <div className="stage-loading">Vorschau wird berechnet …</div>}
+      {showPh && <img src={placeholder} className="stage-ph" />}
+      <img src={src} onLoad={() => setState("ok")} onError={() => setState("err")}
+        style={state === "ok" ? undefined : showPh ? { position: "absolute", opacity: 0 } : { opacity: 0.35 }} />
+      {state === "load" && <div className="stage-loading">{placeholder ? "Bearbeitung wird berechnet …" : "Vorschau wird berechnet …"}</div>}
       {state === "err" && <div className="stage-loading">Vorschau nicht möglich (Protokoll in den Einstellungen)</div>}
     </>
   );
+}
+
+/** Bearbeitete Vorschauen der Nachbarbilder schon im Hintergrund berechnen lassen (blättern ohne Warten). */
+function usePrefetch(urls: string[]) {
+  const key = urls.join("|");
+  useEffect(() => {
+    const imgs = urls.map((u) => { const i = new Image(); i.decoding = "async"; i.src = u; return i; });
+    return () => { imgs.forEach((i) => { i.src = ""; }); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 }

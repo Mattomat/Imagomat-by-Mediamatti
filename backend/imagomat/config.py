@@ -155,6 +155,9 @@ class Settings:
     ignored_shirt_words: list[str] = field(default_factory=lambda: ["KELLER", "INIT"])
     workers: int = max(2, (os.cpu_count() or 4) - 2)
     default_profile: str | None = None
+    # Ablageort: hierhin kopiert Imagomat die RAWs beim Import (Ordner je Shoot); dort verlinkt sie auch
+    # Lightroom ("Hinzufügen"). None = beim ersten Import fragen.
+    library_root: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

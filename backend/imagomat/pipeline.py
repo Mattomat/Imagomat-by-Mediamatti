@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from . import analysis  # noqa: F401  (registriert Jobs)
@@ -18,12 +19,51 @@ from .style import jobs as style_jobs
 STAGES = ["analyze", "cull", "people", "develop", "export"]
 
 
+def ingest(ctx: JobContext, shoot_id: int, source: Path) -> int:
+    """RAWs (und vorhandene XMP) von der Karte/dem Quellordner in den Shoot-Ordner am Ablageort kopieren.
+    Originale bleiben unverändert; schon vorhandene gleiche Dateien werden übersprungen."""
+    import shutil
+
+    db = ctx.db
+    shoot = db.one("SELECT * FROM shoots WHERE id=?", (shoot_id,))
+    dest = Path(shoot["folder"])
+    dest.mkdir(parents=True, exist_ok=True)
+    files = analysis.scan_folder(source)
+    extra = [p.with_suffix(ext) for p in files for ext in (".xmp", ".XMP") if p.with_suffix(ext).exists()]
+    todo = files + extra
+    need = sum(p.stat().st_size for p in todo if not (dest / p.name).exists())
+    free = shutil.disk_usage(dest).free
+    if need > free * 0.98:
+        raise ValueError(f"Zu wenig Platz am Ablageort: {need / 1e9:.1f} GB nötig, {free / 1e9:.1f} GB frei ({dest})")
+    ctx.set_total(len(todo))
+    copied = 0
+    for i, p in enumerate(todo):
+        ctx.check()
+        out = dest / p.name
+        if out.exists() and out.stat().st_size == p.stat().st_size:
+            continue
+        if out.exists():                    # gleicher Name, anderes Bild (z. B. zweite Karte): nicht überschreiben
+            out = dest / f"{p.stem}_{i}{p.suffix}"
+        tmp = out.with_name(out.name + ".part")
+        shutil.copy2(p, tmp)
+        tmp.replace(out)
+        copied += 1
+        if i % 5 == 0:
+            ctx.progress(i + 1, f"Kopieren {i + 1}/{len(todo)} nach {dest.name}")
+    analysis.import_folder(db, dest, shoot["name"], shoot["profile"])
+    db.update_shoot_settings(shoot_id, library=True, source=str(source))
+    ctx.progress(len(todo), f"{copied} Dateien nach {dest} kopiert")
+    return copied
+
+
 @job("pipeline")
 def run_pipeline(ctx: JobContext, shoot_id: int, keep_ratio: float | None = None, profile: str | None = None,
                  preset: str | None = None, export: dict[str, Any] | None = None, highlights: bool | None = None,
                  max_keep: int | None = None, mode: str | None = None,
-                 burst_keep: int | None = None) -> None:
+                 burst_keep: int | None = None, copy_from: str | None = None) -> None:
     db = ctx.db
+    if copy_from:
+        ingest(ctx, shoot_id, Path(copy_from))
     if mode:
         db.update_shoot_settings(shoot_id, mode=mode)
     mode = mode or db.shoot_settings(shoot_id).get("mode", "full")

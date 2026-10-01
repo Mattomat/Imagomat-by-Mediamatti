@@ -73,14 +73,24 @@ def _clean(lst: list[np.ndarray], min_support: float | None) -> list[np.ndarray]
     return [e for e, s in zip(lst, support) if s >= min_support]
 
 
-def exemplars(db: Database, backend: str | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Bestätigte Gesichter aller Personen (Embeddings, Person-IDs), ohne offensichtliche Ausreisser."""
+def exemplars(db: Database, backend: str | None = None,
+              teams: list[str] | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Bestätigte Gesichter aller Personen (Embeddings, Person-IDs), ohne offensichtliche Ausreisser.
+    ``teams``: nur Personen dieser Teams (und Personen ohne Team, z. B. Staff). Ist "FCW Herren" gewählt,
+    wird nie jemand aus "FCW Frauen" oder einem anderen Team erkannt."""
+    allowed: set[int] | None = None
+    if teams:
+        q = ",".join("?" * len(teams))
+        allowed = {int(r[0]) for r in db.query(
+            f"SELECT id FROM persons WHERE team IN ({q}) OR team IS NULL OR team = ''", list(teams))}
     rows = db.query(
         "SELECT person_id, embedding FROM faces WHERE person_id IS NOT NULL AND embedding IS NOT NULL "
         "AND assigned_by IN ('manual','confirmed') ORDER BY id DESC")   # nur sichere Beispiele, nie Trikot
     per: dict[int, list[np.ndarray]] = {}
     dim = None
     for r in rows:
+        if allowed is not None and r["person_id"] not in allowed:
+            continue
         e = blob_to_f32(r["embedding"])
         dim = dim or e.shape[0]
         if e.shape[0] != dim:

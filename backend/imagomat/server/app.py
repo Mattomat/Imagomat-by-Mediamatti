@@ -60,6 +60,7 @@ class ImportReq(BaseModel):
     burst_keep: int | None = None
     mode: str | None = None          # "full" (Standard) | "people" (nur Personen, z. B. fertige JPGs)
     run: bool = True
+    copy_to: str | None = None       # RAWs zuerst hierhin kopieren (Ablageort/Shoot-Ordner)
 
 
 class CullingPatch(BaseModel):
@@ -347,18 +348,50 @@ def create_app(db_path: str | None = None) -> FastAPI:
         subprocess.Popen(cmd)
         return {"ok": True}
 
+    @app.get("/api/import/info")
+    def import_info(folder: str) -> dict[str, Any]:
+        """Für den Import-Dialog: Anzahl, Grösse und Aufnahmedatum der Bilder im Quellordner."""
+        import datetime as _dt
+
+        from ..analysis import scan_folder
+        from ..io import exif as exif_io
+
+        f = Path(folder).expanduser()
+        if not f.is_dir():
+            raise HTTPException(400, f"Ordner nicht gefunden: {f}")
+        files = scan_folder(f)
+        date = None
+        if files:
+            m = exif_io.read_exif(files[:1]).get(str(files[0]), {})
+            ts = m.get("capture_time") or files[0].stat().st_mtime
+            date = _dt.datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d")
+        return {"count": len(files), "bytes": sum(p.stat().st_size for p in files), "date": date,
+                "home": str(Path.home())}
+
     @app.post("/api/shoots/import")
     def import_shoot(req: ImportReq) -> dict[str, Any]:
         folder = Path(req.folder).expanduser()
         if not folder.is_dir():
             raise HTTPException(400, f"Ordner nicht gefunden: {folder}")
-        sid = import_folder(db, folder, req.name, req.profile)
+        copy_from = None
+        if req.copy_to and Path(req.copy_to).expanduser().resolve() != folder.resolve():
+            dest = Path(req.copy_to).expanduser().resolve()
+            try:
+                dest.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                raise HTTPException(400, f"Ablageort nicht beschreibbar: {dest} ({e})") from e
+            if folder.resolve() in dest.parents:
+                raise HTTPException(400, "Der Ablageort darf nicht im Quellordner liegen")
+            sid = db.upsert_shoot(req.name or dest.name, str(dest), req.profile)
+            copy_from = str(folder)
+        else:
+            sid = import_folder(db, folder, req.name, req.profile)
         if req.teams:
             db.update_shoot_settings(sid, teams=req.teams)
         job_id = jobs.submit("pipeline", sid, keep_ratio=req.keep_ratio, profile=req.profile,
                              preset=req.preset, highlights=req.highlights,
                              max_keep=req.max_keep, mode=req.mode,
-                             burst_keep=req.burst_keep) if req.run else None
+                             burst_keep=req.burst_keep, copy_from=copy_from) if req.run or copy_from else None
         return {"shoot_id": sid, "job_id": job_id}
 
     @app.patch("/api/shoots/{sid}")

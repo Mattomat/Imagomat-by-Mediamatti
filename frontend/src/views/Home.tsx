@@ -15,13 +15,40 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
   const [teams, setTeams] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<Shoot | null>(null);
+  const [library, setLibrary] = useState<string | null | undefined>(undefined);   // undefined = lädt
+  const [askLibrary, setAskLibrary] = useState(false);
+  const [info, setInfo] = useState<{ count: number; bytes: number; date: string | null; home: string } | null>(null);
+  const [shootName, setShootName] = useState("");
+  const [copy, setCopy] = useState(true);
 
   useEffect(() => {
     api.get<Overview>("/api/overview").then((o) => {
       setOv(o);
-      api.get<{ default_profile: string | null }>("/api/settings").then((s) => setProfile(s.default_profile ?? ""));
+      api.get<{ default_profile: string | null; library_root: string | null }>("/api/settings").then((s) => {
+        setProfile(s.default_profile ?? "");
+        setLibrary(s.library_root);
+        if (!s.library_root) setAskLibrary(true);        // beim ersten Start: zuerst den Ablageort festlegen
+      });
     });
   }, []);
+  useEffect(() => {
+    setInfo(null);
+    if (!folder) return;
+    api.get<{ count: number; bytes: number; date: string | null; home: string }>(`/api/import/info?folder=${encodeURIComponent(folder)}`)
+      .then((i) => {
+        setInfo(i);
+        // schon am Ablageort (z. B. alter Shoot)? Dann nicht nochmals kopieren
+        setCopy(!(library && folder.startsWith(library)));
+      }).catch(() => undefined);
+  }, [folder, library]);
+
+  const chooseLibrary = async () => {
+    const f = await pickFolder("Wo sollen deine RAW-Bilder abgelegt werden?");
+    if (!f) return;
+    await api.put("/api/settings", { library_root: f });
+    setLibrary(f); setAskLibrary(false);
+    ctx.toast(`Ablageort: ${f}`);
+  };
   useEffect(() => {
     api.get<Shoot[]>("/api/shoots").then(setShoots);
   }, [ctx.tick]);
@@ -34,7 +61,8 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
     setBusy(true);
     try {
       const r = await api.post<{ shoot_id: number }>("/api/shoots/import", {
-        folder, profile: profile || undefined, teams, mode,
+        folder, profile: profile || undefined, teams, mode, name: shootName.trim() || undefined,
+        copy_to: mode === "full" && copyTo ? copyTo : undefined,
         ...(mode === "full" ? SELECTION_PARAMS[sel] : {}),
         max_keep: mode === "full" && maxKeep ? Math.max(1, parseInt(maxKeep, 10)) : undefined,
       });
@@ -48,6 +76,9 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
   };
 
   const folderName = folder.split("/").filter(Boolean).pop();
+  const nameNow = shootName.trim() || folderName || "Shoot";
+  const dirName = `${info?.date ?? new Date().toISOString().slice(0, 10)} ${nameNow}`.replace(/[/:]/g, "-");
+  const copyTo = library && copy ? `${library.replace(/\/$/, "")}/${(info?.date ?? "").slice(0, 4) || new Date().getFullYear()}/${dirName}` : null;
 
   return (
     <div className="page home">
@@ -71,6 +102,25 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
           </>
         )}
       </div>
+
+      {folder && mode === "full" && (
+        <div className="card import-dest">
+          <div className="ac-title">Wohin mit den RAWs?</div>
+          <div className="source-row">
+            <label className="check"><input type="checkbox" checked={copy} onChange={(e) => setCopy(e.target.checked)} /> an den Ablageort kopieren</label>
+            <span className="muted">{info ? `${info.count} Bilder · ${(info.bytes / 1e9).toFixed(1)} GB` : ""}</span>
+          </div>
+          {copy && (library ? (
+            <>
+              <label>Name des Shoots</label>
+              <input value={shootName} placeholder={folderName} onChange={(e) => setShootName(e.target.value)} />
+              <div className="hint">Ordner: <b>{copyTo}</b> · <button className="link" onClick={chooseLibrary}>Ablageort ändern</button></div>
+              <div className="hint">Lightroom verlinkt die Bilder später genau dort (Import → <b>Hinzufügen</b>). Die Karte bleibt unverändert.</div>
+            </>
+          ) : <button onClick={chooseLibrary}>Ablageort wählen …</button>)}
+          {!copy && <div className="hint">Die Bilder bleiben, wo sie sind ({folder}); die Einstellungen (XMP) landen daneben.</div>}
+        </div>
+      )}
 
       <div className="options">
         <div className="opt">
@@ -115,7 +165,20 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
           </div>
         )}
       </div>
-      <button className="primary big" disabled={!folder || busy} onClick={start}>Los</button>
+      <button className="primary big" disabled={!folder || busy || (mode === "full" && copy && !library)} onClick={start}>
+        {mode === "full" && copyTo ? "Kopieren und loslegen" : "Los"}</button>
+
+      {askLibrary && (
+        <Modal title="Wo sollen deine RAW-Bilder liegen?" onClose={() => setAskLibrary(false)}>
+          <p>Imagomat kopiert beim Import die RAWs von der Karte in einen Ordner pro Shoot, z. B.
+            <code> Bilder/2026/2026-09-30 FCW – GCZ</code>. Dort schreibt es auch die Bearbeitungen (XMP) hin, und von dort
+            verlinkt Lightroom die Bilder, wenn du sie importierst.</p>
+          <div className="row" style={{ display: "flex", gap: 8 }}>
+            <button className="primary" onClick={chooseLibrary}>Ordner wählen …</button>
+            <button className="ghost" onClick={() => setAskLibrary(false)}>Später</button>
+          </div>
+        </Modal>
+      )}
 
       {shoots.length > 0 && (
         <>

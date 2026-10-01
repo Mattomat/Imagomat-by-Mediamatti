@@ -86,6 +86,7 @@ export default function Editor({ iid, filename, onClose, onSaved, toast }: {
   const [dirty, setDirty] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
   const reqId = useRef(0);
+  const shown = useRef(0);
   const drag = useRef<Pt | null>(null);
 
   useEffect(() => {
@@ -95,29 +96,38 @@ export default function Editor({ iid, filename, onClose, onSaved, toast }: {
   }, [iid, toast]);
 
   // Live-Vorschau (entprellt, nur die neueste Anfrage zählt)
+  // Beim Ziehen eines Reglers zuerst schnell und klein, nach kurzer Pause in voller Qualität
   useEffect(() => {
     if (!model) return;
+    const full = Math.min(1800, Math.round(Math.max(window.innerHeight, 800) * (window.devicePixelRatio || 1) * 0.8));
+    const quick = run(Math.min(900, full), 40);
+    const fine = run(full, 380);
+    return () => { clearTimeout(quick); clearTimeout(fine); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, iid, showMask, sel, toast]);
+
+  function run(size: number, delay: number) {
     const id = ++reqId.current;
-    const t = setTimeout(async () => {
+    return setTimeout(async () => {
       setBusy(true);
       try {
-        const size = Math.min(1800, Math.round(Math.max(window.innerHeight, 800) * (window.devicePixelRatio || 1) * 0.8));
         const r = await fetch(`${BASE}/api/images/${iid}/editor/preview`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ model, size, overlay: showMask && sel !== null ? sel : null }),
         });
         if (!r.ok) throw new Error(`Vorschau: Fehler ${r.status}`);
         const url = URL.createObjectURL(await r.blob());
-        if (id === reqId.current) setSrc((old) => { if (old) URL.revokeObjectURL(old); return url; });
-        else URL.revokeObjectURL(url);
+        if (id >= shown.current) {
+          shown.current = id;
+          setSrc((old) => { if (old) URL.revokeObjectURL(old); return url; });
+        } else URL.revokeObjectURL(url);
       } catch (e) {
         if (id === reqId.current) toast((e as Error).message, "error");
       } finally {
         if (id === reqId.current) setBusy(false);
       }
-    }, 180);
-    return () => clearTimeout(t);
-  }, [model, iid, showMask, sel, toast]);
+    }, delay);
+  }
 
   const update = useCallback((f: (m: EdModel) => EdModel) => { setModel((m) => (m ? f(m) : m)); setDirty(true); }, []);
   const setG = (k: string, v: number) => update((m) => ({ ...m, global: { ...m.global, [k]: v },

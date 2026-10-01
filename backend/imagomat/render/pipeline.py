@@ -52,13 +52,16 @@ def _smoothstep(e0: float, e1: float, x: np.ndarray) -> np.ndarray:
 
 
 def _srgb_encode(x: np.ndarray) -> np.ndarray:
-    x = np.clip(x, 0, 1)
-    return np.where(x <= 0.0031308, 12.92 * x, 1.055 * np.power(x, 1 / 2.4) - 0.055)
+    # float32: np.power auf float64 ist hier ~10x langsamer (Vorschau 2000 px: 0.3 s pro Aufruf)
+    x = np.clip(np.asarray(x, np.float32), 0, 1)
+    return np.where(x <= 0.0031308, x * np.float32(12.92),
+                    np.float32(1.055) * np.power(x, np.float32(1 / 2.4)) - np.float32(0.055))
 
 
 def _srgb_decode(x: np.ndarray) -> np.ndarray:
-    x = np.clip(x, 0, 1)
-    return np.where(x <= 0.04045, x / 12.92, np.power((x + 0.055) / 1.055, 2.4))
+    x = np.clip(np.asarray(x, np.float32), 0, 1)
+    return np.where(x <= 0.04045, x / np.float32(12.92),
+                    np.power((x + np.float32(0.055)) / np.float32(1.055), np.float32(2.4)))
 
 
 def base_curve(x: np.ndarray, contrast: float) -> np.ndarray:
@@ -498,10 +501,17 @@ def _soften_local(img: np.ndarray, corrections: list[dict[str, Any]], orientatio
                 + 0.3 * -min(0.0, _n(corr, "LocalClarity2012")))
         if soft <= 0:
             continue
-        m = correction_mask(corr, img.shape[:2], orientation, seg)[..., None]
-        if m.max() <= 0:
+        m = correction_mask(corr, img.shape[:2], orientation, seg)
+        rows = np.flatnonzero(m.max(axis=1) > 1e-3)
+        if rows.size == 0:
             continue
-        img = img + (_blur(img, 3.5 * scale) - img) * np.clip(soft * 1.2, 0, 1) * m
+        # nur der betroffene Streifen (z. B. Verlauf unten): spart den Grossteil der Rechenzeit
+        pad = int(np.ceil(3.5 * scale * 3)) + 1
+        y0, y1 = max(0, int(rows[0]) - pad), min(img.shape[0], int(rows[-1]) + 1 + pad)
+        part = img[y0:y1].astype(np.float32)
+        mm = m[y0:y1, :, None].astype(np.float32)
+        img = img.copy() if img.base is not None else img
+        img[y0:y1] = part + (_blur(part, 3.5 * scale) - part) * np.float32(min(max(soft * 1.2, 0), 1)) * mm
     return img
 
 
