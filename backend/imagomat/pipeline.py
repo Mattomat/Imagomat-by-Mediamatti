@@ -23,6 +23,7 @@ def ingest(ctx: JobContext, shoot_id: int, source: Path) -> int:
     """RAWs (und vorhandene XMP) von der Karte/dem Quellordner in den Shoot-Ordner am Ablageort kopieren.
     Originale bleiben unverändert; schon vorhandene gleiche Dateien werden übersprungen."""
     import shutil
+    import uuid
 
     db = ctx.db
     shoot = db.one("SELECT * FROM shoots WHERE id=?", (shoot_id,))
@@ -44,9 +45,12 @@ def ingest(ctx: JobContext, shoot_id: int, source: Path) -> int:
             continue
         if out.exists():                    # gleicher Name, anderes Bild (z. B. zweite Karte): nicht überschreiben
             out = dest / f"{p.stem}_{i}{p.suffix}"
-        tmp = out.with_name(out.name + ".part")
-        shutil.copy2(p, tmp)
-        tmp.replace(out)
+        tmp = out.with_name(f".{out.name}.{uuid.uuid4().hex[:8]}.part")      # eindeutig: nie halbe Dateien
+        try:
+            shutil.copy2(p, tmp)
+            tmp.replace(out)
+        finally:
+            tmp.unlink(missing_ok=True)
         copied += 1
         if i % 5 == 0:
             ctx.progress(i + 1, f"Kopieren {i + 1}/{len(todo)} nach {dest.name}")
