@@ -190,9 +190,17 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
     settings = load_settings()
     shoot = db.one("SELECT * FROM shoots WHERE id=?", (shoot_id,))
     look, look_key = None, None
-    if not (profile and profile.startswith(("look:", "preset:"))):
+    if not (profile and profile.startswith(("look:", "preset:", "tpl:"))):
         profile = profile or (shoot["profile"] if shoot else None) or settings.default_profile
-    if profile and profile.startswith("look:"):
+    if profile and profile.startswith("tpl:"):
+        from .template import load_template
+
+        tpl = load_template(profile[4:])
+        if tpl is None:
+            raise ValueError(f"Vorlage „{profile[4:]}“ nicht gefunden")
+        look = {**tpl, "kind": "template", "name": tpl["name"]}
+        look_key, profile = profile, None
+    elif profile and profile.startswith("look:"):
         from .look import load_look
 
         look = load_look(profile[5:])
@@ -210,7 +218,7 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
     refresh_raw_metrics(ctx, shoot_id)             # z. B. A7 V: jetzt mit echten RAW-Daten
     items = shoot_records(db, shoot_id, only_keep)
     ctx.set_total(len(items))
-    what = f"Look {look['name']}" if look else ("Profil " + profile if model else "Preset")
+    what = (f"Vorlage {look['name']}" if look.get("kind") == "template" else f"Look {look['name']}") if look else ("Profil " + profile if model else "Preset")
     ctx.progress(0, f"Entwickle {len(items)} Bilder mit {what}")
     develop_items(items, model, settings, Dialect.load(), preset, look)
     import time
@@ -334,3 +342,18 @@ def learn_look_job(ctx: JobContext, name: str, folder: str, base: str = "fb_sign
 
     look = learn_look(name, Path(folder), base if base in PRESETS else "fb_signature", step)
     ctx.progress(look["n"], f"Look „{name}“ gelernt aus {look['n']} Bildern")
+
+
+@job("learn_template")
+def learn_template_job(ctx: JobContext, name: str, paths: list[str]) -> None:
+    """Deine Lightroom-Bearbeitung (XMP) als Vorlage speichern: 1:1 übernehmen, pro Bild leicht anpassen."""
+    from .template import learn_template
+
+    ctx.progress(0, f"Vorlage „{name}“: XMP lesen")
+
+    def step(i: int, n: int) -> None:
+        ctx.set_total(max(n, 1))
+        ctx.progress(i, f"Vorlage „{name}“: {i}/{n} XMP gelesen")
+
+    t = learn_template(name, paths, step)
+    ctx.progress(t["n"], f"Vorlage „{name}“ aus {t['n']} Bearbeitung{'en' if t['n'] != 1 else ''} gespeichert")

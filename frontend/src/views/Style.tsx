@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AppCtx } from "../App";
-import { api, IS_APP, JobInfo, Overview, pickFile, pickFolder, Preset, Profile, Shoot, waitForJob } from "../api";
+import { api, IS_APP, JobInfo, Overview, pickFile, pickFiles, pickFolder, Preset, Profile, Shoot, waitForJob } from "../api";
 import { Modal, More, Progress } from "../ui";
 
 function accuracy(p: Profile): string | null {
@@ -22,6 +22,9 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
   const [lookName, setLookName] = useState("Mein Look");
   const [lookBase, setLookBase] = useState("fb_signature");
   const [lookJob, setLookJob] = useState<JobInfo | null>(null);
+  const [tpls, setTpls] = useState<{ name: string; n: number; files: string[]; summary: string[] }[]>([]);
+  const [tplName, setTplName] = useState("Meine Vorlage");
+  const [tplJob, setTplJob] = useState<JobInfo | null>(null);
 
   const load = () => {
     api.get<Overview>("/api/overview").then((o) => {
@@ -30,6 +33,7 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
     });
     api.get<{ default_profile: string | null }>("/api/settings").then((s) => setDef(s.default_profile));
     api.get<{ name: string; n: number; base: string }[]>("/api/looks").then(setLooks).catch(() => setLooks([]));
+    api.get<{ name: string; n: number; files: string[]; summary: string[] }[]>("/api/templates").then(setTpls).catch(() => setTpls([]));
   };
   useEffect(load, [ctx.tick]);
   useEffect(() => {
@@ -40,6 +44,7 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
     setDrop((paths) => {
       const p = paths[0];
       if (!p) return;
+      if (paths.every((x) => x.toLowerCase().endsWith(".xmp"))) { learnTemplateRef.current(paths); return; }
       setSource(p.endsWith(".lrcat") ? { catalog: p } : { folder: p });
     });
     return () => setDrop(null);
@@ -62,6 +67,33 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
       setLookJob(null);
       ctx.toast((e as Error).message, "error");
     }
+  };
+
+  const learnTemplate = async (paths: string[]) => {
+    if (!paths.length) return;
+    const name = tplName.trim() || "Meine Vorlage";
+    try {
+      const r = await api.post<{ job_id: number }>("/api/jobs", { kind: "learn_template", shoot_id: null, params: { name, paths } });
+      ctx.refreshJobs();
+      const j = await waitForJob(r.job_id, setTplJob);
+      setTplJob(null);
+      if (j.status === "done") {
+        ctx.toast(j.message ?? "Vorlage gespeichert");
+        if (!def || def.startsWith("preset:")) await setDefault(`tpl:${name}`);
+      } else ctx.toast(j.error?.split("\n")[0] ?? "Vorlage fehlgeschlagen", "error");
+      load();
+    } catch (e) {
+      setTplJob(null);
+      ctx.toast((e as Error).message, "error");
+    }
+  };
+
+  const learnTemplateRef = useRef(learnTemplate);
+  learnTemplateRef.current = learnTemplate;
+
+  const deleteTemplate = async (n: string) => {
+    await api.del(`/api/templates/${encodeURIComponent(n)}`);
+    load();
   };
 
   const deleteLook = async (n: string) => {
@@ -110,7 +142,8 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
     await api.put("/api/settings", { default_profile: p });
     setDef(p);
     const label = p?.startsWith("preset:") ? (presets.find((x) => `preset:${x.key}` === p)?.name ?? p)
-      : p?.startsWith("look:") ? `Look: ${p.slice(5)}` : p;
+      : p?.startsWith("look:") ? `Look: ${p.slice(5)}`
+      : p?.startsWith("tpl:") ? `Vorlage: ${p.slice(4)}` : p;
     ctx.toast(p ? `„${label}“ ist jetzt dein Standard-Stil` : "Standard: automatisch");
   };
 
@@ -128,6 +161,40 @@ export default function StyleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: 
   return (
     <div className="page style">
       <h1>Mein Stil</h1>
+      <div className="card learn-card">
+        <div className="ac-title">Vorlage: deine Lightroom-Bearbeitung 1:1</div>
+        <p className="ac-text">
+          Wähle die XMP-Dateien von ein bis drei Bildern, die du in Lightroom fertig bearbeitet hast (in Lightroom
+          „Metadaten in Datei speichern“, ⌘S). Imagomat übernimmt alle Regler, das Profil, HSL, Schärfe und alle Masken
+          genau so und passt pro Bild nur Belichtung, Weissabgleich und Begradigen leicht an.
+        </p>
+        <More>
+          <label>Name der Vorlage</label>
+          <input value={tplName} onChange={(e) => setTplName(e.target.value)} />
+        </More>
+        {tplJob ? (
+          <Progress value={tplJob.total ? tplJob.progress / tplJob.total : 0.03} label={tplJob.message ?? "Lese …"} />
+        ) : (
+          <div className="source-row">
+            <button className="primary big" onClick={async () => learnTemplate(await pickFiles(["xmp"], "XMP-Dateien deiner bearbeiteten Bilder"))}>XMP-Dateien wählen</button>
+            <button onClick={async () => { const f = await pickFolder("Ordner mit bearbeiteten Bildern + XMP"); if (f) learnTemplate([f]); }}>Ordner …</button>
+          </div>
+        )}
+        {tpls.length > 0 && (
+          <div className="preset-list mt">
+            {tpls.map((t) => (
+              <div key={t.name} className="preset">
+                <b>Vorlage: {t.name}</b>
+                <span>aus {t.n} {t.n === 1 ? "Bearbeitung" : "Bearbeitungen"} ({t.files.join(", ")})
+                  {" · "}{def === `tpl:${t.name}` ? "Standard" : <button className="link" onClick={() => setDefault(`tpl:${t.name}`)}>als Standard</button>}
+                  {" · "}<button className="link" style={{ color: "var(--bad)" }} onClick={() => deleteTemplate(t.name)}>Löschen</button>
+                </span>
+                {t.summary.length > 0 && <span className="hint">{t.summary.join(" · ")}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="card learn-card">
         <div className="ac-title">Stil aus deinen Bearbeitungen lernen</div>
         <p className="ac-text">

@@ -13,6 +13,7 @@ from .model import StyleModel, list_profiles
 
 AUTO = "preset:auto"
 LOOK = "look:"
+TPL = "tpl:"
 
 
 def resolve(style: str | None) -> tuple[StyleModel | None, str | None, dict[str, Any] | None]:
@@ -21,6 +22,13 @@ def resolve(style: str | None) -> tuple[StyleModel | None, str | None, dict[str,
 
     if not style or style == AUTO:
         return None, None, None
+    if style.startswith(TPL):
+        from .template import load_template
+
+        tpl = load_template(style[len(TPL):])
+        if tpl is None:
+            raise KeyError(style)
+        return None, None, {**tpl, "kind": "template"}
     if style.startswith(LOOK):
         from .look import load_look
 
@@ -41,6 +49,10 @@ def _model(name: str, mtime: float) -> StyleModel | None:   # mtime: neu laden, 
 
 
 def model_version(name: str) -> float:
+    if name.startswith(TPL):
+        from .template import template_version
+
+        return template_version(name[len(TPL):])
     if name.startswith(LOOK):
         from .look import look_version
 
@@ -57,8 +69,12 @@ def styles() -> list[dict[str, Any]]:
     from .presets import PRESETS
 
     from .look import list_looks
+    from .template import list_templates
 
-    out = [{"key": f"{LOOK}{lk['name']}", "label": f"Look: {lk['name']}", "n": lk.get("n"), "group": "Deine Stile",
+    out = [{"key": f"{TPL}{t['name']}", "label": f"Vorlage: {t['name']}", "n": t.get("n"), "group": "Deine Stile",
+            "description": "Deine Lightroom-Bearbeitung 1:1, pro Bild nur Belichtung, Weissabgleich und "
+                           "Begradigen angepasst."} for t in list_templates()]
+    out += [{"key": f"{LOOK}{lk['name']}", "label": f"Look: {lk['name']}", "n": lk.get("n"), "group": "Deine Stile",
             "description": "Jedes Bild wird auf deine fertigen Referenzbilder abgeglichen."} for lk in list_looks()]
     out += [{"key": p["name"], "label": p["name"], "n": p.get("n"), "group": "Deine Stile"} for p in list_profiles()]
     out += [{"key": f"preset:{p.key}", "label": p.name, "n": None, "group": p.group, "description": p.description}
@@ -75,6 +91,8 @@ def label(key: str | None) -> str | None:
         return f"{p.group}: {p.name}" if p.group else p.name
     if key and key.startswith(LOOK):
         return f"Look: {key[len(LOOK):]}"
+    if key and key.startswith(TPL):
+        return f"Vorlage: {key[len(TPL):]}"
     return key
 
 
@@ -101,6 +119,14 @@ def sample_images(db: Database, shoot_id: int, n: int = 3) -> list[int]:
     return [int(r["id"]) for r in picked]
 
 
+def _shoot_ref(db: Database, shoot_id: int, look: dict[str, Any] | None) -> dict[str, Any] | None:
+    if look is None or look.get("kind") != "template":
+        return None
+    from .template import shoot_reference_db
+
+    return shoot_reference_db(db, shoot_id)
+
+
 def develop_preview(db: Database, shoot_id: int, image_id: int, style: str) -> dict[str, Any]:
     """Entwicklungseinstellungen (crs) für ein Bild mit einem Stil, ohne sie zu speichern."""
     from .jobs import shoot_records
@@ -109,7 +135,7 @@ def develop_preview(db: Database, shoot_id: int, image_id: int, style: str) -> d
     if not items:
         raise KeyError(image_id)
     model, preset, look = resolve(style)
-    develop_items(items, model, load_settings(), Dialect.load(), preset, look)
+    develop_items(items, model, load_settings(), Dialect.load(), preset, look, _shoot_ref(db, shoot_id, look))
     return items[0].crs
 
 
@@ -124,7 +150,7 @@ def apply_to_image(db: Database, shoot_id: int, image_id: int, style: str) -> di
     if not items:
         raise KeyError(image_id)
     model, preset, look = resolve(style)
-    develop_items(items, model, load_settings(), Dialect.load(), preset, look)
+    develop_items(items, model, load_settings(), Dialect.load(), preset, look, _shoot_ref(db, shoot_id, look))
     it = items[0]
     masks = it.crs.get("MaskGroupBasedCorrections")
     with db.tx() as c:

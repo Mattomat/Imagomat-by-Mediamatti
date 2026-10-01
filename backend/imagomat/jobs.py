@@ -83,7 +83,8 @@ class JobContext:
 
 
 LANES = ("shoot", "learn")
-LEARN_KINDS = {"train_profile", "learn_people", "calibrate_culling", "feedback", "import_profile", "learn_look"}
+LEARN_KINDS = {"train_profile", "learn_people", "calibrate_culling", "feedback", "import_profile", "learn_look",
+               "learn_template"}
 
 
 def lane_of(kind: str) -> str:

@@ -361,7 +361,13 @@ def _ai_to_paint(corr: dict[str, Any], it: ImageDevelop) -> dict[str, Any] | Non
 
 
 def develop_items(items: list[ImageDevelop], model: StyleModel | None, settings: Settings, dialect: Dialect,
-                  preset_key: str | None = None, look: dict[str, Any] | None = None) -> None:
+                  preset_key: str | None = None, look: dict[str, Any] | None = None,
+                  shoot_ref: dict[str, Any] | None = None) -> None:
+    if look is not None and look.get("kind") == "template":
+        from .template import develop_items as develop_template
+
+        develop_template(items, look, settings, dialect, shoot_ref)
+        return
     predict_all(items, model, settings, preset_key)
     smooth_shoot(items, settings.develop.shoot_consistency)
     for it in items:

@@ -184,6 +184,16 @@ export async function pickFile(ext: string[], title = "Datei wählen"): Promise<
   return window.prompt(`${title} – Pfad eingeben`) || null;
 }
 
+export async function pickFiles(ext: string[], title = "Dateien wählen"): Promise<string[]> {
+  if (IS_APP) {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const r = await open({ multiple: true, title, filters: [{ name: ext.join(", "), extensions: ext }] });
+    return Array.isArray(r) ? r : typeof r === "string" ? [r] : [];
+  }
+  const t = window.prompt(`${title} – Pfade eingeben (mit ; getrennt)`);
+  return t ? t.split(";").map((x) => x.trim()).filter(Boolean) : [];
+}
+
 /** Drag & Drop von Dateien/Ordnern aus dem Finder (nur in der App liefert das Pfade). */
 export async function onFileDrop(handler: (paths: string[]) => void, hover: (on: boolean) => void): Promise<() => void> {
   if (!IS_APP) return () => undefined;

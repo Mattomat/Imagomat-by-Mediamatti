@@ -727,6 +727,24 @@ def create_app(db_path: str | None = None) -> FastAPI:
             save_settings(s)
         return {"ok": True}
 
+    @app.get("/api/templates")
+    def templates() -> list[dict[str, Any]]:
+        from ..style.template import list_templates
+
+        return list_templates()
+
+    @app.delete("/api/templates/{name}")
+    def delete_template(name: str) -> dict[str, Any]:
+        from ..style.template import delete_template as _delete
+
+        if not _delete(name):
+            raise HTTPException(404, "Vorlage nicht gefunden")
+        s = load_settings()
+        if s.default_profile == f"tpl:{name}":
+            s.default_profile = None
+            save_settings(s)
+        return {"ok": True}
+
     @app.delete("/api/profiles/{name}")
     def delete_profile(name: str) -> dict[str, Any]:
         from ..manage import delete_profile as _delete
