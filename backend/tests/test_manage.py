@@ -70,3 +70,38 @@ def test_api_delete_and_thumb(tmp_path: Path):
         assert client.get(f"/api/shoots/{sid}").json()["n"] == 1
         assert client.delete(f"/api/shoots/{sid}").json()["deleted"] == 1
         assert client.get(f"/api/shoots/{sid}").status_code == 404
+
+
+def test_reset_keeps_only_people(tmp_path: Path):
+    import json
+
+    from imagomat.config import load_settings, profiles_dir, save_settings
+    from imagomat.manage import reset_keep_people
+
+    db = Database(tmp_path / "r.db")
+    folder = tmp_path / "Match"
+    folder.mkdir()
+    sid = db.upsert_shoot("Match", str(folder))
+    ids = [db.upsert_image(sid, {"path": str(folder / f"{i}.ARW"), "filename": f"{i}.ARW"}) for i in range(3)]
+    pid = upsert_person(db, "Max Muster", "FCW", "7")
+    upsert_person(db, "Ohne Bild", "FCW", "9")                  # Kader-Eintrag ohne Gesicht bleibt
+    emb = f32_to_blob(np.ones(8, np.float32))
+    with db.tx() as c:
+        c.execute("INSERT INTO faces(image_id, bbox, embedding, person_id, assigned_by) VALUES(?,?,?,?,?)",
+                  (ids[0], dumps([0.1, 0.1, 0.2, 0.2]), emb, pid, "manual"))
+        c.execute("INSERT INTO faces(image_id, bbox, embedding, cluster_id) VALUES(?,?,?,?)",
+                  (ids[0], dumps([0.5, 0.1, 0.6, 0.2]), emb, 3))      # "Wer ist das?" -> weg
+        c.execute("INSERT INTO faces(image_id, bbox, embedding, cluster_id) VALUES(?,?,?,?)",
+                  (ids[1], dumps([0.5, 0.1, 0.6, 0.2]), emb, 3))
+    d = profiles_dir() / "Mein Stil"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "meta.json").write_text(json.dumps({"name": "Mein Stil"}))
+    s = load_settings()
+    s.default_profile = "Mein Stil"
+    save_settings(s)
+    res = reset_keep_people(db)
+    assert res["shoots"] == 1 and res["persons"] == 2 and res["faces"] == 1 and res["styles"] == 1
+    assert not any(profiles_dir().iterdir()) and load_settings().default_profile is None
+    assert db.one("SELECT person_id FROM faces")[0] == pid
+    visible = db.query("SELECT id FROM shoots WHERE name NOT LIKE '\\_\\_%' ESCAPE '\\'")
+    assert visible == []

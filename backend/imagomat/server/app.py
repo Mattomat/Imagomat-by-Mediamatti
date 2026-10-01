@@ -609,6 +609,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
 
+    @app.post("/api/reset")
+    def reset(body: dict[str, Any]) -> dict[str, Any]:
+        """Neu anfangen: alles löschen ausser den Personen (und ihren benannten Gesichtern)."""
+        from ..manage import reset_keep_people
+
+        if body.get("confirm") != "personen-behalten":
+            raise HTTPException(400, "Bestätigung fehlt")
+        for j in db.query("SELECT id FROM jobs WHERE status IN ('running','queued')"):
+            jobs.cancel(int(j["id"]))
+        return reset_keep_people(db)
+
     @app.delete("/api/profiles/{name}")
     def delete_profile(name: str) -> dict[str, Any]:
         from ..manage import delete_profile as _delete

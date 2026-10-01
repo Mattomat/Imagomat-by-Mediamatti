@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { AppCtx } from "../App";
 import { api } from "../api";
 import LogPanel from "../components/LogPanel";
-import { More, Segmented } from "../ui";
+import { Modal, More, Segmented } from "../ui";
 
 type S = {
   culling: { reject_rating: number; series_gap_seconds: number };
@@ -17,6 +17,7 @@ type S = {
 
 export default function SettingsView({ ctx }: { ctx: AppCtx }) {
   const [s, setS] = useState<S | null>(null);
+  const [resetting, setResetting] = useState<"no" | "ask" | "busy">("no");
   const [licenses, setLicenses] = useState<{ name: string; license: string; commercial_ok: boolean }[]>([]);
 
   useEffect(() => {
@@ -80,6 +81,40 @@ export default function SettingsView({ ctx }: { ctx: AppCtx }) {
       </div>
 
       <LogPanel toast={ctx.toast} />
+
+      <div className="card">
+        <div className="setting">
+          <div>
+            <b>Neu anfangen (Personen behalten)</b>
+            <div className="hint">löscht alle Shoots, Bilder, Bearbeitungen und gelernten Stile – deine Personen bleiben</div>
+          </div>
+          <button className="danger" onClick={() => setResetting("ask")}>Zurücksetzen …</button>
+        </div>
+      </div>
+      {resetting !== "no" && (
+        <Modal title="Alles ausser Personen löschen?" onClose={() => resetting === "ask" && setResetting("no")}>
+          <p><b>Gelöscht wird:</b> alle Shoots mit Auswahl, Bearbeitungen und Vorschauen, alle gelernten Stile,
+            unbenannte Gesichter („Wer ist das?“) und alle Zwischenspeicher.</p>
+          <p><b>Bleibt:</b> deine Personen mit Name, Nummer und Team und die Gesichter, die du ihnen zugeordnet hast
+            (damit die Erkennung weiter funktioniert). Die mitgelieferten Fussball-Stile bleiben ebenfalls.</p>
+          <p className="hint">Deine Originalbilder und exportierten XMPs werden nie angerührt.</p>
+          <div className="modal-actions">
+            <button className="ghost" disabled={resetting === "busy"} onClick={() => setResetting("no")}>Abbrechen</button>
+            <button className="danger" disabled={resetting === "busy"} onClick={async () => {
+              setResetting("busy");
+              try {
+                const r = await api.post<{ shoots: number; images: number; styles: number; persons: number }>(
+                  "/api/reset", { confirm: "personen-behalten" });
+                ctx.toast(`Gelöscht: ${r.shoots} Shoots, ${r.styles} Stile. Behalten: ${r.persons} Personen.`);
+                ctx.refreshJobs();
+              } catch (e) {
+                ctx.toast((e as Error).message, "error");
+              }
+              setResetting("no");
+            }}>{resetting === "busy" ? "Lösche …" : "Ja, alles ausser Personen löschen"}</button>
+          </div>
+        </Modal>
+      )}
 
       <More label="Erweitert">
         <div className="card">
