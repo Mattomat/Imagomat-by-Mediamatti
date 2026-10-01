@@ -147,3 +147,18 @@ def test_hybrid_handles_camera_tone_curve():
     crowd = (slice(200, 320), slice(50, 850))
     assert np.abs(hyb[crowd] - ideal[crowd]).mean() < 5.5             # alte Übertragung: ~7.2
     assert np.abs(hyb[crowd].mean((0, 1)) - ideal[crowd].mean((0, 1))).max() < 4
+
+
+def test_white_balance_on_already_balanced_data():
+    """Apple RAW-Engine / Vorschau liefern schon weissabgeglichene Daten: dein Weissabgleich (z. B. 3600 K, wie
+    aufgenommen) darf das Bild nicht verfärben (früher wurde von D65 aus gerechnet: starker Blaustich)."""
+    from imagomat.render.pipeline import AS_SHOT_TEMP, AS_SHOT_TINT
+
+    lin, _ = _scene(200, 300)
+    base = render(lin, XYZ_TO_SRGB, np.ones(3), {}, 1, {}, 300).astype(float)
+    crs = {"WhiteBalance": "Custom", "Temperature": 3600, "Tint": 40}
+    same = render(lin, XYZ_TO_SRGB, np.ones(3), {**crs, AS_SHOT_TEMP: 3600, AS_SHOT_TINT: 40}, 1, {}, 300)
+    assert np.abs(same.astype(float) - base).mean() < 1.0
+    warmer = render(lin, XYZ_TO_SRGB, np.ones(3), {**crs, "Temperature": 4600, AS_SHOT_TEMP: 3600,
+                                                  AS_SHOT_TINT: 40}, 1, {}, 300).astype(float)
+    assert warmer[..., 0].mean() > base[..., 0].mean() + 2                   # höher = wärmer, wie in Lightroom

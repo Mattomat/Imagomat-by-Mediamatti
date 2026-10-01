@@ -84,6 +84,9 @@ def _tone_local(lin: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarra
     return lin * np.power(2.0, delta)[..., None]
 
 
+AS_SHOT_TEMP, AS_SHOT_TINT = "_AsShotTemp", "_AsShotTint"     # nur intern beim Rendern, nie im XMP
+
+
 def _wb_mult(xyz_to_cam: np.ndarray, camera_wb: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
     """Weissabgleich-Faktoren. Eigene Temperatur/Tint werden RELATIV zur Kamera-Einstellung umgesetzt: so führt
     eine ungenaue Umrechnung Temperatur -> Kamerafaktoren nicht zu einem Farbstich."""
@@ -94,7 +97,12 @@ def _wb_mult(xyz_to_cam: np.ndarray, camera_wb: np.ndarray, crs: dict[str, Any])
     try:
         from ..io.color import multipliers_to_temp_tint
 
-        t0, tint0 = multipliers_to_temp_tint(xyz_to_cam, base)
+        if to_number(crs.get(AS_SHOT_TEMP)):
+            # Daten mit schon angewendetem Kamera-Weissabgleich (Apple RAW-Engine, DNG Converter, Vorschau):
+            # Ausgangspunkt ist der Weissabgleich der Aufnahme, nicht D65
+            t0, tint0 = _n(crs, AS_SHOT_TEMP), _n(crs, AS_SHOT_TINT)
+        else:
+            t0, tint0 = multipliers_to_temp_tint(xyz_to_cam, base)
         rel = wb_multipliers(xyz_to_cam, _n(crs, "Temperature", 5500), _n(crs, "Tint")) / \
             wb_multipliers(xyz_to_cam, t0, tint0)
         m = (base * rel).astype(np.float32)
@@ -458,7 +466,7 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
 # Saubere Vorschau: Details aus dem Kamera-JPEG, Licht und Farbe aus der RAW-Entwicklung
 # ---------------------------------------------------------------------------
 
-RENDER_VERSION = "h2"          # ändern, wenn die Vorschau anders aussieht: alte Zwischenspeicher verfallen
+RENDER_VERSION = "h3"          # ändern, wenn die Vorschau anders aussieht: alte Zwischenspeicher verfallen
 HYBRID_LO_SIDE = 560          # Auflösung der RAW-Entwicklung für Licht/Farbe (rauscht dort kaum)
 
 

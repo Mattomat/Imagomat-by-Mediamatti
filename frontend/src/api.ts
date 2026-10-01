@@ -57,6 +57,7 @@ export interface Shoot {
   cover: number | null;
   settings: string | null;
   job: JobInfo | null;
+  raw_sources?: Record<string, number>;
 }
 
 export interface ImageItem {

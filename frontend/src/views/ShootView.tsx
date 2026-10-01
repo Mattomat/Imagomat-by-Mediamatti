@@ -24,6 +24,24 @@ function stepOf(msg: string | null | undefined): number {
   return 0;
 }
 
+const RAW_LABEL: Record<string, string> = {
+  libraw: "echte RAW-Daten (LibRaw)", coreimage: "echte RAW-Daten (Apple RAW-Engine)",
+  dng_converter: "echte RAW-Daten (Adobe DNG Converter)", preview: "nur eingebettetes JPEG", unbekannt: "noch nicht gelesen",
+};
+
+function RawStatus({ src }: { src: Record<string, number> }) {
+  const total = Object.values(src).reduce((a, b) => a + b, 0);
+  if (!total) return null;
+  const bad = (src.preview ?? 0) + (src.unbekannt ?? 0);
+  const parts = Object.entries(src).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${RAW_LABEL[k] ?? k}`);
+  return (
+    <div className={bad ? "style-chip warn" : "muted"} title="Wie Imagomat deine RAW-Dateien gelesen hat">
+      RAW: {parts.join(" · ")}
+      {(src.preview ?? 0) > 0 && <> – für diese Bilder ist die Vorschau ungenau (Lightroom bekommt trotzdem deine Einstellungen). Tipp: Adobe DNG Converter installieren, dann neu analysieren.</>}
+    </div>
+  );
+}
+
 export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const [shoot, setShoot] = useState<Shoot | null>(null);
   const [items, setItems] = useState<ImageItem[]>([]);
@@ -197,8 +215,11 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
               {style.is_preset ? <>Standard-Bearbeitung, nicht dein Stil.</> : <>Stil: <b>{style.label ?? style.used}</b></>}
               {" "}<select value="" disabled={running} onChange={(e) => e.target.value && applyStyle(e.target.value)}>
                 <option value="">{style.is_preset ? "Stil wählen …" : "ändern …"}</option>
-                {style.profiles.length > 0 && (
-                  <optgroup label="Deine Stile">{style.profiles.map((p) => <option key={p} value={p}>{p}</option>)}</optgroup>
+                {(style.profiles.length > 0 || styleOpts.some((o) => /^(tpl|look):/.test(o.key))) && (
+                  <optgroup label="Deine Stile">
+                    {styleOpts.filter((o) => /^(tpl|look):/.test(o.key)).map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+                    {style.profiles.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </optgroup>
                 )}
                 {footballPresets.length > 0 && (
                   <optgroup label="Fussball">{footballPresets.map((p) => <option key={p.key} value={`preset:${p.key}`}>{p.name}</option>)}</optgroup>
@@ -209,6 +230,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
               {style.profiles.length === 0 && <> · <button className="link" onClick={() => ctx.go({ name: "style" })}>Eigenen Stil lernen →</button></>}
             </div>
           )}
+          {shoot?.raw_sources && <RawStatus src={shoot.raw_sources} />}
           {teamsAll.length > 0 && (
             <div className="muted">
               Team: <select className="team-select" value={shootTeams[0] ?? ""} disabled={running} onChange={(e) => setTeam(e.target.value)}>

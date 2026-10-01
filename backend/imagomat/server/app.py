@@ -324,6 +324,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
         job = db.one("SELECT id, kind, status, progress, total, message FROM jobs WHERE shoot_id=? "
                      "ORDER BY id DESC LIMIT 1", (sid,))
         d["job"] = dict(job) if job else None
+        # Wie wurden die RAWs gelesen? (LibRaw = echte Sensordaten; Vorschau = nur eingebettetes JPEG)
+        src: dict[str, int] = {}
+        for a in db.query("SELECT json_extract(a.data, '$.raw_source') s FROM analysis a JOIN images i "
+                          "ON i.id=a.image_id WHERE i.shoot_id=? AND lower(i.path) NOT LIKE '%.jpg' "
+                          "AND lower(i.path) NOT LIKE '%.jpeg'", (sid,)):
+            key = a["s"] or "unbekannt"
+            src[key] = src.get(key, 0) + 1
+        d["raw_sources"] = src
         return d
 
     @app.post("/api/reveal")
@@ -529,15 +537,38 @@ def create_app(db_path: str | None = None) -> FastAPI:
         lin_cache.parent.mkdir(parents=True, exist_ok=True)
         if lin_cache.exists():
             z = np.load(lin_cache)
-            return z["lin"].astype(np.float32), z["xyz"], z["wb"], int(z["orient"])
+            if "source" in z.files:
+                _sources[iid] = (str(z["source"]), float(z["as_temp"]), float(z["as_tint"]))
+                return z["lin"].astype(np.float32), z["xyz"], z["wb"], int(z["orient"])
         lin, info = raw_io.decode_any(path, half_size=True)
         h, w = lin.shape[:2]
         s = 2048 / max(h, w)
         if s < 1:
             lin = cv2.resize(lin, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
         xyz, wb, orient = info.xyz_to_cam, info.camera_wb, info.orientation
-        np.savez(lin_cache, lin=lin.astype(np.float16), xyz=xyz, wb=wb, orient=orient)
+        source = "preview" if info.extra.get("from_preview") else str(info.extra.get("source", "libraw"))
+        as_temp, as_tint = float(info.as_shot_temp or 0.0), float(info.as_shot_tint or 0.0)
+        if source != "libraw" and not as_temp:
+            a = db.one("SELECT data FROM analysis WHERE image_id=?", (iid,))
+            d = json.loads(a["data"]) if a and a["data"] else {}
+            as_temp, as_tint = float(d.get("as_shot_temp") or 0.0), float(d.get("as_shot_tint") or 0.0)
+        _sources[iid] = (source, as_temp, as_tint)
+        np.savez(lin_cache, lin=lin.astype(np.float16), xyz=xyz, wb=wb, orient=orient, source=source,
+                 as_temp=as_temp, as_tint=as_tint)
         return lin, xyz, wb, orient
+
+    _sources: dict[int, tuple[str, float, float]] = {}
+
+    def _with_as_shot(iid: int, crs: dict[str, Any]) -> dict[str, Any]:
+        """Bei schon weissabgeglichenen Daten (Apple RAW-Engine, Vorschau) den Aufnahme-Weissabgleich mitgeben."""
+        src = _sources.get(iid)
+        if not src or src[0] == "libraw":
+            return crs
+        from ..render.pipeline import AS_SHOT_TEMP, AS_SHOT_TINT
+
+        if not src[1]:                       # Aufnahme-Wert unbekannt: Weissabgleich nicht verschieben
+            return {**crs, AS_SHOT_TEMP: crs.get("Temperature"), AS_SHOT_TINT: crs.get("Tint") or 0}
+        return {**crs, AS_SHOT_TEMP: src[1], AS_SHOT_TINT: src[2]}
 
     def _render_file(iid: int, path: Path, crs: dict[str, Any], size: int, cache: Path) -> Response:
         if not raw_io.is_raw(path):
@@ -550,7 +581,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if pr and pr["preview_path"] and Path(pr["preview_path"]).exists():
             d = cv2.imread(str(pr["preview_path"]), cv2.IMREAD_COLOR)
             detail = cv2.cvtColor(d, cv2.COLOR_BGR2RGB) if d is not None else None
-        img = render_hybrid(lin, xyz, wb, crs, detail, orient, seg, size)
+        img = render_hybrid(lin, xyz, wb, _with_as_shot(iid, crs), detail, orient, seg, size)
         cache.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(cache), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
         return FileResponse(cache, media_type="image/jpeg")
