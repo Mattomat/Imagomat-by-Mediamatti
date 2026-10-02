@@ -185,7 +185,7 @@ def shoot_records(db: Database, shoot_id: int, only_keep: bool = True,
 
 @job("develop")
 def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, preset: str | None = None,
-                  only_keep: bool = True, overwrite_manual: bool = False) -> None:
+                  only_keep: bool = True, overwrite_manual: bool = False, keep: list[int] | None = None) -> None:
     db = ctx.db
     settings = load_settings()
     shoot = db.one("SELECT * FROM shoots WHERE id=?", (shoot_id,))
@@ -227,6 +227,7 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
     manual = set() if overwrite_manual else {int(r[0]) for r in db.query(
         "SELECT e.image_id FROM edits e JOIN images i ON i.id=e.image_id WHERE i.shoot_id=? AND e.profile='manual'",
         (shoot_id,))}
+    manual |= {int(k) for k in keep or []}           # z. B. das Bild, von dem der Edit stammt
     items = [it for it in items if it.image_id not in manual]
     with db.tx() as c:
         for it in items:

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppCtx } from "../App";
 import { api, ImageItem, IS_APP, pickFolder, Preset, reveal, Shoot, waitForJob } from "../api";
 import PeoplePanel from "../components/PeoplePanel";
-import Editor from "../components/Editor";
+import Develop from "../develop/Develop";
 import { SELECTION_HINT, SELECTION_PARAMS, SELECTIONS, Selection, selectionFromSettings } from "../selection";
 import { Modal, More, Progress, Segmented } from "../ui";
 
@@ -57,12 +57,20 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const [exporting, setExporting] = useState(false);
   const [social, setSocial] = useState<"none" | "all" | "one">("none");
   const gridRef = useRef<HTMLDivElement>(null);
+  const openLoupe = useCallback((idx: number) => { setSel(idx); setLoupe(true); }, []);
 
   const load = useCallback(() => {
     api.get<Shoot>(`/api/shoots/${id}`).then(setShoot).catch(() => undefined);
     api.get<ImageItem[]>(`/api/shoots/${id}/images`).then(setItems);
   }, [id]);
   useEffect(load, [load, ctx.tick]);
+  // Bearbeitete Kacheln erscheinen, sobald sie im Hintergrund vorberechnet sind
+  const waiting = !editing && items.some((i) => i.decision === "keep" && !i.rendered);
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(() => api.get<ImageItem[]>(`/api/shoots/${id}/images`).then(setItems).catch(() => undefined), 6000);
+    return () => clearInterval(t);
+  }, [waiting, id]);
 
   const liveJob = ctx.jobs.find((j) => j.id === shoot?.job?.id);
   const job = liveJob ?? shoot?.job ?? null;
@@ -146,8 +154,8 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (["INPUT", "SELECT", "TEXTAREA"].includes(t.tagName) || exporting || !cur) return;
-      if (editing) { if (e.key === "Escape") setEditing(false); return; }
-      if ((e.key === "e" || e.key === "E") && loupe && !peopleMode) { setEditing(true); return; }
+      if (editing) return;            // Entwickeln-Modul hat eigene Tasten
+      if (["e", "E", "d", "D"].includes(e.key) && !peopleMode && cur.decision === "keep") { setEditing(true); return; }
       const cols = gridRef.current ? Math.max(1, Math.floor(gridRef.current.clientWidth / 236)) : 5;
       const k = e.key;
       if (k === "ArrowRight") setSel((s) => Math.min(shown.length - 1, s + 1));
@@ -208,6 +216,21 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
           <p className="hint">Bereits analysierte Bilder werden übersprungen.</p>
         </div>
       </div>
+    );
+  }
+
+  if (editing && cur && !peopleMode) {
+    return (
+      <Develop items={shown} index={curIdx} onIndex={(i) => setSel(i)} toast={ctx.toast}
+        onClose={() => { setEditing(false); setEditV((v) => v + 1); load(); }}
+        onSynced={async (jobId) => {
+          ctx.refreshJobs();
+          const j = await waitForJob(jobId);
+          ctx.toast(j.status === "done" ? "Auf alle Bilder übertragen" : (j.error?.split("\n")[0] ?? "Übertragen fehlgeschlagen"),
+            j.status === "done" ? "ok" : "error");
+          load(); setEditV((v) => v + 1);
+          api.get<StyleInfo>(`/api/shoots/${id}/style`).then(setStyle).catch(() => undefined);
+        }} />
     );
   }
 
@@ -276,36 +299,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
       {!loupe ? (
         <div className="grid" ref={gridRef}>
           {shown.length === 0 && <div className="empty">Keine Bilder in dieser Ansicht.</div>}
-          {shown.map((i, idx) => (
-            <div key={i.id} id={`t-${i.id}`} className={`thumb ${idx === sel ? "sel" : ""}`}
-              onClick={() => setSel(idx)} onDoubleClick={() => { setSel(idx); setLoupe(true); }}>
-              <img loading="lazy" decoding="async" src={api.img(`/api/images/${i.id}/thumb`)} />
-              <div className="thumb-foot">
-                {i.decision === "keep"
-                  ? <span className="stars">{"★".repeat(i.rating ?? 0)}</span>
-                  : <span className="why">{i.reasons[0] ?? "aussortiert"}</span>}
-                {i.best && i.decision === "keep" && <span className="tag">Top</span>}
-                {i.moment && i.decision === "keep" && <span className="tag moment">{i.moment}</span>}
-                {i.people.length > 0 ? <span className="who">{i.people.join(", ")}</span>
-                  : (i.tags?.length ?? 0) > 0 && <span className="who muted">{i.tags!.join(", ")}</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : cur && editing ? (
-        <div className="loupe">
-          <Editor iid={cur.id} filename={cur.filename} toast={ctx.toast} onClose={() => { setEditing(false); setEditV((v) => v + 1); }}
-            onSaved={async (jobId) => {
-              setEditV((v) => v + 1);
-              if (jobId) {
-                ctx.refreshJobs();
-                const j = await waitForJob(jobId);
-                ctx.toast(j.status === "done" ? "Auf alle Bilder übertragen" : (j.error?.split("\n")[0] ?? "Übertragen fehlgeschlagen"),
-                  j.status === "done" ? "ok" : "error");
-                load(); setEditV((v) => v + 1);
-                api.get<StyleInfo>(`/api/shoots/${id}/style`).then(setStyle).catch(() => undefined);
-              }
-            }} />
+          {shown.map((i, idx) => <Thumb key={i.id} i={i} idx={idx} selected={idx === sel} onSelect={setSel} onOpen={openLoupe} />)}
         </div>
       ) : cur && (
         <div className="loupe">
@@ -356,7 +350,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
             <span className="spacer" />
             <button onClick={() => patch(cur, { decision: "keep" })} className={cur.decision === "keep" ? "on" : ""}>Behalten</button>
             <button onClick={() => patch(cur, { decision: "reject" })} className={cur.decision === "reject" ? "on bad" : ""}>Aussortieren</button>
-            {!peopleMode && <button className="primary" onClick={() => setEditing(true)} title="Regler und Masken selbst einstellen (Taste E)">Bearbeiten</button>}
+            {!peopleMode && <button className="primary" onClick={() => setEditing(true)} title="Entwickeln wie in Lightroom: Regler, Kurven, Masken, Zuschnitt (Taste D)">Entwickeln</button>}
             <button onClick={() => setSocial("one")}>Für Story speichern</button>
             {!peopleMode && <button onClick={toggleScopes} className={scopesOn ? "on" : ""} title="Waveform wie Lumetri (Taste W)">Waveform</button>}
             <button className="ghost" onClick={() => setLoupe(false)}>Zurück</button>
@@ -364,7 +358,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         </div>
       )}
       <div className="keyhint">
-        ← → blättern · Enter gross · Leertaste Vorher/Nachher · E bearbeiten · W Waveform · 1–5 Sterne · X aussortieren · P behalten
+        ← → blättern · Enter gross · Leertaste Vorher/Nachher · D/E entwickeln · W Waveform · 1–5 Sterne · X aussortieren · P behalten
       </div>
       {exporting && <ExportDialog ctx={ctx} shoot={shoot} kept={counts.keep} onClose={() => setExporting(false)} />}
       {tagging && <TagExportDialog ctx={ctx} shoot={shoot} total={items.length} onClose={() => setTagging(false)} />}
@@ -680,6 +674,26 @@ function ScopesPanel({ iid, style, v, edited }: { iid: number; style: string | n
 }
 
 /** Grosses Bild mit Ladeanzeige (Vorschauen mit Masken und Entrauschen brauchen ein, zwei Sekunden). */
+const Thumb = memo(function Thumb({ i, idx, selected, onSelect, onOpen }: {
+  i: ImageItem; idx: number; selected: boolean; onSelect: (i: number) => void; onOpen: (i: number) => void;
+}) {
+  return (
+    <div id={`t-${i.id}`} className={`thumb ${selected ? "sel" : ""}`} onClick={() => onSelect(idx)} onDoubleClick={() => onOpen(idx)}>
+      <img loading="lazy" decoding="async" src={api.img(`/api/images/${i.id}/thumb?v=${i.edit_v ?? 0}${i.rendered ? "r" : ""}`)} />
+      {i.hand_edited && <span className="thumb-badge" title="Von Hand bearbeitet">✎</span>}
+      <div className="thumb-foot">
+        {i.decision === "keep"
+          ? <span className="stars">{"★".repeat(i.rating ?? 0)}</span>
+          : <span className="why">{i.reasons[0] ?? "aussortiert"}</span>}
+        {i.best && i.decision === "keep" && <span className="tag">Top</span>}
+        {i.moment && i.decision === "keep" && <span className="tag moment">{i.moment}</span>}
+        {i.people.length > 0 ? <span className="who">{i.people.join(", ")}</span>
+          : (i.tags?.length ?? 0) > 0 && <span className="who muted">{i.tags!.join(", ")}</span>}
+      </div>
+    </div>
+  );
+});
+
 function StageImage({ src, placeholder }: { src: string; placeholder?: string }) {
   // Sofort die Kamera-Vorschau zeigen, die Bearbeitung blendet darüber, sobald sie fertig ist
   const [state, setState] = useState<"load" | "ok" | "err">("load");

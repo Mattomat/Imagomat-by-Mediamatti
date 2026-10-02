@@ -34,6 +34,8 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const { toasts, toast } = useToasts();
   const dropHandler = useRef<((paths: string[]) => void) | null>(null);
+  const pending = useRef(new Map<number, { job_id: number; progress: number; total: number; message?: string | null }>());
+  const flushT = useRef(0);
 
   const refreshJobs = useCallback(() => {
     api.get<JobInfo[]>("/api/jobs").then(setJobs).catch(() => undefined);
@@ -50,7 +52,14 @@ export default function App() {
         setTick((t) => t + 1);
         api.get<Shoot[]>("/api/shoots").then((s) => setRecent(s.slice(0, 6)));
       } else {
-        setJobs((js) => js.map((j) => (j.id === e.job_id ? { ...j, progress: e.progress, total: e.total, message: e.message ?? j.message } : j)));
+        // Fortschritt gebündelt (höchstens ~4x pro Sekunde neu zeichnen, sonst ruckelt die Oberfläche)
+        pending.current.set(e.job_id, e);
+        if (!flushT.current) flushT.current = window.setTimeout(() => {
+          const evs = new Map(pending.current);
+          pending.current.clear();
+          flushT.current = 0;
+          setJobs((js) => js.map((j) => { const x = evs.get(j.id); return x ? { ...j, progress: x.progress, total: x.total, message: x.message ?? j.message } : j; }));
+        }, 250);
       }
     });
   }, [ready, refreshJobs]);

@@ -248,13 +248,62 @@ def _hsl_and_color(disp: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
     return np.clip(out, 0, 1)
 
 
+def curve_lut(pts: list[tuple[float, float]], n: int = 256) -> np.ndarray:
+    """Gradationskurve (Punkte 0..255) -> Tabelle 0..1. Weich und monoton wie in Lightroom (Fritsch-Carlson);
+    dieselbe Rechnung macht der Editor in der Grafikkarte."""
+    xs_l, ys_l = [], []
+    for x, y in sorted(pts):
+        if xs_l and x - xs_l[-1] < 1e-6:
+            ys_l[-1] = y
+            continue
+        xs_l.append(float(x))
+        ys_l.append(float(y))
+    xs, ys = np.array(xs_l), np.array(ys_l)
+    t = np.linspace(0, 255, n)
+    if len(xs) < 2:
+        return t / 255.0
+    if len(xs) == 2:
+        return np.clip(np.interp(t, xs, ys), 0, 255) / 255.0
+    d = np.diff(ys) / np.diff(xs)
+    m = np.empty(len(xs))
+    m[0], m[-1] = d[0], d[-1]
+    m[1:-1] = np.where(d[:-1] * d[1:] > 0, (d[:-1] + d[1:]) / 2, 0.0)
+    for i in range(len(d)):
+        if abs(d[i]) < 1e-9:
+            m[i] = m[i + 1] = 0.0
+            continue
+        a, b = m[i] / d[i], m[i + 1] / d[i]
+        h = a * a + b * b
+        if h > 9:
+            k = 3 / np.sqrt(h)
+            m[i], m[i + 1] = k * a * d[i], k * b * d[i]
+    idx = np.clip(np.searchsorted(xs, t, side="right") - 1, 0, len(xs) - 2)
+    hseg = xs[idx + 1] - xs[idx]
+    u = np.clip((t - xs[idx]) / hseg, 0, 1)
+    h00, h10, h01, h11 = 2 * u**3 - 3 * u**2 + 1, u**3 - 2 * u**2 + u, -2 * u**3 + 3 * u**2, u**3 - u**2
+    y = h00 * ys[idx] + h10 * hseg * m[idx] + h01 * ys[idx + 1] + h11 * hseg * m[idx + 1]
+    y = np.where(t < xs[0], ys[0], np.where(t > xs[-1], ys[-1], y))
+    return np.clip(y, 0, 255) / 255.0
+
+
+def _lut_apply(x: np.ndarray, lut: np.ndarray) -> np.ndarray:
+    f = np.clip(x, 0, 1) * (len(lut) - 1)
+    i = np.minimum(f.astype(np.int32), len(lut) - 2)
+    w = f - i
+    return (lut[i] * (1 - w) + lut[i + 1] * w).astype(np.float32)
+
+
 def _apply_curve(disp: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
     out = disp
     pts = parse_curve(crs.get("ToneCurvePV2012"))
     if len(pts) >= 2:
-        xs, ys = zip(*sorted(pts))
-        lut = np.interp(np.arange(256), xs, ys) / 255.0
-        out = lut[np.clip(out * 255, 0, 255).astype(np.uint8)]
+        out = _lut_apply(out, curve_lut(pts))
+    # Kanal-Kurven (Rot, Grün, Blau)
+    for c, key in enumerate(("ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue")):
+        cp = parse_curve(crs.get(key))
+        if len(cp) >= 2 and any(abs(x - y) > 0.5 for x, y in cp):
+            out = out.copy() if out is disp else out
+            out[..., c] = _lut_apply(out[..., c], curve_lut(cp))
     # parametrische Kurve
     p = [_n(crs, k) / 100 for k in ("ParametricShadows", "ParametricDarks", "ParametricLights",
                                    "ParametricHighlights")]
@@ -469,7 +518,7 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
 # Saubere Vorschau: Details aus dem Kamera-JPEG, Licht und Farbe aus der RAW-Entwicklung
 # ---------------------------------------------------------------------------
 
-RENDER_VERSION = "h3"          # ändern, wenn die Vorschau anders aussieht: alte Zwischenspeicher verfallen
+RENDER_VERSION = "h4"          # ändern, wenn die Vorschau anders aussieht: alte Zwischenspeicher verfallen
 HYBRID_LO_SIDE = 560          # Auflösung der RAW-Entwicklung für Licht/Farbe (rauscht dort kaum)
 
 

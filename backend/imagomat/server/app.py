@@ -18,7 +18,8 @@ from typing import Any
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -430,8 +431,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/shoots/{sid}/images")
     def shoot_images(sid: int) -> list[dict[str, Any]]:
         rows = db.query(
-            "SELECT i.id, i.filename, i.capture_time, i.iso, i.orientation, c.decision, c.rating, c.label, "
-            "c.reasons, c.series_id, c.is_series_best, c.score, c.manual, e.confidence, e.denoise, a.data "
+            "SELECT i.id, i.filename, i.path, i.capture_time, i.iso, i.orientation, c.decision, c.rating, c.label, "
+            "c.reasons, c.series_id, c.is_series_best, c.score, c.manual, e.confidence, e.denoise, e.updated_at, "
+            "e.profile AS edit_profile, a.data "
             "FROM images i LEFT JOIN culling c ON c.image_id=i.id LEFT JOIN edits e ON e.image_id=i.id "
             "LEFT JOIN analysis a ON a.image_id=i.id WHERE i.shoot_id=? ORDER BY i.capture_time, i.filename",
             (sid,))
@@ -456,7 +458,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "moment": MOMENTS_DE.get(a.get("moment") or ""), "action": a.get("action"),
                 "people_check": a.get("people_check", []),
                 "tags": tag_labels(a.get("tags")),
+                "edit_v": int((r["updated_at"] or 0) * 1000) % 10_000_000,
+                "rendered": _render_path(r["id"], r["path"], r["updated_at"], 2000).exists(),
+                "hand_edited": r["edit_profile"] == "manual",
             })
+        _prerender([o["id"] for o in out if o["decision"] == "keep"])
         return out
 
     @app.post("/api/shoots/{sid}/export")
@@ -617,16 +623,82 @@ def create_app(db_path: str | None = None) -> FastAPI:
         img = render_hybrid(lin, xyz, wb, _with_as_shot(iid, crs), detail, orient, seg, size)
         cache.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(cache), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
+        if "_cmp_" not in cache.name:
+            for old in cache.parent.glob(f"{image_key(iid, str(path))}_{size}_*.jpg"):
+                if old != cache:
+                    old.unlink(missing_ok=True)          # ältere Bearbeitungsstände dieses Bildes
         return FileResponse(cache, media_type="image/jpeg")
 
+    _render_gate = asyncio.Semaphore(2)
+    _busy = {"n": 0, "last": 0.0}
+    _pre: dict[str, Any] = {"queue": [], "thread": None}
+    _pre_lock = threading.Lock()
+
+    def _prerender(ids: list[int]) -> None:
+        """Bearbeitete Lupen-Vorschauen im Hintergrund vorbereiten (wie "Vorschauen erstellen" in Lightroom):
+        nur wenn gerade nichts anderes gerechnet wird, das aktuelle Blättern hat immer Vorrang."""
+        if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("IMAGOMAT_NO_PRERENDER"):
+            return
+        with _pre_lock:
+            _pre["queue"] = list(ids)
+            t = _pre["thread"]
+            if t is None or not t.is_alive():
+                t = threading.Thread(target=_prerender_loop, name="prerender", daemon=True)
+                _pre["thread"] = t
+                t.start()
+
+    def _prerender_loop() -> None:
+        while True:
+            with _pre_lock:
+                if not _pre["queue"]:
+                    _pre["thread"] = None
+                    return
+                iid = _pre["queue"].pop(0)
+            # warten, bis keine Vorschau angefragt wird und kein Auftrag (Analyse, Entwickeln) läuft
+            while _busy["n"] > 0 or time.time() - _busy["last"] < 1.5 or jobs.active():
+                time.sleep(0.3)
+            try:
+                hit = _render_cache(iid, 2000)
+                if hit and not hit[1].exists():
+                    render_after(iid, 2000)
+            except Exception:  # noqa: BLE001
+                log.debug("Vorberechnen %s fehlgeschlagen", iid, exc_info=True)
+
+    async def _gated(request: Request, fn: Any) -> Response:
+        """Höchstens zwei Vorschauen gleichzeitig rechnen; beim schnellen Blättern verworfene Anfragen (Browser hat
+        die Verbindung schon geschlossen) gar nicht erst rechnen: kein Rückstau, das aktuelle Bild kommt sofort."""
+        _busy["n"] += 1
+        try:
+            async with _render_gate:
+                if await request.is_disconnected():
+                    return Response(status_code=204)
+                return await run_in_threadpool(fn)
+        finally:
+            _busy["n"] -= 1
+            _busy["last"] = time.time()
+
     @app.get("/api/images/{iid}/render")
-    def render_after(iid: int, size: int = 1600) -> Response:
+    async def render_route(iid: int, request: Request, size: int = 1600) -> Response:
+        hit = _render_cache(iid, size)
+        if hit and hit[1].exists():                  # schon berechnet: sofort, ohne anzustehen
+            return FileResponse(hit[1], media_type="image/jpeg")
+        return await _gated(request, lambda: render_after(iid, size))
+
+    def _render_path(iid: int, path: str, updated_at: float | None, size: int) -> Path:
+        return cache_dir() / "renders" / f"{image_key(iid, path)}_{size}_{int((updated_at or 0) * 1000)}_{RENDER_VERSION}.jpg"
+
+    def _render_cache(iid: int, size: int) -> tuple[Any, Path] | None:
         r = db.one("SELECT i.path, e.params, e.masks, e.updated_at FROM images i LEFT JOIN edits e "
                    "ON e.image_id=i.id WHERE i.id=?", (iid,))
         if not r:
+            return None
+        return r, _render_path(iid, r["path"], r["updated_at"], size)
+
+    def render_after(iid: int, size: int = 1600) -> Response:
+        hit = _render_cache(iid, size)
+        if not hit:
             raise HTTPException(404)
-        cache = cache_dir() / "renders" / \
-            f"{image_key(iid, r['path'])}_{size}_{int((r['updated_at'] or 0) * 1000)}_{RENDER_VERSION}.jpg"
+        r, cache = hit
         if cache.exists():
             return FileResponse(cache, media_type="image/jpeg")
         crs = json.loads(r["params"]) if r["params"] else {}
@@ -653,7 +725,94 @@ def create_app(db_path: str | None = None) -> FastAPI:
         a = db.get_analysis(iid) or {}
         return {"model": crs_to_model(crs, orient), "manual": r["profile"] == "manual", "orientation": orient,
                 "has_subject": load_masks(iid) is not None, "local_keys": LOCAL_KEYS,
-                "as_shot": [a.get("as_shot_temp"), a.get("as_shot_tint")]}
+                "as_shot": [a.get("as_shot_temp"), a.get("as_shot_tint")], "profile": r["profile"],
+                "is_raw": raw_io.is_raw(Path(r["path"])),
+                "exif": {"iso": r["iso"], "exposure_time": r["exposure_time"], "aperture": r["aperture"],
+                         "focal_length": r["focal_length"], "camera": r["camera"], "lens": r["lens"]}}
+
+    def _wb_table(xyz: np.ndarray, wb: np.ndarray, iid: int) -> dict[str, Any]:
+        """Weissabgleich-Faktoren für ein Raster aus Temperatur (Mired) und Tönung: der Editor rechnet in der
+        Grafikkarte genau mit den Faktoren, die auch die Vorschau hier verwendet."""
+        from ..render.pipeline import _wb_mult
+
+        mireds = [float(m) for m in np.arange(20, 501, 5)]
+        tints = [float(t) for t in np.arange(-150, 151, 10)]
+        key = (xyz.tobytes(), np.asarray(wb, np.float32).tobytes(), _sources.get(iid))
+        hit = _wb_cache.get(key)
+        if hit is None:
+            mult = []
+            for m in mireds:
+                for t in tints:
+                    c = _with_as_shot(iid, {"WhiteBalance": "Custom", "Temperature": 1e6 / m, "Tint": t})
+                    mult.extend(float(v) for v in _wb_mult(xyz, wb, c))
+            base = _wb_mult(xyz, wb, {})
+            hit = {"mireds": mireds, "tints": tints, "mult": mult, "base": [float(v) for v in base]}
+            if len(_wb_cache) > 16:
+                _wb_cache.clear()
+            _wb_cache[key] = hit
+        return hit
+
+    _wb_cache: dict[Any, dict[str, Any]] = {}
+
+    @app.get("/api/images/{iid}/editor/source")
+    def editor_source(iid: int, size: int = 1600) -> Response:
+        """Lineare RAW-Daten für den Editor in der Grafikkarte: Kopf (JSON) + RGB als Halbfloat.
+        Format: 4 Byte Länge des Kopfes (little endian), Kopf, Daten (auf 4 Byte ausgerichtet)."""
+        import struct
+
+        from ..io.color import multipliers_to_temp_tint
+        from ..render.pipeline import BASE_GAIN, _black_floor, cam_to_srgb
+
+        r = db.one("SELECT path FROM images WHERE id=?", (iid,))
+        if not r:
+            raise HTTPException(404)
+        path = Path(r["path"])
+        if not raw_io.is_raw(path):
+            raise HTTPException(400, "Nur RAW-Dateien lassen sich bearbeiten")
+        lin, xyz, wb, orient = _linear(iid, path)
+        size = int(min(max(size, 400), 2048))
+        h, w = lin.shape[:2]
+        s = size / max(h, w)
+        if s < 1:
+            lin = cv2.resize(lin, (max(1, int(round(w * s))), max(1, int(round(h * s)))), interpolation=cv2.INTER_AREA)
+        lin = lin.astype(np.float32)
+        floored = _black_floor(lin)
+        floor = (lin - floored).reshape(-1, 3)[0]
+        src = _sources.get(iid) or ("libraw", 0.0, 0.0)
+        a = db.get_analysis(iid) or {}
+        as_temp, as_tint = a.get("as_shot_temp"), a.get("as_shot_tint")
+        if not as_temp:
+            as_temp, as_tint = (src[1], src[2]) if src[1] else multipliers_to_temp_tint(xyz, np.asarray(wb[:3]))
+        head = {"w": int(floored.shape[1]), "h": int(floored.shape[0]), "floor": [float(v) for v in floor],
+                "m": [float(v) for v in cam_to_srgb(xyz).astype(np.float32).ravel()], "gain": float(BASE_GAIN),
+                "wb": _wb_table(xyz, wb, iid), "as_shot": [float(as_temp or 5500), float(as_tint or 0)],
+                "source": src[0], "orientation": int(orient)}
+        hb = json.dumps(head).encode()
+        hb += b" " * ((-len(hb)) % 4)
+        data = np.ascontiguousarray(floored.astype("<f2")).tobytes()
+        return Response(struct.pack("<I", len(hb)) + hb + data, media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/images/{iid}/editor/mask")
+    def editor_mask(iid: int, body: dict[str, Any]) -> Response:
+        """Maske als Graustufenbild (KI-Masken, Masken aus Lightroom) für den Editor in der Grafikkarte."""
+        from ..render.pipeline import correction_mask
+        from ..style.editor import model_to_crs
+
+        r, base, orient = _edit_row(iid)
+        m = load_masks(iid)
+        seg = {"subject": m[0], "sky": m[1]} if m else {}
+        size = int(min(max(int(body.get("size") or 768), 64), 1600))
+        ref = seg.get("subject")
+        aspect = float(body.get("aspect") or ((ref.shape[1] / ref.shape[0]) if ref is not None else 1.5))
+        shape = (int(round(size / aspect)), size) if aspect >= 1 else (size, int(round(size * aspect)))
+        crs = model_to_crs({"global": {}, "wb_custom": True, "masks": [body.get("mask") or {}]}, {}, orient)
+        corrs = crs.get("MaskGroupBasedCorrections") or []
+        out = np.zeros(shape, np.float32)
+        if corrs:
+            out = correction_mask({**corrs[0], "CorrectionAmount": 1}, shape, orient, seg)
+        ok, png = cv2.imencode(".png", (np.clip(out, 0, 1) * 255 + 0.5).astype(np.uint8))
+        return Response(png.tobytes(), media_type="image/png", headers={"Cache-Control": "no-store"})
 
     @app.post("/api/images/{iid}/editor/preview")
     def editor_preview(iid: int, body: dict[str, Any]) -> Response:
@@ -742,19 +901,24 @@ def create_app(db_path: str | None = None) -> FastAPI:
         key = f"tpl:{name}"
         with db.tx() as c:
             c.execute("UPDATE shoots SET profile=? WHERE id=?", (key, r["shoot_id"]))
-        job_id = jobs.submit("develop", r["shoot_id"], profile=key, only_keep=False)
+        job_id = jobs.submit("develop", r["shoot_id"], profile=key, only_keep=False,
+                             overwrite_manual=bool(body.get("overwrite_manual")), keep=[iid])
         return {"job_id": job_id, "template": name}
 
     @app.get("/api/images/{iid}/thumb")
     def thumb(iid: int) -> Response:
-        """Kleine Kachel fürs Raster (statt der grossen Vorschau): lädt viel schneller."""
-        r = db.one("SELECT path, preview_path FROM images WHERE id=?", (iid,))
+        """Kleine Kachel fürs Raster: die Bearbeitung, sobald sie vorberechnet ist (wie in Lightroom), sonst die
+        Kamera-Vorschau. Lädt viel schneller als die grosse Vorschau."""
+        r = db.one("SELECT i.path, i.preview_path, e.updated_at, c.decision FROM images i LEFT JOIN edits e "
+                   "ON e.image_id=i.id LEFT JOIN culling c ON c.image_id=i.id WHERE i.id=?", (iid,))
         if not r:
             raise HTTPException(404)
-        src = Path(r["preview_path"]) if r["preview_path"] else None
+        edited = _render_path(iid, r["path"], r["updated_at"], 2000) if r["decision"] == "keep" else None
+        src = edited if edited is not None and edited.exists() else (Path(r["preview_path"]) if r["preview_path"] else None)
         if src is None or not src.exists():
             return preview(iid)
-        t = cache_dir() / "thumbs" / f"{image_key(iid, r['path'])}.jpg"
+        tag = "e" + str(int((r["updated_at"] or 0) * 1000)) if src == edited else "c"
+        t = cache_dir() / "thumbs" / f"{image_key(iid, r['path'])}_{tag}.jpg"
         if not t.exists() or t.stat().st_mtime < src.stat().st_mtime:
             img = cv2.imread(str(src), cv2.IMREAD_REDUCED_COLOR_2)
             if img is None:
@@ -765,6 +929,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 img = cv2.resize(img, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
             t.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(t), img, [cv2.IMWRITE_JPEG_QUALITY, 82])
+            for old in t.parent.glob(f"{image_key(iid, r['path'])}_e*.jpg"):
+                if old != t:
+                    old.unlink(missing_ok=True)          # alte Bearbeitungsstände
         return FileResponse(t, media_type="image/jpeg")
 
     # ------------------------------------------------------------------ Waveform (Lumetri) und Änderungen
@@ -827,6 +994,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return {"images": cmp.sample_images(db, sid, n), "styles": cmp.styles()}
 
     @app.get("/api/images/{iid}/styled")
+    async def styled_route(iid: int, style: str, request: Request, size: int = 900) -> Response:
+        return await _gated(request, lambda: styled(iid, style, size))
+
     def styled(iid: int, style: str, size: int = 900) -> Response:
         """Bild mit einem bestimmten Stil entwickelt (nur Vorschau, nichts wird gespeichert)."""
         import hashlib

@@ -329,29 +329,6 @@ table.list td { border-bottom: 1px solid var(--line); padding: 7px 4px; font-siz
 .scopes .hint { flex-basis: 100%; }
 
 /* Editor (eigener Edit mit Reglern und Masken) */
-.editor { flex: 1; display: flex; min-height: 0; }
-.ed-stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; background: #0a0a0c; min-width: 0; user-select: none; }
-.ed-imgwrap { position: relative; display: inline-block; line-height: 0; }
-.ed-imgwrap img { max-width: calc(100vw - 640px); max-height: calc(100vh - 140px); display: block; }
-.ed-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
-.ed-panel { width: 330px; flex: 0 0 330px; overflow-y: auto; border-left: 1px solid var(--line); padding: 12px 14px 20px; display: flex; flex-direction: column; gap: 6px; }
-.ed-title { font-weight: 600; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
-.ed-section { border-bottom: 1px solid var(--line); padding-bottom: 6px; }
-.ed-sec-head { background: none; border: none; color: var(--fg); font-weight: 600; padding: 6px 0; width: 100%; text-align: left; cursor: pointer; }
-.ed-sec-body { display: flex; flex-direction: column; gap: 4px; }
-.ed-slider { display: flex; flex-direction: column; gap: 1px; }
-.ed-sl-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); cursor: default; }
-.ed-sl-head b { color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
-.ed-slider input[type="range"] { width: 100%; accent-color: var(--accent); }
-.ed-addmask { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-.ed-addmask button { font-size: 12px; padding: 4px 8px; }
-.ed-masklist { display: flex; flex-direction: column; gap: 4px; }
-.ed-mask { display: flex; justify-content: space-between; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); text-align: left; }
-.ed-mask.on { border-color: var(--accent); }
-.ed-maskedit { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; padding: 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.03); }
-.ed-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-.ed-actions .row { display: flex; gap: 8px; justify-content: space-between; }
-.ed-sec-body .seg { display: flex; gap: 4px; margin-bottom: 4px; }
-.ed-sec-body .seg button { flex: 1; font-size: 12px; padding: 4px 6px; }
-.ed-sec-body .seg button.on { border-color: var(--accent); color: var(--accent); }
 .stage-ph { max-width: 100%; max-height: 100%; object-fit: contain; filter: saturate(0.9); }
+.thumb { position: relative; }
+.thumb-badge { position: absolute; top: 6px; right: 6px; background: rgba(0, 0, 0, 0.65); color: var(--accent); border-radius: 6px; padding: 0 6px; font-size: 12px; }

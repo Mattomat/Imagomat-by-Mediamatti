@@ -12,18 +12,28 @@ import copy
 from typing import Any
 
 from ..lightroom.dialect import Dialect
-from ..lightroom.params import LOCAL_PARAMS, to_number
-from ..vision.geometry import sensor_to_display
+from ..lightroom.params import LOCAL_PARAMS, format_curve, parse_curve, to_number
+from ..vision.geometry import display_to_sensor, sensor_to_display
 from . import masks as mk
 
 HSL_COLORS = ("Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta")
 GLOBAL_KEYS = ["Temperature", "Tint", "Exposure2012", "Contrast2012", "Highlights2012", "Shadows2012",
                "Whites2012", "Blacks2012", "Texture", "Clarity2012", "Dehaze", "Vibrance", "Saturation",
                "Sharpness", "LuminanceSmoothing", "ColorNoiseReduction", "PostCropVignetteAmount"] + \
-    [f"{p}{c}" for p in ("HueAdjustment", "SaturationAdjustment", "LuminanceAdjustment") for c in HSL_COLORS]
+    [f"{p}{c}" for p in ("HueAdjustment", "SaturationAdjustment", "LuminanceAdjustment") for c in HSL_COLORS] + \
+    ["SplitToningShadowHue", "SplitToningShadowSaturation", "ColorGradeShadowLum", "ColorGradeMidtoneHue",
+     "ColorGradeMidtoneSat", "ColorGradeMidtoneLum", "SplitToningHighlightHue", "SplitToningHighlightSaturation",
+     "ColorGradeHighlightLum", "ColorGradeGlobalHue", "ColorGradeGlobalSat", "ColorGradeGlobalLum",
+     "ColorGradeBlending", "SplitToningBalance", "ParametricShadows", "ParametricDarks", "ParametricLights",
+     "ParametricHighlights", "ParametricShadowSplit", "ParametricMidtoneSplit", "ParametricHighlightSplit",
+     "PostCropVignetteMidpoint", "PostCropVignetteFeather", "SharpenRadius", "SharpenDetail",
+     "LuminanceNoiseReductionDetail", "ColorNoiseReductionDetail"]
+CURVE_KEYS = {"main": "ToneCurvePV2012", "red": "ToneCurvePV2012Red", "green": "ToneCurvePV2012Green",
+              "blue": "ToneCurvePV2012Blue"}
+CROP_KEYS = ("HasCrop", "CropLeft", "CropTop", "CropRight", "CropBottom", "CropAngle")
 LOCAL_KEYS = ["Exposure2012", "Contrast2012", "Highlights2012", "Shadows2012", "Whites2012", "Blacks2012",
               "Texture", "Clarity2012", "Dehaze", "Saturation", "Temperature", "Tint", "Sharpness"]
-MASK_KINDS = ("subject", "background", "sky", "person", "gradient", "radial")
+MASK_KINDS = ("subject", "background", "sky", "person", "gradient", "radial", "brush")
 
 
 def _num(v: Any, default: float = 0.0) -> float:
@@ -61,7 +71,15 @@ def crs_to_model(crs: dict[str, Any], orientation: int) -> dict[str, Any]:
         if k in crs and to_number(crs.get(k)) is not None:
             g[k] = _num(crs[k])
     model: dict[str, Any] = {"global": g, "wb_custom": str(crs.get("WhiteBalance", "As Shot")) != "As Shot",
-                             "masks": []}
+                             "masks": [], "curves": {}, "crop": {}}
+    for name, key in CURVE_KEYS.items():
+        pts = parse_curve(crs.get(key))
+        if len(pts) >= 2:
+            model["curves"][name] = [[float(x), float(y)] for x, y in sorted(pts)]
+    has = str(crs.get("HasCrop", "False")).lower() == "true"
+    model["crop"] = {"HasCrop": has, "CropAngle": _num(crs.get("CropAngle")),
+                     **{k: _num(crs.get(k), 1.0 if k in ("CropRight", "CropBottom") else 0.0)
+                        for k in ("CropLeft", "CropTop", "CropRight", "CropBottom")}}
     for corr in crs.get("MaskGroupBasedCorrections") or []:
         if not isinstance(corr, dict):
             continue
@@ -69,7 +87,20 @@ def crs_to_model(crs: dict[str, Any], orientation: int) -> dict[str, Any]:
         kinds = [_kind(c) for c in comps]
         entry: dict[str, Any] = {"name": str(corr.get("CorrectionName") or "Maske"), "local": _local_ui(corr),
                                  "amount": _num(corr.get("CorrectionAmount"), 1.0)}
-        if len(comps) == 1 and kinds[0] is not None:
+        paint = [c for c in comps if c.get("What") == "Mask/Paint"]
+        if comps and len(paint) == len(comps) and all(to_number(c.get("MaskValue")) in (None, 1.0) for c in comps):
+            entry["kind"] = "brush"
+            dabs = []
+            for c in paint:
+                r = _num(c.get("Radius"), 0.02)
+                for d in c.get("Dabs") or []:
+                    parts = str(d).split()
+                    if len(parts) >= 3:
+                        x, y = sensor_to_display(float(parts[1]), float(parts[2]), orientation)
+                        dabs.append([round(x, 5), round(y, 5), round(r, 5)])
+            entry["dabs"] = dabs
+            entry["feather"] = round((1 - _num(paint[0].get("CenterWeight"), 0.0)) * 100)
+        elif len(comps) == 1 and kinds[0] is not None:
             c = comps[0]
             entry["kind"] = kinds[0]
             if kinds[0] == "gradient":
@@ -103,6 +134,27 @@ def model_to_crs(model: dict[str, Any], base: dict[str, Any], orientation: int,
         crs["WhiteBalance"] = "As Shot"
         crs.pop("Temperature", None)
         crs.pop("Tint", None)
+    curves = model.get("curves")
+    if isinstance(curves, dict):
+        for name, key in CURVE_KEYS.items():
+            pts = curves.get(name)
+            if pts and len(pts) >= 2 and any(abs(float(x) - float(y)) > 0.5 for x, y in pts):
+                crs[key] = format_curve(sorted((float(x), float(y)) for x, y in pts))
+            else:
+                crs[key] = format_curve([(0, 0), (255, 255)])
+        crs["ToneCurveName2012"] = "Custom"
+    crop = model.get("crop")
+    if isinstance(crop, dict) and "HasCrop" in crop:
+        if crop.get("HasCrop"):
+            crs["HasCrop"] = True
+            for k in ("CropLeft", "CropTop", "CropRight", "CropBottom"):
+                crs[k] = round(min(1.0, max(0.0, float(crop.get(k, 0.0)))), 6)
+            crs["CropAngle"] = round(float(crop.get("CropAngle") or 0.0), 4)
+        else:
+            crs["HasCrop"] = False
+            crs["CropAngle"] = round(float(crop.get("CropAngle") or 0.0), 4)
+            for k in ("CropLeft", "CropTop", "CropRight", "CropBottom"):
+                crs.pop(k, None)
     corrections = []
     for m in model.get("masks") or []:
         kind = m.get("kind")
@@ -125,6 +177,11 @@ def model_to_crs(model: dict[str, Any], base: dict[str, Any], orientation: int,
             zero, full = m.get("zero") or [0.5, 0.6], m.get("full") or [0.5, 1.0]
             comp = mk.gradient_component((float(zero[0]), float(zero[1])), (float(full[0]), float(full[1])),
                                          orientation, name)
+        elif kind == "brush":
+            comps = _brush_components(m.get("dabs") or [], orientation, float(m.get("feather", 50)), name)
+            if comps:
+                corrections.append(mk.correction(name, local, comps, float(m.get("amount", 1.0))))
+            continue
         elif kind == "radial":
             box = m.get("box") or [0.3, 0.2, 0.7, 0.9]
             comp = mk.radial_component(tuple(float(x) for x in box), orientation, float(m.get("feather", 60)),
@@ -135,6 +192,26 @@ def model_to_crs(model: dict[str, Any], base: dict[str, Any], orientation: int,
     if corrections:
         crs["MaskGroupBasedCorrections"] = corrections
     return crs
+
+
+def _brush_components(dabs: list[Any], orientation: int, feather: float, name: str) -> list[dict[str, Any]]:
+    """Pinsel-Tupfer (Anzeige x, y, Radius relativ zur langen Seite) -> Lightroom Mask/Paint (ein Radius pro
+    Komponente, wie Lightroom einen Strich speichert)."""
+    groups: dict[float, list[str]] = {}
+    for d in dabs:
+        try:
+            x, y, r = float(d[0]), float(d[1]), float(d[2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        sx, sy = display_to_sensor(min(1.0, max(0.0, x)), min(1.0, max(0.0, y)), orientation)
+        groups.setdefault(round(r, 4), []).append(f"d {sx:.6f} {sy:.6f}")
+    comps = []
+    for i, (r, pts) in enumerate(sorted(groups.items())):
+        comp = {"What": "Mask/Paint", "MaskValue": 1.0, "Radius": r, "Flow": 1.0,
+                "CenterWeight": round(max(0.0, min(1.0, 1 - feather / 100)), 3), "Dabs": pts}
+        comp.update(mk._component_base(f"{name} {i + 1}"))
+        comps.append(comp)
+    return comps
 
 
 def template_from_edit(name: str, crs: dict[str, Any], analysis: dict[str, Any], exif: dict[str, Any],

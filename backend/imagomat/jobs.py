@@ -129,6 +129,16 @@ class JobManager:
         for ctx in self._contexts.values():
             ctx._cancel.set()
 
+    def active(self) -> bool:
+        """Läuft gerade ein Shoot-Auftrag (Analyse, Entwickeln, Export) oder wartet einer?"""
+        if self._queues.get("shoot"):
+            return True
+        for jid in list(self._contexts):
+            j = self.db.job(jid)
+            if j and lane_of(j["kind"]) == "shoot":
+                return True
+        return False
+
     def submit(self, kind: str, shoot_id: int | None = None, **params: Any) -> int:
         if kind not in _REGISTRY:
             raise KeyError(f"unbekannter Job-Typ: {kind}")

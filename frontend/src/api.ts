@@ -77,6 +77,9 @@ export interface ImageItem {
   people: string[];
   tags?: string[];
   notes: string[];
+  edit_v?: number;
+  rendered?: boolean;
+  hand_edited?: boolean;
   preset: string | null;
   moment: string | null;
   action: number | null;
