@@ -11,7 +11,7 @@ import traceback
 
 import numpy as np
 
-from imagomat.vision.models import has_module, torch_device
+from tagmatti.vision.models import has_module, torch_device
 
 ok = True
 print("Python", sys.version.split()[0], "| Gerät:", torch_device())
@@ -22,8 +22,8 @@ for mod in ("torch", "torchvision", "open_clip", "transformers", "onnxruntime", 
 img = np.random.default_rng(0).integers(0, 255, (1365, 2048, 3), dtype=np.uint8)
 
 try:
-    from imagomat.vision import action
-    from imagomat.vision.embeddings import ClipEmbedder
+    from tagmatti.vision import action
+    from tagmatti.vision.embeddings import ClipEmbedder
 
     t = time.time()
     emb = ClipEmbedder()
@@ -38,7 +38,7 @@ except Exception:  # noqa: BLE001
     traceback.print_exc()
 
 try:
-    from imagomat.vision.action import PoseDetector
+    from tagmatti.vision.action import PoseDetector
 
     t = time.time()
     pose = PoseDetector()

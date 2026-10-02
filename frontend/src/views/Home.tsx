@@ -40,7 +40,7 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
   return (
     <div className="page home">
       <h1>Personen benennen</h1>
-      <p className="muted" style={{ marginTop: -8 }}>Ordner mit Fotos (RAW oder JPG) wählen – Imagomat erkennt die Gesichter, du benennst sie einmal, die Namen gehen nach Lightroom.</p>
+      <p className="muted" style={{ marginTop: -8 }}>Ordner mit Fotos (RAW oder JPG) wählen – Tagmatti erkennt die Gesichter, du benennst sie einmal, die Namen gehen nach Lightroom.</p>
       <div className={`dropzone ${folder ? "has" : ""}`}
         onClick={async () => { const f = await pickFolder("Ordner mit Fotos wählen"); if (f) setFolder(f); }}>
         {folder ? (
@@ -96,8 +96,8 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
       )}
       {deleting && (
         <Modal title={`„${deleting.name}“ entfernen?`} onClose={() => setDeleting(null)}>
-          <p>Der Shoot verschwindet aus Imagomat, samt Auswahl und Bearbeitung.</p>
-          <p className="hint">Deine Originalbilder bleiben unangetastet. Gesichter, die du benannt hast, behält Imagomat
+          <p>Der Shoot verschwindet aus Tagmatti, samt Auswahl und Bearbeitung.</p>
+          <p className="hint">Deine Originalbilder bleiben unangetastet. Gesichter, die du benannt hast, behält Tagmatti
             für die Personenerkennung.</p>
           <div className="modal-actions">
             <button className="ghost" onClick={() => setDeleting(null)}>Abbrechen</button>

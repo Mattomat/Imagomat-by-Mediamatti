@@ -45,17 +45,17 @@ export default function Splash({ onReady }: { onReady: () => void }) {
   return (
     <div className="splash">
       <div className="splash-box">
-        <div className="logo">Imagomat</div>
+        <div className="logo">Tagmatti</div>
         {evt.error ? (
           <>
             <h2>Einrichtung fehlgeschlagen</h2>
             <p className="error">{evt.message}</p>
-            <p className="hint">Details: ~/Library/Application Support/Imagomat/logs</p>
+            <p className="hint">Details: ~/Library/Application Support/Tagmatti/logs</p>
           </>
         ) : firstRun ? (
           <>
             <h2>Einmalige Einrichtung</h2>
-            <p>Imagomat lädt beim ersten Start seine KI-Bausteine (ca. 5–10 Minuten, braucht Internet). Danach startet die App in Sekunden.</p>
+            <p>Tagmatti lädt beim ersten Start seine KI-Bausteine (ca. 5–10 Minuten, braucht Internet). Danach startet die App in Sekunden.</p>
             <div className="bar big"><div style={{ width: `${Math.round(evt.progress * 100)}%` }} /></div>
             <p className="stage">{evt.stage}</p>
             <p className="hint mono">{evt.message}</p>
@@ -64,10 +64,10 @@ export default function Splash({ onReady }: { onReady: () => void }) {
           <>
             <p>Wird gestartet …</p>
             {waited > 20 && !window.__TAURI_INTERNALS__ && (
-              <p className="hint">Läuft der Server? Im Terminal: <code>imagomat serve</code></p>
+              <p className="hint">Läuft der Server? Im Terminal: <code>tagmatti serve</code></p>
             )}
             {waited > 60 && window.__TAURI_INTERNALS__ && (
-              <p className="hint">Dauert ungewöhnlich lange. Protokoll: ~/Library/Application Support/Imagomat/logs/backend.log</p>
+              <p className="hint">Dauert ungewöhnlich lange. Protokoll: ~/Library/Application Support/Tagmatti/logs/backend.log</p>
             )}
           </>
         )}

@@ -5,18 +5,18 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from imagomat.analysis import import_folder
-from imagomat.config import load_settings
-from imagomat.db import Database
-from imagomat.io.dng import mosaic_rggb, write_dng
-from imagomat.jobs import JobManager
-from imagomat.lightroom.dialect import Dialect
-from imagomat.lightroom.xmp import XmpDoc, write_sidecar
-from imagomat.style import jobs as style_jobs  # noqa: F401 (registriert Jobs)
-from imagomat.style.develop import ImageDevelop, build_settings
-from imagomat.style.model import Record, StyleModel
-from imagomat.style.presets import PRESETS, apply
-from imagomat.style.targets import decode, encode
+from tagmatti.analysis import import_folder
+from tagmatti.config import load_settings
+from tagmatti.db import Database
+from tagmatti.io.dng import mosaic_rggb, write_dng
+from tagmatti.jobs import JobManager
+from tagmatti.lightroom.dialect import Dialect
+from tagmatti.lightroom.xmp import XmpDoc, write_sidecar
+from tagmatti.style import jobs as style_jobs  # noqa: F401 (registriert Jobs)
+from tagmatti.style.develop import ImageDevelop, build_settings
+from tagmatti.style.model import Record, StyleModel
+from tagmatti.style.presets import PRESETS, apply
+from tagmatti.style.targets import decode, encode
 
 from .synth import scene
 
@@ -106,7 +106,7 @@ def test_train_from_xmp_folder_and_develop(tmp_path: Path):
     settings = load_settings()
     settings.develop.shoot_consistency = 0.0
     settings.develop.punch = 0.0              # hier nur prüfen, ob dein Stil exakt übernommen wird
-    from imagomat.config import save_settings
+    from tagmatti.config import save_settings
 
     save_settings(settings)
     j = jm.run_sync(db.create_job("develop", sid, {"only_keep": False}))
@@ -126,7 +126,7 @@ def test_train_from_xmp_folder_and_develop(tmp_path: Path):
         assert "MaskDigest" not in masks[0]["CorrectionMasks"][0]
     assert float(np.mean(errs)) < 0.35, errs
     # Stil-Vergleich: gleiche Bilder mit verschiedenen Stilen, ohne zu speichern
-    from imagomat.style import compare
+    from tagmatti.style import compare
 
     iid = db.images(sid)[0]["id"]
     before = db.one("SELECT params FROM edits WHERE image_id=?", (iid,))[0]
@@ -142,7 +142,7 @@ def test_build_settings_preset_only():
          "noise_sigma_mid": 0.008, "preview_w": 1200, "preview_h": 800, "tilt_angle": 2.0, "tilt_conf": 0.9,
          "scene": {"concert_stage": 0.9, "sport_day": 0.1}}
     it = ImageDevelop(1, Record(a, {"iso": 12800}, None), 1, 6000, 4000)
-    from imagomat.style.develop import predict_all
+    from tagmatti.style.develop import predict_all
 
     s = load_settings()
     predict_all([it], None, s)
@@ -155,7 +155,7 @@ def test_build_settings_preset_only():
 
 
 def test_paint_fallback_and_radial():
-    from imagomat.style.masks import mask_to_dabs, paint_components, radial_component
+    from tagmatti.style.masks import mask_to_dabs, paint_components, radial_component
 
     m = np.zeros((200, 300), np.float32)
     cv2.circle(m, (150, 100), 60, 1.0, -1)
@@ -173,8 +173,8 @@ def test_paint_fallback_and_radial():
 def test_feedback_uses_last_export(tmp_path: Path):
     import json
 
-    from imagomat.export import exporter  # noqa: F401
-    from imagomat.lightroom.xmp import read_xmp
+    from tagmatti.export import exporter  # noqa: F401
+    from tagmatti.lightroom.xmp import read_xmp
 
     train = tmp_path / "train"
     train.mkdir()
@@ -197,7 +197,7 @@ def test_feedback_uses_last_export(tmp_path: Path):
     x = tmp_path / "exp" / "IMG0050.xmp"
     doc = read_xmp(x)
     doc.crs["Exposure2012"] = "+1.50"
-    x.write_bytes(__import__("imagomat.lightroom.xmp", fromlist=["serialize"]).serialize(doc))
+    x.write_bytes(__import__("tagmatti.lightroom.xmp", fromlist=["serialize"]).serialize(doc))
     j = jm.run_sync(db.create_job("feedback", sid, {"profile": "FB"}))
     assert j["status"] == "done", j["error"]
     assert StyleModel.load("FB").n == 7   # nur das korrigierte Bild kommt dazu
@@ -212,7 +212,7 @@ def test_gbdt_with_torch_loaded():
     pytest.importorskip("torch")
     import torch  # noqa: F401
 
-    from imagomat.style.model import gbdt_factory
+    from tagmatti.style.model import gbdt_factory
 
     make = gbdt_factory()
     rng = np.random.default_rng(0)
@@ -223,7 +223,7 @@ def test_gbdt_with_torch_loaded():
 
 
 def test_bottom_fade_adapts_per_image():
-    from imagomat.style.develop import predict_all
+    from tagmatti.style.develop import predict_all
 
     s = load_settings()
 
@@ -243,7 +243,7 @@ def test_bottom_fade_adapts_per_image():
 
 
 def test_punch_sets_white_point_and_background_contrast():
-    from imagomat.style.develop import punch, punch_background
+    from tagmatti.style.develop import punch, punch_background
 
     flat = {"Exposure2012": 0.5, "Whites2012": 0, "Blacks2012": 0, "Highlights2012": -40, "Contrast2012": 10}
     a = {"lin_log_p99": -2.0, "lin_log_p01": -6.0}
@@ -263,9 +263,9 @@ def test_punch_sets_white_point_and_background_contrast():
 
 def test_scopes_touch_white_and_black(tmp_path: Path):
     """Wie am Lumetri-Waveform: oben und unten schlägt ein kleiner Teil leicht an."""
-    from imagomat.io.color import XYZ_TO_SRGB
-    from imagomat.render.pipeline import render
-    from imagomat.style.scopes import HI_TARGET, LO_TARGET, fit_scopes, preview_linear, scopes
+    from tagmatti.io.color import XYZ_TO_SRGB
+    from tagmatti.render.pipeline import render
+    from tagmatti.style.scopes import HI_TARGET, LO_TARGET, fit_scopes, preview_linear, scopes
 
     rng = np.random.default_rng(1)
     base = np.linspace(0, 1, 900)[None, :] * np.linspace(0.6, 1, 600)[:, None]
@@ -280,8 +280,8 @@ def test_scopes_touch_white_and_black(tmp_path: Path):
 
 
 def test_football_presets_build_with_masks():
-    from imagomat.style.develop import predict_all
-    from imagomat.style.presets import FOOTBALL
+    from tagmatti.style.develop import predict_all
+    from tagmatti.style.presets import FOOTBALL
 
     s = load_settings()
     a = {"lin_log_median": -4, "lin_log_p99": -1.5, "lin_log_p01": -9, "median": 0.3, "as_shot_temp": 4200,

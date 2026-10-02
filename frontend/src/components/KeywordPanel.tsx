@@ -70,7 +70,7 @@ export default function KeywordPanel({ ctx, shootId, items, onChanged }: {
         <div>
           <h2>Stichwörter</h2>
           <p className="hint">Eigene Stichwörter für Objekte, Szenen oder Gruppen (z. B. „Fankurve“, „Maskottchen“). Mit Beschreibung
-            schlägt Imagomat passende Bilder vor. Von Hand: im Raster Bilder mit ⌘/Ctrl- oder Shift-Klick wählen und das Stichwort tippen.</p>
+            schlägt Tagmatti passende Bilder vor. Von Hand: im Raster Bilder mit ⌘/Ctrl- oder Shift-Klick wählen und das Stichwort tippen.</p>
         </div>
       </div>
       <div className="kw-add">

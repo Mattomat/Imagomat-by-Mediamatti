@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from imagomat.lightroom.params import to_number
+from tagmatti.lightroom.params import to_number
 
 
 def _night(gain: float = 1.0, jersey: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
@@ -17,7 +17,7 @@ def _night(gain: float = 1.0, jersey: float = 0.5) -> tuple[np.ndarray, np.ndarr
 
 
 def test_darker_scene_gets_more_exposure():
-    from imagomat.style.judge import judge
+    from tagmatti.style.judge import judge
 
     a = {"lin_log_median": -6.5}                       # Nacht
     out = []
@@ -30,7 +30,7 @@ def test_darker_scene_gets_more_exposure():
 
 
 def test_white_jersey_not_blown():
-    from imagomat.style.judge import judge
+    from tagmatti.style.judge import judge
 
     lin, subj = _night(1.0, jersey=2.5)                 # Trikot ausgefressen
     crs = {"Exposure2012": 0.5, "Highlights2012": -20}

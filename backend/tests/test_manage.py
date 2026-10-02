@@ -6,9 +6,9 @@ from pathlib import Path
 import numpy as np
 from fastapi.testclient import TestClient
 
-from imagomat.db import Database, dumps, f32_to_blob
-from imagomat.manage import delete_profile, delete_shoot, rename_profile
-from imagomat.people.registry import upsert_person
+from tagmatti.db import Database, dumps, f32_to_blob
+from tagmatti.manage import delete_profile, delete_shoot, rename_profile
+from tagmatti.people.registry import upsert_person
 
 
 def test_delete_shoot_keeps_originals_and_named_faces(tmp_path: Path):
@@ -35,7 +35,7 @@ def test_delete_shoot_keeps_originals_and_named_faces(tmp_path: Path):
 
 
 def test_delete_and_rename_profile(tmp_path: Path):
-    from imagomat.config import load_settings, profiles_dir, save_settings
+    from tagmatti.config import load_settings, profiles_dir, save_settings
 
     d = profiles_dir() / "Alt"
     d.mkdir(parents=True, exist_ok=True)
@@ -52,7 +52,7 @@ def test_delete_and_rename_profile(tmp_path: Path):
 def test_api_delete_and_thumb(tmp_path: Path):
     import cv2
 
-    from imagomat.server.app import create_app
+    from tagmatti.server.app import create_app
 
     app = create_app(str(tmp_path / "a.db"))
     with TestClient(app) as client:
@@ -75,8 +75,8 @@ def test_api_delete_and_thumb(tmp_path: Path):
 def test_reset_keeps_only_people(tmp_path: Path):
     import json
 
-    from imagomat.config import load_settings, profiles_dir, save_settings
-    from imagomat.manage import reset_keep_people
+    from tagmatti.config import load_settings, profiles_dir, save_settings
+    from tagmatti.manage import reset_keep_people
 
     db = Database(tmp_path / "r.db")
     folder = tmp_path / "Match"
@@ -109,9 +109,9 @@ def test_reset_keeps_only_people(tmp_path: Path):
 
 def test_try_styles_on_one_image(tmp_path: Path):
     """Stil-Leiste: dasselbe Bild in mehreren Stilen (mit Masken/Entrauschen), dann nur für dieses Bild übernehmen."""
-    from imagomat.analysis import import_folder
-    from imagomat.jobs import JobManager
-    from imagomat.server.app import create_app
+    from tagmatti.analysis import import_folder
+    from tagmatti.jobs import JobManager
+    from tagmatti.server.app import create_app
 
     from .synth import write_shoot
 

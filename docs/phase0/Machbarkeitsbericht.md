@@ -1,4 +1,4 @@
-# Phase 0: Machbarkeitsbericht Imagomat
+# Phase 0: Machbarkeitsbericht Tagmatti
 
 Stand: 25.09.2026 (Referenz: Lightroom Classic 15.5, August 2026)
 Status: **umgesetzt.** Auf deinen Wunsch wurden alle Punkte gebaut, auch die riskanten
@@ -26,7 +26,7 @@ schreiben die *Einstellungen*, Lightroom rechnet die *Pixel*. Genau diese Annahm
 **Ehrlicher Hinweis zur Konkurrenz:** LrC 15.x hat inzwischen selbst *Assisted Culling*
 (Augen-Fokus, Augen offen, Motivschärfe), Auto-Stapeln und seit 15.4 eine
 Duplikaterkennung und ein Gesichter-Panel. Beim Culling konkurrieren wir also mit
-Adobe. Der Mehrwert von Imagomat liegt in der **Stil-Entwicklung pro Bild**, der
+Adobe. Der Mehrwert von Tagmatti liegt in der **Stil-Entwicklung pro Bild**, der
 **Personen-Zuordnung über Shoots hinweg** und darin, dass alles in **einem Durchlauf**
 passiert.
 
@@ -58,7 +58,7 @@ passiert.
 | Adobe Firefly Services / Lightroom API | Nur Cloud (verletzt „alles lokal“). Endpunkte: Auto Tone, Auto Straighten, Presets, XMP anwenden, Edit. **Kein Denoise.** Scheidet aus. |
 | ACR/Photoshop-Scripting | Ginge über Photoshop plus ACR, ist aber ein anderer Workflow, langsam und verlässt Lightroom. Nicht empfohlen. |
 | **XMP-Parameter + „KI-Einstellungen aktualisieren“** | **Bevorzugt.** Denoise ist eine normale Einstellung. Fehlt die `.acr`-Datei, markiert Lightroom das Bild mit „KI-Einstellungen müssen neu berechnet werden“, und *Foto > Entwicklungseinstellungen > KI-Einstellungen aktualisieren* arbeitet auf einer Mehrfachauswahl im Raster. Das ist in Foren für KI-Masken aus XMPs belegt. Für Denoise ist es plausibel, aber **noch nicht verifiziert**. |
-| Fallback: Markieren | Stichwort `Imagomat|Denoise` + Farblabel (konfigurierbar) + Smart-Sammlung. In Lightroom dann: Sammlung öffnen, alles auswählen, Denoise-Preset per Ad-hoc-Entwicklung anwenden. Ein Klickpfad, funktioniert sicher. |
+| Fallback: Markieren | Stichwort `Tagmatti|Denoise` + Farblabel (konfigurierbar) + Smart-Sammlung. In Lightroom dann: Sammlung öffnen, alles auswählen, Denoise-Preset per Ad-hoc-Entwicklung anwenden. Ein Klickpfad, funktioniert sicher. |
 
 ### Automatische Entscheidung, welche Bilder Denoise brauchen (M5)
 - Merkmale: ISO, Belichtungszeit, Kamera (Sensor-Rauschprofil), **gemessenes Rauschen**
@@ -177,7 +177,7 @@ XMP mit dem, was wir geschrieben haben.
 **Empfehlung:** Variante A (RAW + XMP) als Standard. Statt Variante B (fertiges
 `.lrcat`) bauen wir **B′: ein kleines Lightroom-Classic-Plugin**. Es importiert den
 Ordner in deinen aktuellen Katalog, setzt Picks und Ablehnungen anhand unserer
-Stichwörter, legt Sammlungen an („Imagomat / <Shoot> / Personen / …“, „… / Aussortiert
+Stichwörter, legt Sammlungen an („Tagmatti / <Shoot> / Personen / …“, „… / Aussortiert
 nach Grund“) und zeigt, welche Bilder noch „KI-Einstellungen aktualisieren“ brauchen.
 Das ist dieselbe Architektur, die kommerzielle Anbieter nutzen, und sie übersteht
 LrC-Updates. **Den Katalog lesen (Stil-Lernen) ist dagegen unkritisch**, weil wir nur

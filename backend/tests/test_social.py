@@ -5,11 +5,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from imagomat.analysis import import_folder
-from imagomat.db import Database
-from imagomat.export import social
-from imagomat.jobs import JobManager
-from imagomat.style import jobs  # noqa: F401
+from tagmatti.analysis import import_folder
+from tagmatti.db import Database
+from tagmatti.export import social
+from tagmatti.jobs import JobManager
+from tagmatti.style import jobs  # noqa: F401
 
 from .synth import write_shoot
 

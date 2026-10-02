@@ -37,9 +37,9 @@ def _write(folder: Path, name: str, temp: int = 3600, exp: str = "+1.03", lexp: 
 
 
 def test_template_keeps_edit_and_masks(tmp_path: Path):
-    from imagomat.lightroom.params import to_number
-    from imagomat.style.template import learn_template, list_templates, masks_for
-    from imagomat.vision.geometry import sensor_to_display
+    from tagmatti.lightroom.params import to_number
+    from tagmatti.style.template import learn_template, list_templates, masks_for
+    from tagmatti.vision.geometry import sensor_to_display
 
     _write(tmp_path / "x", "A", 3600, "+1.03", "-0.51")
     _write(tmp_path / "x", "B", 3550, "+0.98", "-0.34")
@@ -67,7 +67,7 @@ def test_template_keeps_edit_and_masks(tmp_path: Path):
 
 
 def test_template_adjusts_only_light_and_white_balance(tmp_path: Path):
-    from imagomat.style.template import adjust, learn_template
+    from tagmatti.style.template import adjust, learn_template
 
     _write(tmp_path / "x", "A")
     t = learn_template("T", [tmp_path / "x"])
@@ -88,12 +88,12 @@ def test_template_adjusts_only_light_and_white_balance(tmp_path: Path):
 def test_develop_shoot_with_template(tmp_path: Path):
     import json
 
-    from imagomat.analysis import import_folder
-    from imagomat.db import Database
-    from imagomat.jobs import JobManager
-    from imagomat.style import compare
-    import imagomat.pipeline  # noqa: F401 - registriert alle Aufträge
-    from imagomat.culling import engine as _cull  # noqa: F401
+    from tagmatti.analysis import import_folder
+    from tagmatti.db import Database
+    from tagmatti.jobs import JobManager
+    from tagmatti.style import compare
+    import tagmatti.pipeline  # noqa: F401 - registriert alle Aufträge
+    from tagmatti.culling import engine as _cull  # noqa: F401
 
     from .synth import write_shoot
 
@@ -122,7 +122,7 @@ def test_develop_shoot_with_template(tmp_path: Path):
 
 def test_template_brightens_dark_players(tmp_path: Path):
     """Interview im Dunkeln: Spieler deutlich dunkler als in der Vorlage -> kräftiger aufhellen (bis 1.5 EV)."""
-    from imagomat.style.template import adjust, learn_template
+    from tagmatti.style.template import adjust, learn_template
 
     _write(tmp_path / "x", "A")
     t = learn_template("T", [tmp_path / "x"])

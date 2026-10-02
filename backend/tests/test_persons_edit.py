@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from imagomat.db import Database
-from imagomat.people import roster
-from imagomat.people.registry import norm_name, update_person, upsert_person
+from tagmatti.db import Database
+from tagmatti.people import roster
+from tagmatti.people.registry import norm_name, update_person, upsert_person
 
 CSV = '''"Name";"Fotoanzahl";"Kaderzuordnung (Namensabgleich)";"Mögliche Namensvarianten (unbestätigt)"
 "Aldin Turkes";"14";"FCW Herren: Nr. 22";""

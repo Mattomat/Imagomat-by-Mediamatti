@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import rawpy
 
-from imagomat.io import raw as raw_io
+from tagmatti.io import raw as raw_io
 
 logging.basicConfig(level=logging.INFO, format="  %(levelname)s %(name)s: %(message)s")
 print("rawpy", rawpy.__version__, "LibRaw", rawpy.libraw_version)
@@ -48,7 +48,7 @@ for f in sys.argv[1:]:
     except Exception as e:  # noqa: BLE001
         print("  Linear (LibRaw): FEHLER", e)
     try:
-        from imagomat.io import decoders
+        from tagmatti.io import decoders
 
         prev, _ = raw_io.load_preview(p, 1024)
         res = decoders.coreimage_linear(p, 1024)

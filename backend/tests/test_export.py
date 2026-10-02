@@ -2,14 +2,14 @@ import csv
 import json
 from pathlib import Path
 
-from imagomat.analysis import import_folder
-from imagomat.db import Database
-from imagomat.export import exporter  # noqa: F401 (registriert Job)
-from imagomat.jobs import JobManager
-from imagomat.lightroom.catalog import CatalogReader
-from imagomat.lightroom.xmp import read_xmp
-from imagomat.people.registry import upsert_person
-from imagomat.style import jobs  # noqa: F401
+from tagmatti.analysis import import_folder
+from tagmatti.db import Database
+from tagmatti.export import exporter  # noqa: F401 (registriert Job)
+from tagmatti.jobs import JobManager
+from tagmatti.lightroom.catalog import CatalogReader
+from tagmatti.lightroom.xmp import read_xmp
+from tagmatti.people.registry import upsert_person
+from tagmatti.style import jobs  # noqa: F401
 
 from .lrcat_fixture import make_template
 from .synth import write_shoot
@@ -50,9 +50,9 @@ def test_full_pipeline_export(tmp_path: Path):
     assert all(read_xmp(x).rating == 1 and not read_xmp(x).crs for x in rejected)
     first = read_xmp(out / (src[0].stem + ".xmp"))
     assert first.keywords == ["Max Muster"]                 # nur der Name, keine Arbeits-Stichwörter
-    rows = list(csv.DictReader(open(out / "imagomat-log.csv", encoding="utf-8-sig"), delimiter=";"))
+    rows = list(csv.DictReader(open(out / "tagmatti-log.csv", encoding="utf-8-sig"), delimiter=";"))
     assert len(rows) == 8 and any(r["gruende"] for r in rows if r["entscheidung"] == "aussortiert")
-    manifest = json.loads((out / "imagomat.json").read_text())
+    manifest = json.loads((out / "tagmatti.json").read_text())
     assert {p["pick"] for p in manifest["photos"]} == {1, -1}
     jpgs = list((out / "JPEG (Vorschau, nicht Lightroom-Qualität)").glob("*.jpg"))
     assert len(jpgs) == n_keep

@@ -6,8 +6,8 @@ import numpy as np
 
 
 def test_exemplars_only_from_chosen_team(tmp_path: Path):
-    from imagomat.db import Database, f32_to_blob
-    from imagomat.people.registry import exemplars, match, upsert_person
+    from tagmatti.db import Database, f32_to_blob
+    from tagmatti.people.registry import exemplars, match, upsert_person
 
     db = Database(tmp_path / "a.db")
     sid = db.upsert_shoot("s", str(tmp_path), None)

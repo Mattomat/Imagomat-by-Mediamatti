@@ -3,11 +3,11 @@ from pathlib import Path
 
 import numpy as np
 
-from imagomat.db import Database, dumps, f32_to_blob
-from imagomat.jobs import JobManager
-from imagomat.people import clustering  # noqa: F401  (registriert den Job)
-from imagomat.people.registry import assign_face, image_people, upsert_person
-from imagomat.people.roster import parse_csv, parse_html
+from tagmatti.db import Database, dumps, f32_to_blob
+from tagmatti.jobs import JobManager
+from tagmatti.people import clustering  # noqa: F401  (registriert den Job)
+from tagmatti.people.registry import assign_face, image_people, upsert_person
+from tagmatti.people.roster import parse_csv, parse_html
 
 
 def _setup(tmp_path: Path):
@@ -57,7 +57,7 @@ def test_recognition_numbers_and_clusters(tmp_path: Path):
         cx.execute("UPDATE images SET preview_path=? WHERE id IN (?,?)", (str(tmp_path / "red.jpg"), ids[2], ids[3]))
     for i in range(4, 8):
         face(ids[i], c)                               # unbekannte Person -> Cluster
-    from imagomat.vision import faces as fmod
+    from tagmatti.vision import faces as fmod
 
     fmod.get_backend.cache_clear()
     j = JobManager(db).run_sync(db.create_job("people", sid, {"threshold": 0.75}))

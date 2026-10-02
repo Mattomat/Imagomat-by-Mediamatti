@@ -7,7 +7,7 @@
 │  Export · Einstellungen                             │
 └──────────────┬──────────────────────────────────────┘
                │ HTTP + WebSocket (nur 127.0.0.1:8765)
-┌──────────────▼──────────── Python-Backend (backend/imagomat) ─────────────────────────┐
+┌──────────────▼──────────── Python-Backend (backend/tagmatti) ─────────────────────────┐
 │ server/app.py  FastAPI            jobs.py  persistente, abbrechbare Job-Queue         │
 │ db.py          SQLite (Bilder, Analysen, Personen, Edits, Jobs)                       │
 │                                                                                       │
@@ -29,9 +29,9 @@
 │           params.py, develop.py, dialect.py (gelernte Lightroom-Details)              │
 │ export/   exporter.py (RAW+XMP, Katalog, JPEG, Log, Manifest)                         │
 └───────────────────────────────────────────────────────────────────────────────────────┘
-               │ imagomat.json + XMP
+               │ tagmatti.json + XMP
 ┌──────────────▼───────────── Lightroom Classic ──────────────┐
-│ Import (liest XMP) · Imagomat.lrplugin (Picks, Sammlungen,  │
+│ Import (liest XMP) · Tagmatti.lrplugin (Picks, Sammlungen,  │
 │ Auswahl für „KI-Einstellungen aktualisieren“)                │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -61,11 +61,11 @@
 - Prior: adaptives Preset, Gewicht 12/(n+12).
 - Masken: Vorlagen = häufige Maskenkombinationen aus deinen Daten; Nutzung per kNN +
   logistischer Regression, Werte per kNN, Geometrie relativ zum Motiv.
-- Unsicherheit → Stichwort `Imagomat|Prüfen` + gelbes Label.
+- Unsicherheit → Stichwort `Tagmatti|Prüfen` + gelbes Label.
 
 ## Tests
 
-`cd backend && IMAGOMAT_OFFLINE=1 python -m pytest` – läuft ohne KI-Modelle (klassische
+`cd backend && TAGMATTI_OFFLINE=1 python -m pytest` – läuft ohne KI-Modelle (klassische
 Fallbacks) auf synthetischen Bayer-DNGs, die LibRaw wie echte RAWs liest:
 XMP/Lua/Katalog-Roundtrip, Import→Analyse→Culling, Personen/Rückennummern, Stil-Training aus
 einem XMP-Ordner mit Vorhersage auf neuem Shoot, lokales Denoise, kompletter Export, API.

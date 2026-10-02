@@ -5,12 +5,12 @@ from pathlib import Path
 
 import numpy as np
 
-from imagomat.config import load_settings
-from imagomat.io.color import XYZ_TO_SRGB
-from imagomat.lightroom.dialect import Dialect
-from imagomat.render.pipeline import _srgb_encode, render
-from imagomat.style.develop import ImageDevelop, build_settings, predict_all
-from imagomat.style.model import Record
+from tagmatti.config import load_settings
+from tagmatti.io.color import XYZ_TO_SRGB
+from tagmatti.lightroom.dialect import Dialect
+from tagmatti.render.pipeline import _srgb_encode, render
+from tagmatti.style.develop import ImageDevelop, build_settings, predict_all
+from tagmatti.style.model import Record
 
 
 def _jersey_scene(cast=(1.0, 1.0, 1.0)) -> tuple[np.ndarray, np.ndarray]:
@@ -27,7 +27,7 @@ def _jersey_scene(cast=(1.0, 1.0, 1.0)) -> tuple[np.ndarray, np.ndarray]:
 
 
 def test_white_balance_on_player_white():
-    from imagomat.style.whitebalance import white_gains, white_patch_shift
+    from tagmatti.style.whitebalance import white_gains, white_patch_shift
 
     img, subj = _jersey_scene(cast=(0.85, 1.0, 0.8))    # Grünstich wie unter LED-Flutlicht
     g = white_gains(img, subj)
@@ -61,7 +61,7 @@ def test_mediamatti_preset_follows_your_lightroom_values():
 
 
 def test_night_target_keeps_floodlight_images_dark():
-    from imagomat.style.presets import PRESETS, apply
+    from tagmatti.style.presets import PRESETS, apply
 
     night = {"lin_log_median": -6.0, "lin_log_p99": -2.5, "lin_log_p05": -9, "median": 0.2}
     day = {"lin_log_median": -3.0, "lin_log_p99": -0.5, "lin_log_p05": -6, "median": 0.4}
@@ -74,8 +74,8 @@ def test_crop_angle_direction_matches_lightroom():
     """Werbebande intern um -2.5° gekippt -> Lightroom braucht CropAngle +2.5 (an echten XMPs bestätigt)."""
     import cv2
 
-    from imagomat.render.pipeline import _geometry
-    from imagomat.vision.geometry import estimate_tilt, plan_crop, to_lightroom_crop
+    from tagmatti.render.pipeline import _geometry
+    from tagmatti.vision.geometry import estimate_tilt, plan_crop, to_lightroom_crop
 
     img = np.full((683, 1024, 3), 40, np.uint8)
     cv2.rectangle(img, (-200, 420), (1224, 470), (230, 230, 230), -1)
@@ -103,11 +103,11 @@ def test_local_whites_brighten_players_in_preview():
 def test_waveform_and_changes_api(tmp_path: Path):
     from fastapi.testclient import TestClient
 
-    import imagomat.pipeline  # noqa: F401 - registriert alle Aufträge
-    from imagomat.analysis import import_folder
-    from imagomat.db import Database
-    from imagomat.jobs import JobManager
-    from imagomat.server.app import create_app
+    import tagmatti.pipeline  # noqa: F401 - registriert alle Aufträge
+    from tagmatti.analysis import import_folder
+    from tagmatti.db import Database
+    from tagmatti.jobs import JobManager
+    from tagmatti.server.app import create_app
 
     from .synth import write_shoot
 
@@ -132,7 +132,7 @@ def test_waveform_and_changes_api(tmp_path: Path):
 
 
 def test_waveform_marks_clipping():
-    from imagomat.style.scopes import waveform
+    from tagmatti.style.scopes import waveform
 
     img = np.zeros((100, 100, 3), np.uint8)
     img[:, 50:] = 255

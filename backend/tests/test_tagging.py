@@ -5,13 +5,13 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from imagomat.analysis import import_folder
-from imagomat.db import Database
-from imagomat.io import jpegxmp
-from imagomat.jobs import JobManager
-from imagomat.lightroom.xmp import XmpDoc, parse_xmp, serialize
-from imagomat.people.registry import upsert_person
-from imagomat import pipeline  # noqa: F401 (registriert Jobs)
+from tagmatti.analysis import import_folder
+from tagmatti.db import Database
+from tagmatti.io import jpegxmp
+from tagmatti.jobs import JobManager
+from tagmatti.lightroom.xmp import XmpDoc, parse_xmp, serialize
+from tagmatti.people.registry import upsert_person
+from tagmatti import pipeline  # noqa: F401 (registriert Jobs)
 
 
 def _jpgs(folder: Path, n: int = 3) -> list[Path]:

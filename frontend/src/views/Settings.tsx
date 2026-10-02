@@ -43,7 +43,7 @@ export default function SettingsView({ ctx }: { ctx: AppCtx }) {
             <div className="hint">Stärke wird pro Bild aus dem gemessenen Rauschen bestimmt.</div>
           </div>
           <Segmented value={s.denoise.mode} onChange={(v) => set("denoise", { mode: v })}
-            options={[["lightroom", "Lightroom rechnet"], ["local", "Imagomat"], ["mark", "Nur markieren"]]} />
+            options={[["lightroom", "Lightroom rechnet"], ["local", "Tagmatti"], ["mark", "Nur markieren"]]} />
         </div>
         <div className="setting">
           <div>
@@ -136,7 +136,7 @@ export default function SettingsView({ ctx }: { ctx: AppCtx }) {
               onBlur={() => save(s)} />
           </div>
           <div className="setting">
-            <div><b>Sponsoren auf Trikots ignorieren</b><div className="hint">diese Wörter sind nie ein Spielername (weitere erkennt Imagomat selbst)</div></div>
+            <div><b>Sponsoren auf Trikots ignorieren</b><div className="hint">diese Wörter sind nie ein Spielername (weitere erkennt Tagmatti selbst)</div></div>
             <input className="narrow" value={(s.ignored_shirt_words ?? []).join(", ")}
               onChange={(e) => setS({ ...s, ignored_shirt_words: e.target.value.split(",").map((w) => w.trim()).filter(Boolean) })}
               onBlur={() => save(s)} placeholder="z. B. KELLER, INIT" />

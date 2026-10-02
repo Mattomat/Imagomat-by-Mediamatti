@@ -5,8 +5,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from imagomat.io.color import XYZ_TO_SRGB
-from imagomat.render.pipeline import _srgb_encode, render, render_hybrid
+from tagmatti.io.color import XYZ_TO_SRGB
+from tagmatti.render.pipeline import _srgb_encode, render, render_hybrid
 
 
 def _scene(h: int, w: int, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
@@ -49,8 +49,8 @@ def test_hybrid_falls_back_without_matching_preview():
 
 
 def test_fit_look_matches_reference_statistics():
-    from imagomat.lightroom.dialect import Dialect
-    from imagomat.style.look import measure, fit_look
+    from tagmatti.lightroom.dialect import Dialect
+    from tagmatti.style.look import measure, fit_look
 
     lin, subj = _scene(160, 224)
     target = {"Exposure2012": 0.4, "Contrast2012": 30, "Whites2012": 20, "Blacks2012": -10,
@@ -65,7 +65,7 @@ def test_fit_look_matches_reference_statistics():
     assert crs["WhiteBalance"] == "Custom" and crs["Temperature"] < 5000      # Stich ausgeglichen (kühler)
     names = [c["CorrectionName"] for c in crs.get("MaskGroupBasedCorrections", [])]
     assert "Look: oben" in names
-    from imagomat.style.look import _WB
+    from tagmatti.style.look import _WB
 
     wb = _WB({}, 5000, 0)
     wb.dm = 1e6 / crs["Temperature"] - 200
@@ -77,13 +77,13 @@ def test_fit_look_matches_reference_statistics():
 
 
 def test_learn_look_and_develop_with_it(tmp_path: Path):
-    from imagomat.analysis import import_folder
-    from imagomat.db import Database
-    from imagomat.jobs import JobManager
-    from imagomat.style import compare
-    import imagomat.pipeline  # noqa: F401 - registriert alle Aufträge
-    from imagomat.culling import engine as _cull  # noqa: F401
-    from imagomat.style.look import list_looks
+    from tagmatti.analysis import import_folder
+    from tagmatti.db import Database
+    from tagmatti.jobs import JobManager
+    from tagmatti.style import compare
+    import tagmatti.pipeline  # noqa: F401 - registriert alle Aufträge
+    from tagmatti.culling import engine as _cull  # noqa: F401
+    from tagmatti.style.look import list_looks
 
     from .synth import write_shoot
 
@@ -111,7 +111,7 @@ def test_learn_look_and_develop_with_it(tmp_path: Path):
 
 
 def test_straighten_uses_ad_boards_not_legs():
-    from imagomat.vision.geometry import estimate_tilt
+    from tagmatti.vision.geometry import estimate_tilt
 
     rng = np.random.default_rng(3)
     img = np.full((683, 1024, 3), 40, np.uint8)
@@ -152,7 +152,7 @@ def test_hybrid_handles_camera_tone_curve():
 def test_white_balance_on_already_balanced_data():
     """Apple RAW-Engine / Vorschau liefern schon weissabgeglichene Daten: dein Weissabgleich (z. B. 3600 K, wie
     aufgenommen) darf das Bild nicht verfärben (früher wurde von D65 aus gerechnet: starker Blaustich)."""
-    from imagomat.render.pipeline import AS_SHOT_TEMP, AS_SHOT_TINT
+    from tagmatti.render.pipeline import AS_SHOT_TEMP, AS_SHOT_TINT
 
     lin, _ = _scene(200, 300)
     base = render(lin, XYZ_TO_SRGB, np.ones(3), {}, 1, {}, 300).astype(float)

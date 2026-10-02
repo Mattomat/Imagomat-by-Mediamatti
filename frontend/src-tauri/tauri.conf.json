@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Imagomat",
-  "version": "1.3.0",
-  "identifier": "ch.mediamatti.imagomat",
+  "productName": "Tagmatti",
+  "version": "1.4.0",
+  "identifier": "ch.mediamatti.tagmatti",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Imagomat",
+        "title": "Tagmatti",
         "width": 1480,
         "height": 940,
         "minWidth": 1100,
@@ -44,7 +44,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../backend/imagomat/": "backend/imagomat/",
+      "../../backend/tagmatti/": "backend/tagmatti/",
       "../../backend/pyproject.toml": "backend/pyproject.toml",
       "bin/uv": "bin/uv",
       "wheels/": "wheels/"

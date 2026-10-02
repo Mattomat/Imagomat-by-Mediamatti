@@ -1,12 +1,12 @@
-//! Tauri-Hülle für Imagomat.
+//! Tauri-Hülle für Tagmatti.
 //!
 //! Beim ersten Start (bzw. nach einem App-Update) richtet die App ihre Python-Laufzeit ein:
 //! Der mitgelieferte Python-Code wird in den Datenordner kopiert (macOS: ~/Library/Application
-//! Support/Imagomat/runtime, Windows: %APPDATA%\\Imagomat\\runtime), `uv` (liegt im App-Bundle) erstellt dort eine Python-Umgebung und installiert
+//! Support/Tagmatti/runtime, Windows: %APPDATA%\\Tagmatti\\runtime), `uv` (liegt im App-Bundle) erstellt dort eine Python-Umgebung und installiert
 //! die Pakete. Danach startet das Backend auf 127.0.0.1:8765.
 //! Fortschritt geht als Event "setup" an die Oberfläche.
 //!
-//! Entwicklung: IMAGOMAT_DEV_BACKEND=1 -> Backend separat starten (`imagomat serve`).
+//! Entwicklung: TAGMATTI_DEV_BACKEND=1 -> Backend separat starten (`tagmatti serve`).
 
 use serde::Serialize;
 use std::fs;
@@ -91,14 +91,28 @@ fn setup_status(state: tauri::State<AppState>) -> SetupEvent {
     state.last.lock().unwrap().clone()
 }
 
-/// Gleicher Ordner wie im Backend (imagomat.config.data_dir).
+/// Gleicher Ordner wie im Backend (tagmatti.config.data_dir).
 fn data_root() -> PathBuf {
     if cfg!(windows) {
         let base = std::env::var("APPDATA").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".into());
-        return PathBuf::from(base).join("Imagomat");
+        return PathBuf::from(base).join("Tagmatti");
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Library/Application Support/Imagomat")
+    PathBuf::from(home).join("Library/Application Support/Tagmatti")
+}
+
+/// Die App hiess früher "Imagomat": vorhandene Daten (Personen, Shoots, Einstellungen) einmalig übernehmen.
+/// Die Python-Umgebung wird danach neu eingerichtet (sie kennt noch die alten Pfade).
+fn migrate_old_name() {
+    let new = data_root();
+    let old = new.with_file_name("Imagomat");
+    if new.exists() || !old.is_dir() {
+        return;
+    }
+    if fs::rename(&old, &new).is_ok() {
+        let _ = fs::remove_file(new.join("runtime").join("version.txt"));
+        log_setup("[Vorbereiten] Daten von Imagomat übernommen");
+    }
 }
 
 /// Python der App-Umgebung (Windows: Scripts\\python.exe).
@@ -231,6 +245,7 @@ fn install_bundled_wheels(app: &AppHandle, uv: &Path, python: &Path, dir: &Path)
 }
 
 fn bootstrap(app: &AppHandle) -> Result<PathBuf, String> {
+    migrate_old_name();
     let res = app.path().resource_dir().map_err(|e| e.to_string())?;
     let runtime = data_root().join("runtime");
     let venv = runtime.join("venv");
@@ -294,7 +309,7 @@ fn start_backend(python: &Path) -> Result<Child, String> {
     let log = fs::File::create(logs.join("backend.log")).map_err(|e| e.to_string())?;
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
     command(python)
-        .args(["-m", "imagomat.cli", "serve", "--port", "8765"])
+        .args(["-m", "tagmatti.cli", "serve", "--port", "8765"])
         .env("PATH", gui_path())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log2))
@@ -310,7 +325,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![setup_status])
         .setup(|app| {
             let handle = app.handle().clone();
-            if std::env::var("IMAGOMAT_DEV_BACKEND").is_ok() {
+            if std::env::var("TAGMATTI_DEV_BACKEND").is_ok() {
                 emit(&handle, "bereit", "Entwicklungsmodus", 1.0, true, false);
                 return Ok(());
             }
@@ -326,7 +341,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("Fehler beim Starten von Imagomat");
+        .expect("Fehler beim Starten von Tagmatti");
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {
             if let Some(mut child) = handle.state::<AppState>().backend.lock().unwrap().take() {

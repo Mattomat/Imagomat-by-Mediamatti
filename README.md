@@ -1,4 +1,4 @@
-# Imagomat by Mediamatti
+# Tagmatti by Mediamatti
 
 Lokale Desktop-App (macOS, Apple Silicon) für Sport- und Konzertfotografie:
 **Culling → Personen → individuelle Entwicklung im eigenen Stil → Lightroom Classic.**
@@ -20,16 +20,16 @@ Alles läuft lokal, RAW-Originale werden nie verändert, alle Bearbeitungen sind
 
 ## Installation (Mac-App)
 
-1. **Imagomat.dmg** herunterladen: [Releases](https://github.com/Mattomat/Imagomat-by-Mediamatti/releases)
+1. **Tagmatti.dmg** herunterladen: [Releases](https://github.com/Mattomat/Imagomat-by-Mediamatti/releases)
    (oder den neuesten Build unter *Actions › Mac-App › Artifacts*).
-2. DMG öffnen und **Imagomat** in den Ordner *Programme* ziehen.
+2. DMG öffnen und **Tagmatti** in den Ordner *Programme* ziehen.
 3. Die App ist nicht von Apple signiert. Beim ersten Öffnen deshalb:
    *Systemeinstellungen › Datenschutz & Sicherheit › „Dennoch öffnen“*
-   (oder im Terminal einmalig `xattr -dr com.apple.quarantine /Applications/Imagomat.app`).
-4. Beim ersten Start richtet Imagomat seine KI-Bausteine ein (einmalig 5–10 Minuten, Internet nötig).
+   (oder im Terminal einmalig `xattr -dr com.apple.quarantine /Applications/Tagmatti.app`).
+4. Beim ersten Start richtet Tagmatti seine KI-Bausteine ein (einmalig 5–10 Minuten, Internet nötig).
 
 Danach:
-- **Mein Stil › Stil lernen**: Imagomat findet deinen Lightroom-Katalog selbst. Ein Klick lernt deinen
+- **Mein Stil › Stil lernen**: Tagmatti findet deinen Lightroom-Katalog selbst. Ein Klick lernt deinen
   Bearbeitungsstil und übernimmt dabei alle in Lightroom benannten Personen.
 - **Personen**: Kader als CSV wählen (wird sofort gespeichert) oder einen Ordner mit fertigen JPGs,
   dann werden alle darin benannten Personen auf einmal gelernt.
@@ -38,9 +38,9 @@ Danach:
 ### Für Entwickler (ohne App)
 
 ```bash
-git clone https://github.com/Mattomat/Imagomat-by-Mediamatti.git ~/Imagomat
-cd ~/Imagomat && ./scripts/setup_mac.sh
-cd backend && source .venv/bin/activate && imagomat serve     # -> http://127.0.0.1:8765
+git clone https://github.com/Mattomat/Imagomat-by-Mediamatti.git ~/Tagmatti
+cd ~/Tagmatti && ./scripts/setup_mac.sh
+cd backend && source .venv/bin/activate && tagmatti serve     # -> http://127.0.0.1:8765
 ```
 
 ## Stand und ehrliche Einschränkungen
@@ -61,7 +61,7 @@ im Browser geprüft.
 
 **Lizenzen:** InsightFace-Modelle sind nur nicht-kommerziell nutzbar (Standard ist „auto“ = InsightFace
 für beste Qualität). Vor einem Verkauf in den Einstellungen auf YuNet/SFace umstellen.
-Übersicht: `imagomat licenses`.
+Übersicht: `tagmatti licenses`.
 
 ## Dokumentation
 

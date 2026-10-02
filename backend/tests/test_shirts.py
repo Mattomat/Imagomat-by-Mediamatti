@@ -6,11 +6,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from imagomat.db import Database, f32_to_blob
-from imagomat.jobs import JobManager
-from imagomat.people import clustering  # noqa: F401 (registriert Job)
-from imagomat.people.registry import upsert_person
-from imagomat.vision.ocr import parse_shirt_text
+from tagmatti.db import Database, f32_to_blob
+from tagmatti.jobs import JobManager
+from tagmatti.people import clustering  # noqa: F401 (registriert Job)
+from tagmatti.people.registry import upsert_person
+from tagmatti.vision.ocr import parse_shirt_text
 
 
 def test_parse_shirt_text():
@@ -79,7 +79,7 @@ def test_frontal_face_wins_over_number(tmp_path: Path):
 
 
 def test_sponsor_words_are_not_names(tmp_path: Path):
-    from imagomat.people.clustering import plausible_back_names
+    from tagmatti.people.clustering import plausible_back_names
 
     rows, rid = [], 0
 
@@ -124,7 +124,7 @@ def test_shirt_needs_team_and_team_colors(tmp_path: Path):
     assert jm.run_sync(db.create_job("people", sid, {}))["status"] == "done"
     assert db.one("SELECT person_id FROM numbers")[0] is None
     # Gegner in Blau: mit eingeschalteter Trikotfarben-Prüfung auch mit Team nichts
-    from imagomat.config import load_settings, save_settings
+    from tagmatti.config import load_settings, save_settings
 
     st = load_settings()
     st.shirt_color_check = True
@@ -157,7 +157,7 @@ def test_shirt_name_resolves(tmp_path: Path):
 
 def test_name_without_number_and_series_tracking(tmp_path: Path):
     """Name klar lesbar, Nummer nicht -> trotzdem benannt; in der Serie bleibt die Person beim Wegdrehen."""
-    from imagomat.people.clustering import track_series
+    from tagmatti.people.clustering import track_series
 
     db, sid, iid, maluvunu, kehrer = _setup(tmp_path)
     db.update_shoot_settings(sid, teams=["FCW Herren"])

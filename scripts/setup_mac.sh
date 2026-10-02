@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Imagomat – Einrichtung auf macOS (Apple Silicon)
+# Tagmatti – Einrichtung auf macOS (Apple Silicon)
 #
 # Installiert: Homebrew-Pakete (ExifTool, Node, uv), Python-Umgebung mit den KI-Paketen
 # (PyTorch mit Apple-MPS), Frontend. KI-Pakete, die sich nicht installieren lassen, werden
@@ -38,7 +38,7 @@ for pkg in "torch>=2.3" "torchvision>=0.18" "open_clip_torch>=2.24" "transformer
 done
 
 echo "==> Tests"
-IMAGOMAT_OFFLINE=1 python -m pytest -q
+TAGMATTI_OFFLINE=1 python -m pytest -q
 
 echo "==> Frontend"
 cd "$ROOT/frontend"
@@ -48,8 +48,8 @@ npm run build
 cat <<EOF
 
 Fertig. Starten:
-  cd "$ROOT/backend" && source .venv/bin/activate && imagomat serve
+  cd "$ROOT/backend" && source .venv/bin/activate && tagmatti serve
   dann im Browser öffnen:  http://127.0.0.1:8765
 
-Beim ersten Import lädt Imagomat die KI-Modelle (einmalig, einige hundert MB).
+Beim ersten Import lädt Tagmatti die KI-Modelle (einmalig, einige hundert MB).
 EOF

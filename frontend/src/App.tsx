@@ -79,7 +79,7 @@ export default function App() {
     <div className={`app ${IS_APP ? "native" : ""}`}>
       <aside className="sidebar">
         <div className="drag" data-tauri-drag-region />
-        <div className="brand"><img src="/mark.svg" alt="" />Imagomat</div>
+        <div className="brand"><img src="/mark.svg" alt="" />Tagmatti</div>
         <nav>
           {NAV.map(([key, label, icon]) => (
             <button key={key} className={page.name === key ? "active" : ""} onClick={() => setPage({ name: key } as Page)}>

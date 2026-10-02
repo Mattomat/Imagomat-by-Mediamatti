@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from imagomat.analysis import import_folder
-from imagomat.culling.engine import load_items
-from imagomat.db import Database
-from imagomat.jobs import JobManager
+from tagmatti.analysis import import_folder
+from tagmatti.culling.engine import load_items
+from tagmatti.db import Database
+from tagmatti.jobs import JobManager
 
 from .synth import write_shoot
 

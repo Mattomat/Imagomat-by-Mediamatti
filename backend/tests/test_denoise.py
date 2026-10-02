@@ -4,10 +4,10 @@ import cv2
 import numpy as np
 import rawpy
 
-from imagomat.denoise.local import denoise_to_dng
-from imagomat.io.dng import mosaic_rggb, write_dng
-from imagomat.lightroom.xmp import XmpDoc, serialize
-from imagomat.style.sources import embedded_xmp
+from tagmatti.denoise.local import denoise_to_dng
+from tagmatti.io.dng import mosaic_rggb, write_dng
+from tagmatti.lightroom.xmp import XmpDoc, serialize
+from tagmatti.style.sources import embedded_xmp
 
 
 def _hf(x):

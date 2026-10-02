@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
-from imagomat.io import raw as raw_io
+from tagmatti.io import raw as raw_io
 
 
 def _fake_raw(path: Path, jpeg: bytes, orientation: int = 1) -> None:
@@ -54,9 +54,9 @@ def test_unreadable_raises_clear_error(tmp_path: Path):
 
 def test_refresh_raw_metrics_after_reader_update(tmp_path):
     """Früher nur über die Vorschau gemessen (Kamera unbekannt) -> sobald lesbar, echte RAW-Daten."""
-    from imagomat.analysis import import_folder, refresh_raw_metrics
-    from imagomat.db import Database
-    from imagomat.jobs import JobContext, JobManager
+    from tagmatti.analysis import import_folder, refresh_raw_metrics
+    from tagmatti.db import Database
+    from tagmatti.jobs import JobContext, JobManager
 
     from .synth import write_shoot
 
@@ -75,8 +75,8 @@ def test_stale_training_features_are_recomputed(tmp_path):
     """Lern-Merkmale, die früher nur über die Vorschau entstanden, werden neu gemessen, sobald lesbar."""
     import json
 
-    from imagomat.io import raw as raw_io
-    from imagomat.style import features
+    from tagmatti.io import raw as raw_io
+    from tagmatti.style import features
 
     from .synth import write_shoot
 

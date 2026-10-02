@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from imagomat.server.app import create_app
+from tagmatti.server.app import create_app
 
 from .synth import write_shoot
 

@@ -1,7 +1,7 @@
 """rawpy so bauen, dass LibRaw keine Zusatzbibliotheken (Little CMS, libjpeg, Jasper) braucht.
 
 Sonst verlinkt der Build auf dem CI-Rechner vorhandene Homebrew-Bibliotheken, die auf den Macs der
-Nutzer fehlen ("Library not loaded: /opt/homebrew/opt/little-cms2/..."). Imagomat braucht diese Teile
+Nutzer fehlen ("Library not loaded: /opt/homebrew/opt/little-cms2/..."). Tagmatti braucht diese Teile
 nicht (keine ICC-Ausgabe, kein verlustbehaftetes DNG, kein JPEG 2000).
 
 Aufruf: python rawpy_no_external_deps.py <rawpy-Quellordner>/setup.py

@@ -27,7 +27,7 @@ export default function LogPanel({ toast }: { toast: (m: string, k?: "ok" | "err
       : `${r.camera}: RAW-Leser kann ${r.sample} NICHT lesen (${r.error ?? "?"})`)
     : "noch keine RAW-Datei zum Testen";
   const report = [
-    `Imagomat ${logs.version} (${logs.platform})`,
+    `Tagmatti ${logs.version} (${logs.platform})`,
     "",
     "== RAW-Leser ==",
     `rawpy ${r.rawpy ?? "?"}, LibRaw ${r.libraw ?? "?"}`,
@@ -51,7 +51,7 @@ export default function LogPanel({ toast }: { toast: (m: string, k?: "ok" | "err
       await navigator.clipboard.writeText(report);
       toast("Protokoll kopiert – einfach in den Chat einfügen");
     } catch {
-      toast("Kopieren nicht möglich – Ordner öffnen und Datei imagomat.log senden", "error");
+      toast("Kopieren nicht möglich – Ordner öffnen und Datei tagmatti.log senden", "error");
     }
   };
 

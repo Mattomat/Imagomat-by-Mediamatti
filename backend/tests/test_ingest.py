@@ -6,9 +6,9 @@ from pathlib import Path
 def test_import_copies_to_library(tmp_path: Path):
     from fastapi.testclient import TestClient
 
-    import imagomat.pipeline  # noqa: F401
-    from imagomat.db import Database
-    from imagomat.server.app import create_app
+    import tagmatti.pipeline  # noqa: F401
+    from tagmatti.db import Database
+    from tagmatti.server.app import create_app
 
     from .synth import write_shoot
 

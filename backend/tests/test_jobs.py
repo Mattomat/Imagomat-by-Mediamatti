@@ -4,8 +4,8 @@ import threading
 import time
 from pathlib import Path
 
-from imagomat.db import Database
-from imagomat.jobs import JobManager, job, lane_of
+from tagmatti.db import Database
+from tagmatti.jobs import JobManager, job, lane_of
 
 _release = threading.Event()
 
@@ -21,7 +21,7 @@ def _fast(ctx, **_):
 
 
 def test_lanes(tmp_path: Path, monkeypatch):
-    import imagomat.jobs as jobs_mod
+    import tagmatti.jobs as jobs_mod
 
     monkeypatch.setattr(jobs_mod, "LEARN_KINDS", jobs_mod.LEARN_KINDS | {"train_profile_dummy"})
     assert lane_of("train_profile") == "learn" and lane_of("pipeline") == "shoot"

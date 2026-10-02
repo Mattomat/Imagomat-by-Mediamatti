@@ -1,7 +1,7 @@
 """Minimaler Nachbau des Lightroom-Katalogschemas für Tests.
 
 Das ist KEIN echter Lightroom-Katalog, sondern bildet nur die Tabellen und Spalten nach,
-die Imagomat liest bzw. schreibt. Die Kompatibilität mit echten Katalogen muss mit einem
+die Tagmatti liest bzw. schreibt. Die Kompatibilität mit echten Katalogen muss mit einem
 leeren, von Lightroom erzeugten Katalog geprüft werden (siehe docs/lightroom-roundtrip.md).
 """
 

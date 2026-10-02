@@ -2,13 +2,13 @@ from pathlib import Path
 
 import numpy as np
 
-from imagomat.lightroom.xmp import FaceRegion, XmpDoc
-from imagomat.people.reference import assign, name_from_filename, names_from_doc
-from imagomat.vision.faces import Face
+from tagmatti.lightroom.xmp import FaceRegion, XmpDoc
+from tagmatti.people.reference import assign, name_from_filename, names_from_doc
+from tagmatti.vision.faces import Face
 
 
 def test_names_from_keywords_regions_and_filename():
-    doc = XmpDoc(keywords=["Personen|FC Winterthur|Max Muster", "Imagomat|Culling|Behalten", "Stadion"],
+    doc = XmpDoc(keywords=["Personen|FC Winterthur|Max Muster", "Tagmatti|Culling|Behalten", "Stadion"],
                  regions=[FaceRegion("Luca Beispiel", 0.5, 0.3, 0.1, 0.15)])
     pairs, regions = names_from_doc(doc, known=set())
     names = dict(pairs)
@@ -43,8 +43,8 @@ def test_assign_by_region_and_single_face():
 def test_named_faces_from_catalog(tmp_path: Path):
     import sqlite3
 
-    from imagomat.lightroom.catalog import CatalogReader
-    from imagomat.lightroom.catalog_writer import CatalogPhoto, write_catalog
+    from tagmatti.lightroom.catalog import CatalogReader
+    from tagmatti.lightroom.catalog_writer import CatalogPhoto, write_catalog
 
     from .lrcat_fixture import make_template
 

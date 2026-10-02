@@ -26,7 +26,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const anchor = useRef(0);
   const [saving, setSaving] = useState(false);
   const [lrSync, setLrSync] = useState(false);
-  const [cell, setCell] = useState(() => +stored("imagomat.cell", "210"));
+  const [cell, setCell] = useState(() => +stored("tagmatti.cell", "210"));
   const [teamsAll, setTeamsAll] = useState<string[]>([]);
   const gridRef = useRef<HTMLDivElement>(null);
   const openLoupe = useCallback((idx: number) => { setSel(idx); setLoupe(true); }, []);
@@ -237,7 +237,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         <span className="muted keyhint">Doppelklick: Bild öffnen · ⌘/Ctrl- oder Shift-Klick: mehrere Bilder für Stichwörter wählen · ← → blättern · G Raster</span>
         <span className="spacer" />
         {!loupe && !who && <label className="lib-size">Miniaturen <input type="range" min={130} max={420} value={cell}
-          onChange={(e) => { setCell(+e.target.value); store("imagomat.cell", e.target.value); }} /></label>}
+          onChange={(e) => { setCell(+e.target.value); store("tagmatti.cell", e.target.value); }} /></label>}
       </footer>
       {lrSync && <LightroomSyncDialog ctx={ctx} shoot={shoot} onClose={() => setLrSync(false)} onDone={load} />}
       {saving && <TagExportDialog ctx={ctx} shoot={shoot} total={items.length} named={counts.named} onClose={() => setSaving(false)} />}
@@ -248,9 +248,9 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
 /** Namen speichern: RAW-Dateien bekommen die Namen als XMP daneben (Original unverändert), JPGs als Kopie mit Namen. */
 function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; shoot: Shoot; total: number; named: number; onClose: () => void }) {
   const parent = shoot.folder.replace(/\/[^/]+\/?$/, "");
-  const [mode, setMode] = useState<"inplace" | "copy" | "catalog">(stored("imagomat.tagMode", "inplace") as "inplace" | "copy" | "catalog");
-  const [template, setTemplate] = useState(stored("imagomat.lrTemplate", ""));
-  const [root, setRoot] = useState(stored("imagomat.tagRoot", parent));
+  const [mode, setMode] = useState<"inplace" | "copy" | "catalog">(stored("tagmatti.tagMode", "inplace") as "inplace" | "copy" | "catalog");
+  const [template, setTemplate] = useState(stored("tagmatti.lrTemplate", ""));
+  const [root, setRoot] = useState(stored("tagmatti.tagRoot", parent));
   const [folderName, setFolderName] = useState(`${shoot.name} – mit Namen`);
   const [onlyPeople, setOnlyPeople] = useState(false);
   const [state, setState] = useState<"form" | "busy" | "done">("form");
@@ -260,7 +260,7 @@ function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; s
 
   const go = async () => {
     setState("busy");
-    store("imagomat.tagMode", mode);
+    store("tagmatti.tagMode", mode);
     try {
       const r = mode === "catalog"
         ? await api.post<{ job_id: number; target: string }>(`/api/shoots/${shoot.id}/export`, {
@@ -291,15 +291,15 @@ function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; s
           {mode === "catalog" && <>
             <label>Leerer Vorlagen-Katalog aus deiner Lightroom-Version (einmalig: Lightroom → Datei → Neuer Katalog, dann Lightroom schliessen)</label>
             <div className="row">
-              <input value={template} placeholder="…/Leer.lrcat" onChange={(e) => { setTemplate(e.target.value); store("imagomat.lrTemplate", e.target.value); }} />
-              <button onClick={async () => { const f = await pickFile(["lrcat"], "Leeren Lightroom-Katalog wählen"); if (f) { setTemplate(f); store("imagomat.lrTemplate", f); } }}>Wählen…</button>
+              <input value={template} placeholder="…/Leer.lrcat" onChange={(e) => { setTemplate(e.target.value); store("tagmatti.lrTemplate", e.target.value); }} />
+              <button onClick={async () => { const f = await pickFile(["lrcat"], "Leeren Lightroom-Katalog wählen"); if (f) { setTemplate(f); store("tagmatti.lrTemplate", f); } }}>Wählen…</button>
             </div>
           </>}
           {(mode === "copy" || mode === "catalog") && <>
             <label>Ordner (wird gemerkt)</label>
             <div className="row">
-              <input value={root} onChange={(e) => { setRoot(e.target.value); store("imagomat.tagRoot", e.target.value); }} />
-              <button onClick={async () => { const d = await pickFolder("Zielordner wählen"); if (d) { setRoot(d); store("imagomat.tagRoot", d); } }}>Wählen…</button>
+              <input value={root} onChange={(e) => { setRoot(e.target.value); store("tagmatti.tagRoot", e.target.value); }} />
+              <button onClick={async () => { const d = await pickFolder("Zielordner wählen"); if (d) { setRoot(d); store("tagmatti.tagRoot", d); } }}>Wählen…</button>
             </div>
             <label>Neuer Ordner</label>
             <input value={folderName} onChange={(e) => setFolderName(e.target.value)} />
@@ -337,7 +337,7 @@ function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; s
 /** Mit einem Lightroom-Katalog abgleichen: Namen übernehmen oder hineinschreiben. */
 function LightroomSyncDialog({ ctx, shoot, onClose, onDone }: { ctx: AppCtx; shoot: Shoot; onClose: () => void; onDone: () => void }) {
   const [catalogs, setCatalogs] = useState<string[]>([]);
-  const [cat, setCat] = useState(stored("imagomat.lrCatalog", ""));
+  const [cat, setCat] = useState(stored("tagmatti.lrCatalog", ""));
   const [busy, setBusy] = useState<"" | "pull" | "push">("");
   const [msg, setMsg] = useState("");
   useEffect(() => {
@@ -349,7 +349,7 @@ function LightroomSyncDialog({ ctx, shoot, onClose, onDone }: { ctx: AppCtx; sho
   }, []);
   const run = async (dir: "pull" | "push") => {
     setBusy(dir); setMsg("");
-    store("imagomat.lrCatalog", cat);
+    store("tagmatti.lrCatalog", cat);
     try {
       const r = await api.post<{ job_id: number }>(`/api/shoots/${shoot.id}/lightroom/${dir}`, { catalog: cat });
       ctx.refreshJobs();

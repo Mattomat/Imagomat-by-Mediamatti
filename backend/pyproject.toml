@@ -3,8 +3,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "imagomat"
-version = "1.3.0"
+name = "tagmatti"
+version = "1.4.0"
 description = "Lokale AI-Foto-Workflow-App: Culling, Personen, Stil-Entwicklung, Lightroom-Export"
 requires-python = ">=3.11"
 dependencies = [
@@ -43,10 +43,10 @@ scrape = ["requests>=2.31", "beautifulsoup4>=4.12"]
 dev = ["pytest>=8", "httpx>=0.27"]
 
 [project.scripts]
-imagomat = "imagomat.cli:main"
+tagmatti = "tagmatti.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["imagomat*"]
+include = ["tagmatti*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

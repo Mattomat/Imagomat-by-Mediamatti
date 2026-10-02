@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_model_roundtrip_keeps_masks_and_unknown_keys():
-    from imagomat.style.editor import crs_to_model, model_to_crs
+    from tagmatti.style.editor import crs_to_model, model_to_crs
 
     base = {"CameraProfile": "Adobe Standard", "Look": {"Name": "Adobe Color"}, "Exposure2012": 0.5,
             "HasCrop": "True", "CropAngle": 2.0}
@@ -36,12 +36,12 @@ def test_editor_endpoints_and_sync(tmp_path: Path):
 
     from fastapi.testclient import TestClient
 
-    from imagomat.analysis import import_folder
-    from imagomat.db import Database
-    from imagomat.jobs import JobManager
-    import imagomat.pipeline  # noqa: F401
-    from imagomat.culling import engine as _cull  # noqa: F401
-    from imagomat.server.app import create_app
+    from tagmatti.analysis import import_folder
+    from tagmatti.db import Database
+    from tagmatti.jobs import JobManager
+    import tagmatti.pipeline  # noqa: F401
+    from tagmatti.culling import engine as _cull  # noqa: F401
+    from tagmatti.server.app import create_app
 
     from .synth import write_shoot
 
@@ -80,8 +80,8 @@ def test_editor_endpoints_and_sync(tmp_path: Path):
 
 
 def test_model_curves_crop_brush_roundtrip():
-    from imagomat.render.pipeline import crop_rect, curve_lut
-    from imagomat.style.editor import crs_to_model, model_to_crs
+    from tagmatti.render.pipeline import crop_rect, curve_lut
+    from tagmatti.style.editor import crs_to_model, model_to_crs
 
     model = {"global": {"Exposure2012": 0.3, "ColorGradeMidtoneHue": 200, "ColorGradeMidtoneSat": 20,
                         "ParametricShadows": 25},
@@ -121,12 +121,12 @@ def test_editor_gpu_source_mask_and_sync_keep(tmp_path: Path):
     import numpy as np
     from fastapi.testclient import TestClient
 
-    from imagomat.analysis import import_folder
-    from imagomat.db import Database
-    from imagomat.jobs import JobManager
-    import imagomat.pipeline  # noqa: F401
-    from imagomat.culling import engine as _cull  # noqa: F401
-    from imagomat.server.app import create_app
+    from tagmatti.analysis import import_folder
+    from tagmatti.db import Database
+    from tagmatti.jobs import JobManager
+    import tagmatti.pipeline  # noqa: F401
+    from tagmatti.culling import engine as _cull  # noqa: F401
+    from tagmatti.server.app import create_app
 
     from .synth import write_shoot
 

@@ -8,10 +8,10 @@ from pathlib import Path
 
 import numpy as np
 
-from imagomat import keywords as K
-from imagomat.analysis import import_folder
-from imagomat.db import Database
-from imagomat.jobs import JobContext
+from tagmatti import keywords as K
+from tagmatti.analysis import import_folder
+from tagmatti.db import Database
+from tagmatti.jobs import JobContext
 
 from .synth import write_shoot
 
@@ -58,7 +58,7 @@ def test_suggest_job_with_fake_clip(tmp_path: Path, monkeypatch):
     vecs = {i: np.eye(8, dtype=np.float32)[n % 8] for n, i in enumerate(ids)}
     vecs[ids[3]] = (np.eye(8)[0] * 0.95 + np.eye(8)[1] * 0.31).astype(np.float32)   # ähnlich wie Bild 0
     vecs[ids[3]] /= np.linalg.norm(vecs[ids[3]])
-    import imagomat.vision.tags as T
+    import tagmatti.vision.tags as T
 
     monkeypatch.setattr(T, "clip_embeddings", lambda db_, ids_, progress=None: (object(), vecs))
     kid = K.get_or_create(db, "Maskottchen")
@@ -72,8 +72,8 @@ def test_suggest_job_with_fake_clip(tmp_path: Path, monkeypatch):
 
 
 def test_keywords_in_xmp_export(tmp_path: Path):
-    from imagomat.export.tagging import tag_export
-    from imagomat.lightroom.xmp import read_xmp
+    from tagmatti.export.tagging import tag_export
+    from tagmatti.lightroom.xmp import read_xmp
 
     db, sid, ids = _shoot(tmp_path, 2)
     dng = Path(db.one("SELECT path FROM images WHERE id=?", (ids[0],))["path"])
@@ -88,8 +88,8 @@ def test_keywords_in_xmp_export(tmp_path: Path):
 
 
 def test_keywords_lightroom_pull_and_push(tmp_path: Path):
-    from imagomat.lightroom.catalog_writer import CatalogPhoto, write_catalog
-    from imagomat.lightroom.sync import pull, push
+    from tagmatti.lightroom.catalog_writer import CatalogPhoto, write_catalog
+    from tagmatti.lightroom.sync import pull, push
 
     from .lrcat_fixture import make_template
 
@@ -123,10 +123,10 @@ def test_keywords_lightroom_pull_and_push(tmp_path: Path):
 
 def test_person_in_image_metadata(tmp_path: Path):
     """Namen stehen auch im IPTC-Feld „Person im Bild“ (lesen Bilddatenbanken und Agenturen)."""
-    from imagomat.export.tagging import tag_export
-    from imagomat.io import jpegxmp
-    from imagomat.lightroom.xmp import parse_xmp
-    from imagomat.people.registry import upsert_person
+    from tagmatti.export.tagging import tag_export
+    from tagmatti.io import jpegxmp
+    from tagmatti.lightroom.xmp import parse_xmp
+    from tagmatti.people.registry import upsert_person
     from PIL import Image
 
     (tmp_path / "s").mkdir()

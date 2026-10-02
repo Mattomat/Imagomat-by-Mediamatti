@@ -12,11 +12,11 @@ PRESET_XMP = """<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://w
 
 
 def _shoot(tmp_path: Path):
-    from imagomat.analysis import import_folder
-    from imagomat.db import Database
-    from imagomat.jobs import JobManager
-    import imagomat.pipeline  # noqa: F401
-    from imagomat.culling import engine as _cull  # noqa: F401
+    from tagmatti.analysis import import_folder
+    from tagmatti.db import Database
+    from tagmatti.jobs import JobManager
+    import tagmatti.pipeline  # noqa: F401
+    from tagmatti.culling import engine as _cull  # noqa: F401
 
     from .synth import write_shoot
 
@@ -34,7 +34,7 @@ def test_neutral_presets_object_denoise_export(tmp_path: Path):
     from fastapi.testclient import TestClient
     from PIL import Image
 
-    from imagomat.server.app import create_app
+    from tagmatti.server.app import create_app
 
     db, dbp, sid, jm = _shoot(tmp_path)
     ids = [r["id"] for r in db.images(sid)]
@@ -71,7 +71,7 @@ def test_neutral_presets_object_denoise_export(tmp_path: Path):
         assert c.get(f"/api/images/{ids[0]}/editor").json()["model"]["denoise"] == 60
         # Vorgabe auf den ganzen Shoot (von Hand bearbeitetes Bild bleibt)
         j = c.post(f"/api/shoots/{sid}/run/develop", json={"profile": "up:Mein Flutlicht"}).json()
-        from imagomat.jobs import JobManager
+        from tagmatti.jobs import JobManager
 
         assert JobManager(db).run_sync(j["job_id"])["status"] == "done"
         assert db.one("SELECT profile FROM edits WHERE image_id=?", (ids[0],))["profile"] == "manual"
@@ -93,9 +93,9 @@ def test_retouch_heal_remove_render_export(tmp_path: Path):
     import numpy as np
     from fastapi.testclient import TestClient
 
-    from imagomat.jobs import JobManager
-    from imagomat.retouch import apply_patches, compute_patch
-    from imagomat.server.app import create_app
+    from tagmatti.jobs import JobManager
+    from tagmatti.retouch import apply_patches, compute_patch
+    from tagmatti.server.app import create_app
 
     # Fleck auf gleichmässiger Struktur: Reparieren holt die Umgebung, nicht den Fleck
     rng = np.random.default_rng(1)
@@ -137,7 +137,7 @@ def test_camera_profile_matches_original(tmp_path: Path):
     import numpy as np
     from fastapi.testclient import TestClient
 
-    from imagomat.server.app import create_app
+    from tagmatti.server.app import create_app
 
     db, dbp, sid, jm = _shoot(tmp_path)
     iid = db.images(sid)[0]["id"]
@@ -158,11 +158,11 @@ def test_camera_profile_matches_original(tmp_path: Path):
 def test_tag_export_inplace_raw_sidecar(tmp_path: Path):
     import shutil
 
-    from imagomat.db import Database
-    from imagomat.export.tagging import tag_export
-    from imagomat.jobs import JobContext
-    from imagomat.lightroom.xmp import read_xmp
-    from imagomat.people.registry import upsert_person
+    from tagmatti.db import Database
+    from tagmatti.export.tagging import tag_export
+    from tagmatti.jobs import JobContext
+    from tagmatti.lightroom.xmp import read_xmp
+    from tagmatti.people.registry import upsert_person
 
     from .synth import write_shoot
 
@@ -172,7 +172,7 @@ def test_tag_export_inplace_raw_sidecar(tmp_path: Path):
     shutil.move(dng, arw)
     original = arw.read_bytes()
     db = Database(tmp_path / "a.db")
-    from imagomat.analysis import import_folder
+    from tagmatti.analysis import import_folder
 
     sid = import_folder(db, tmp_path / "s")
     iid = db.one("SELECT id FROM images WHERE path=?", (str(arw),))["id"]
@@ -191,11 +191,11 @@ def test_tag_export_inplace_raw_sidecar(tmp_path: Path):
 def test_lightroom_sync_pull_and_push(tmp_path: Path):
     import sqlite3
 
-    from imagomat.analysis import import_folder
-    from imagomat.db import Database
-    from imagomat.lightroom.catalog_writer import CatalogPhoto, write_catalog
-    from imagomat.lightroom.sync import pull, push
-    from imagomat.people.registry import image_people
+    from tagmatti.analysis import import_folder
+    from tagmatti.db import Database
+    from tagmatti.lightroom.catalog_writer import CatalogPhoto, write_catalog
+    from tagmatti.lightroom.sync import pull, push
+    from tagmatti.people.registry import image_people
 
     from .lrcat_fixture import make_template
     from .synth import write_shoot
@@ -219,8 +219,8 @@ def test_lightroom_sync_pull_and_push(tmp_path: Path):
     assert r["images"] == 1 and r["faces"] + r["image_level"] == 1
     iid0 = db.one("SELECT id FROM images WHERE path=?", (str(files[0]),))["id"]
     assert [p.name for p in image_people(db, iid0)] == ["Lena Lightroom"]
-    # zweite Person in Imagomat benennen und in den Katalog schreiben
-    from imagomat.people.registry import upsert_person
+    # zweite Person in Tagmatti benennen und in den Katalog schreiben
+    from tagmatti.people.registry import upsert_person
 
     pid = upsert_person(db, "Max Muster", None, None)
     iid1 = db.one("SELECT id FROM images WHERE path=?", (str(files[1]),))["id"]

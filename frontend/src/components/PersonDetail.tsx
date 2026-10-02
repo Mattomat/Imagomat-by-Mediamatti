@@ -48,7 +48,7 @@ export default function PersonDetail({ person, teams, onClose, onChanged, toast 
   };
 
   const unassign = async (img: PImage) => {
-    // Person aus dem Bild entfernen; Imagomat merkt sich das und ordnet das Bild nicht wieder falsch zu
+    // Person aus dem Bild entfernen; Tagmatti merkt sich das und ordnet das Bild nicht wieder falsch zu
     await api.del(`/api/images/${img.image_id}/persons/${pid}`);
     setImages((xs) => xs?.filter((x) => x.image_id !== img.image_id) ?? null);
     setBig(null);
@@ -75,7 +75,7 @@ export default function PersonDetail({ person, teams, onClose, onChanged, toast 
             </div>
             <div className="hint">
               {images ? `${images.length} Bilder${shoots.length ? ` · ${shoots.length} Shoot${shoots.length > 1 ? "s" : ""}` : ""}` : "lädt …"}
-              {" · "}Falsches Bild? Mit ✕ entfernen, Imagomat lernt daraus.
+              {" · "}Falsches Bild? Mit ✕ entfernen, Tagmatti lernt daraus.
             </div>
           </div>
           <button className="ghost" onClick={onClose}>✕</button>

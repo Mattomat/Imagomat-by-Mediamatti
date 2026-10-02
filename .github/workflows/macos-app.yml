@@ -29,7 +29,7 @@ jobs:
       - name: Tests
         working-directory: backend
         env:
-          IMAGOMAT_OFFLINE: "1"
+          TAGMATTI_OFFLINE: "1"
         run: .venv/bin/python -X faulthandler -m pytest -q
       - name: Echte Kamera-RAWs (Sony A7 IV u. a.)
         working-directory: backend
@@ -111,54 +111,54 @@ jobs:
           npm run tauri build -- --bundles app,dmg
       - name: Signatur prüfen (sonst meldet macOS "beschädigt")
         run: |
-          APP=frontend/src-tauri/target/release/bundle/macos/Imagomat.app
+          APP=frontend/src-tauri/target/release/bundle/macos/Tagmatti.app
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv "$APP" 2>&1 | head -n 8
           DMG=$(ls frontend/src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)
           MNT=$(mktemp -d)
           hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
-          codesign --verify --deep --strict --verbose=2 "$MNT/Imagomat.app"
+          codesign --verify --deep --strict --verbose=2 "$MNT/Tagmatti.app"
           hdiutil detach "$MNT"
       - name: DMG hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: Imagomat-macOS
+          name: Tagmatti-macOS
           path: frontend/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
       - name: Smoke-Test (App starten, Einrichtung, Backend erreichbar)
         timeout-minutes: 25
         run: |
-          APP=frontend/src-tauri/target/release/bundle/macos/Imagomat.app
+          APP=frontend/src-tauri/target/release/bundle/macos/Tagmatti.app
           open "$APP"
           for i in $(seq 1 280); do
             if curl -sf http://127.0.0.1:8765/api/health; then
               echo; echo "Backend läuft nach $((i*5)) s"
               curl -sf http://127.0.0.1:8765/api/licenses | head -c 400; echo
-              osascript -e 'quit app "Imagomat"' || true
+              osascript -e 'quit app "Tagmatti"' || true
               echo "--- RAW-Leser ---"
-              PY="$HOME/Library/Application Support/Imagomat/runtime/venv/bin/python"
+              PY="$HOME/Library/Application Support/Tagmatti/runtime/venv/bin/python"
               "$PY" -c "import rawpy, os, glob; d=os.path.dirname(rawpy.__file__); print(rawpy.__version__, rawpy.libraw_version); print([os.path.basename(x) for x in glob.glob(d+'/libraw*')])"
-              LIB=$(ls "$HOME/Library/Application Support/Imagomat/runtime/venv/lib/python3.12/site-packages/rawpy/"libraw_r*.dylib | head -n 1)
+              LIB=$(ls "$HOME/Library/Application Support/Tagmatti/runtime/venv/lib/python3.12/site-packages/rawpy/"libraw_r*.dylib | head -n 1)
               for f in "$(dirname "$LIB")"/*.so "$(dirname "$LIB")"/*.dylib; do otool -L "$f"; done > /tmp/rawdeps.txt
               if grep -E "/opt/homebrew|/usr/local" /tmp/rawdeps.txt; then echo "::error::RAW-Leser braucht Homebrew-Bibliotheken"; exit 1; fi
               if strings "$LIB" | grep -q "ILCE-7M5"; then echo "Sony A7 V (ILCE-7M5) wird gelesen"; else echo "::error::RAW-Leser kennt die A7 V nicht"; exit 1; fi
               echo "--- Einrichtung (Auszug) ---"
-              grep -v "^\[KI-Pakete" ~/Library/Application\ Support/Imagomat/logs/setup.log | tail -n 40 || true
-              grep -i "übersprungen\|error" ~/Library/Application\ Support/Imagomat/logs/setup.log | tail -n 20 || true
+              grep -v "^\[KI-Pakete" ~/Library/Application\ Support/Tagmatti/logs/setup.log | tail -n 40 || true
+              grep -i "übersprungen\|error" ~/Library/Application\ Support/Tagmatti/logs/setup.log | tail -n 20 || true
               exit 0
             fi
             sleep 5
           done
-          echo "Backend nicht erreichbar"; ls -la ~/Library/Application\ Support/Imagomat/ || true
-          tail -n 80 ~/Library/Application\ Support/Imagomat/logs/backend.log || true
+          echo "Backend nicht erreichbar"; ls -la ~/Library/Application\ Support/Tagmatti/ || true
+          tail -n 80 ~/Library/Application\ Support/Tagmatti/logs/backend.log || true
           exit 1
       - name: KI-Modelle in der App-Umgebung prüfen (CLIP, Pose)
         timeout-minutes: 20
         continue-on-error: true
         run: |
-          PY="$HOME/Library/Application Support/Imagomat/runtime/venv/bin/python"
+          PY="$HOME/Library/Application Support/Tagmatti/runtime/venv/bin/python"
           "$PY" scripts/ci_model_check.py
-          tail -n 40 ~/Library/Application\ Support/Imagomat/logs/backend.log || true
+          tail -n 40 ~/Library/Application\ Support/Tagmatti/logs/backend.log || true
       - name: Release (bei Tag v*)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -207,21 +207,21 @@ jobs:
       - name: Installer hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: Imagomat-Windows
+          name: Tagmatti-Windows
           path: frontend/src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
       - name: Smoke-Test (App starten, Einrichtung, Backend erreichbar)
         timeout-minutes: 30
         shell: pwsh
         run: |
-          Start-Process frontend/src-tauri/target/release/imagomat.exe
-          $logs = Join-Path $env:APPDATA "Imagomat/logs"
+          Start-Process frontend/src-tauri/target/release/tagmatti.exe
+          $logs = Join-Path $env:APPDATA "Tagmatti/logs"
           for ($i = 1; $i -le 330; $i++) {
             try {
               Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8765/api/health | Out-Null
               Write-Host "Backend läuft nach $($i*5) s"
               Get-Content "$logs/setup.log" -Tail 30 -ErrorAction SilentlyContinue
-              Get-Process imagomat -ErrorAction SilentlyContinue | Stop-Process -Force
+              Get-Process tagmatti -ErrorAction SilentlyContinue | Stop-Process -Force
               exit 0
             } catch { Start-Sleep 5 }
           }
@@ -243,21 +243,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: Imagomat-macOS
+          name: Tagmatti-macOS
           path: dl/mac
       - uses: actions/download-artifact@v4
         with:
-          name: Imagomat-Windows
+          name: Tagmatti-Windows
           path: dl/win
       - name: Zusammenstellen (so in den Ordner der Subdomain laden)
         run: |
           mkdir -p out
           cp -r site/. out/
-          cp "$(ls dl/mac/*.dmg | head -n 1)" out/Imagomat-mac.dmg
-          cp "$(ls dl/win/*.exe | head -n 1)" out/Imagomat-windows-setup.exe
+          cp "$(ls dl/mac/*.dmg | head -n 1)" out/Tagmatti-mac.dmg
+          cp "$(ls dl/win/*.exe | head -n 1)" out/Tagmatti-windows-setup.exe
           ls -la out
       - uses: actions/upload-artifact@v4
         with:
-          name: Imagomat-Website
+          name: Tagmatti-Website
           path: out/
           if-no-files-found: error

@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from imagomat.io.dng import mosaic_rggb, write_dng
+from tagmatti.io.dng import mosaic_rggb, write_dng
 
 
 def scene(seed: int, w: int = 900, h: int = 600) -> np.ndarray:

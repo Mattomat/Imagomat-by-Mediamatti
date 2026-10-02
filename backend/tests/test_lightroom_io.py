@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from imagomat.lightroom.catalog import CatalogReader
-from imagomat.lightroom.catalog_writer import CatalogPhoto, write_catalog
-from imagomat.lightroom.dialect import learn_dialect
-from imagomat.lightroom.develop import crs_to_lua, lua_to_crs, strip_digests
-from imagomat.lightroom.lua import dump_lua, parse_lua
-from imagomat.lightroom.xmp import FaceRegion, XmpDoc, parse_xmp, serialize, write_sidecar
+from tagmatti.lightroom.catalog import CatalogReader
+from tagmatti.lightroom.catalog_writer import CatalogPhoto, write_catalog
+from tagmatti.lightroom.dialect import learn_dialect
+from tagmatti.lightroom.develop import crs_to_lua, lua_to_crs, strip_digests
+from tagmatti.lightroom.lua import dump_lua, parse_lua
+from tagmatti.lightroom.xmp import FaceRegion, XmpDoc, parse_xmp, serialize, write_sidecar
 
 from .lrcat_fixture import make_template
 
@@ -77,12 +77,12 @@ def test_catalog_write_and_read(tmp_path: Path):
         photos.append(CatalogPhoto(
             path=f, width=7008, height=4672, orientation=6 if i == 1 else 1, capture_time=1_700_000_000 + i,
             rating=4, pick=1 if i else -1, color_label="Grün",
-            keywords=["Personen|FC Winterthur|Max Muster", "Imagomat|Denoise"],
+            keywords=["Personen|FC Winterthur|Max Muster", "Tagmatti|Denoise"],
             develop={"ProcessVersion": "11.0", "Exposure2012": "+0.40", "WhiteBalance": "Custom",
                      "Temperature": "4300", "MaskGroupBasedCorrections": MASKS},
-            collections=["Imagomat|Testshoot|Behalten"], stack=7, stack_position=i, iso=6400,
+            collections=["Tagmatti|Testshoot|Behalten"], stack=7, stack_position=i, iso=6400,
             aperture=2.8, shutter=1 / 1000, focal_length=200))
-    out = tmp_path / "out" / "Imagomat.lrcat"
+    out = tmp_path / "out" / "Tagmatti.lrcat"
     res = write_catalog(template, out, shoot, photos)
     assert res["warnings"] == []
     with CatalogReader(out) as r:

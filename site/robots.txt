@@ -19,4 +19,4 @@ Allow: /
 User-agent: Applebot-Extended
 Allow: /
 
-Sitemap: https://imagomat.mediamatti.ch/sitemap.xml
+Sitemap: https://tagmatti.mediamatti.ch/sitemap.xml
