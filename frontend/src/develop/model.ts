@@ -47,7 +47,7 @@ export const NO_CROP: Crop = { HasCrop: false, CropLeft: 0, CropTop: 0, CropRigh
 
 export function normalize(m: EdModel): EdModel {
   return { global: m.global ?? {}, wb_custom: !!m.wb_custom, masks: m.masks ?? [], curves: m.curves ?? {},
-    crop: { ...NO_CROP, ...(m.crop ?? {}) }, denoise: m.denoise ?? null, retouch: m.retouch ?? [], profile: m.profile ?? "Adobe Color" };
+    crop: { ...NO_CROP, ...(m.crop ?? {}) }, denoise: m.denoise ?? null, retouch: m.retouch ?? [], profile: m.profile || "Camera Standard" };
 }
 
 // ------------------------------------------------------------------ Quelle (lineare RAW-Daten vom Server)

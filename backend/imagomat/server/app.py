@@ -157,6 +157,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         loop_holder["loop"] = asyncio.get_running_loop()
         jobs.start()
+        _fix_profiles()
         # Unterbrochenes Lernen (z. B. durch ein App-Update) automatisch fortsetzen; bereits
         # berechnete Merkmale liegen im Cache, es geht also schnell weiter.
         from ..jobs import LEARN_KINDS
@@ -661,6 +662,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
             lin, _xyz, wb, _o = _linear_hi(iid, path)
             return lin, np.asarray(wb, np.float32)
         return ensure_patches(image_key(iid, path), ops, full)
+
+    def _fix_profiles() -> None:
+        """Einmalig: Version 0.9.1 schrieb beim Speichern ungewollt "Adobe Color" (wirkt matt) -> Kamera-Profil."""
+        if db.one("SELECT value FROM meta WHERE key='cam_profile_fix_v1'"):
+            return
+        with db.tx() as c:
+            for r in db.query("SELECT image_id, params FROM edits WHERE profile IN ('manual','neutral')"):
+                d = json.loads(r["params"] or "{}")
+                if d.get("CameraProfile") == "Adobe Color":
+                    d["CameraProfile"] = "Camera Standard"
+                    c.execute("UPDATE edits SET params=?, updated_at=? WHERE image_id=?",
+                              (json.dumps(d), time.time(), r["image_id"]))
+            c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('cam_profile_fix_v1', '1')")
 
     def _cam_curve(iid: int) -> list[list[float]] | None:
         """Profil "Kamera": Kurven, mit denen die RAW-Entwicklung bei 0 genau wie das Kamera-Original aussieht."""

@@ -93,7 +93,8 @@ CAM_CURVE = "_CamCurve"      # Profil "Kamera": Kurven pro Kanal (Anzeige 0..1, 
 
 def uses_camera_profile(crs: dict[str, Any]) -> bool:
     """Profil wie die Kamera (Lightroom "Camera Standard" u. ä.) statt Adobe Color."""
-    return str(crs.get("CameraProfile") or "").lower().startswith("camera")
+    prof = str(crs.get("CameraProfile") or "").lower()
+    return not prof or prof.startswith("camera")          # ohne Angabe: wie das Kamera-Original
 
 
 def camera_curve(raw_disp: np.ndarray, cam: np.ndarray, n: int = 256) -> list[list[float]]:

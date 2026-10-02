@@ -98,6 +98,8 @@ def _items(db: Database, shoot_id: int, include_rejected: bool) -> list[ExportIt
             continue
         a = json.loads(r["data"]) if r["data"] else {}
         crs = json.loads(r["params"]) if r["params"] else {}
+        if crs and not crs.get("CameraProfile"):
+            crs["CameraProfile"] = "Camera Standard"        # wie in der App: bei 0 wie das Kamera-Original
         if r["masks"]:
             crs["MaskGroupBasedCorrections"] = json.loads(r["masks"])
         reasons = json.loads(r["reasons"]) if r["reasons"] else []

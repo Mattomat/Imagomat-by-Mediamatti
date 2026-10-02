@@ -31,7 +31,7 @@
 .dv-left-foot button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 6px; }
 
 /* Mitte */
-.dv-center { display: grid; grid-template-rows: 40px minmax(0, 1fr) 36px 92px; min-width: 0; min-height: 0; overflow: hidden; }
+.dv-center { display: grid; grid-template-rows: 44px minmax(0, 1fr) 92px; min-width: 0; min-height: 0; overflow: hidden; }
 .dv-top { display: flex; align-items: center; gap: 12px; padding: 0 10px; border-bottom: 1px solid var(--dv-line); background: var(--dv-panel); }
 .dv-title { display: flex; gap: 10px; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; }
 .dv-top-r { margin-left: auto; display: flex; align-items: center; gap: 4px; }
@@ -178,3 +178,10 @@
 .dv-heal-stroke { fill: rgba(255, 255, 255, 0.45); stroke: none; }
 .dv-heal-op { fill: rgba(255, 255, 255, 0.25); stroke: rgba(255, 255, 255, 0.7); stroke-width: 1; }
 .dv-heal-pin { fill: rgba(30, 30, 30, 0.7); stroke: #fff; stroke-width: 1.5; }
+
+.dv-modules { display: flex; gap: 2px; }
+.dv-modules button { background: none; border: none; color: var(--dv-muted); font-size: 14px; padding: 6px 10px; }
+.dv-modules button.on { color: var(--dv-text); font-weight: 650; }
+.dv-modules button:hover { color: var(--dv-text); }
+.dv-sep { width: 1px; height: 20px; background: var(--dv-line); margin: 0 6px; }
+.dv-exif { font-size: 11px; color: var(--dv-muted); text-align: center; padding: 4px 0; border-bottom: 1px solid var(--dv-line); background: #141415; }

@@ -1049,12 +1049,20 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
       {/* ---------------------------------------------------------------- Mitte */}
       <main className="dv-center">
         <div className="dv-top">
-          <button className="dv-iconbtn" onClick={onClose} title="Zurück zur Bibliothek (G)"><Ic.IcGrid /> Bibliothek</button>
+          <div className="dv-modules">
+            <button onClick={onClose} title="Bibliothek (G)">Bibliothek</button>
+            <button className="on">Entwickeln</button>
+          </div>
           <div className="dv-title"><b>{cur.filename}</b><span className="dv-muted">{index + 1} / {items.length}</span></div>
           <div className="dv-top-r">
-            <span className={`dv-save ${save}`}>{save === "saved" ? <Ic.IcCheck size={14} /> : null}{saveLabel}</span>
+            <button className={`dv-iconbtn ${before === "on" ? "on" : ""}`} onClick={() => setBefore((b) => (b === "on" ? "off" : "on"))} title="Vorher/Nachher (Taste \)"><Ic.IcCompare /> Vorher</button>
+            <button className={`dv-iconbtn ${before === "split" ? "on" : ""}`} onClick={() => setBefore((b) => (b === "split" ? "off" : "split"))} title="Vorher und Nachher nebeneinander (Y)">Y|Y</button>
+            <button className={`dv-iconbtn ${zoom ? "on" : ""}`} onClick={() => setZoom((z) => !z)} title="Einpassen / 1:1 (Z)"><Ic.IcZoom /> {zoom ? "1:1" : "Einpassen"}</button>
+            <button className={`dv-iconbtn ${clip ? "on" : ""}`} onClick={() => setClip((c) => !c)} title="Beschnittene Lichter/Tiefen zeigen (J)"><Ic.IcClip /></button>
+            <span className="dv-sep" />
             <button className="dv-iconbtn" disabled={hIdx === 0} onClick={() => goHistory(hIdx - 1)} title="Rückgängig (⌘Z)"><Ic.IcUndo /></button>
             <button className="dv-iconbtn" disabled={hIdx >= hist.length - 1} onClick={() => goHistory(hIdx + 1)} title="Wiederholen (⇧⌘Z)"><Ic.IcRedo /></button>
+            <span className={`dv-save ${save}`}>{save === "saved" ? <Ic.IcCheck size={14} /> : null}{saveLabel}</span>
           </div>
         </div>
         <div className={`dv-stage ${zoom ? "zoomed" : ""} ${before === "split" ? "split" : ""}`} ref={stageRef}>
@@ -1078,14 +1086,6 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
           {dnPick && <div className="dv-badge">Auf die Stelle klicken, die du 1:1 sehen willst</div>}
           {noGpu && <div className="dv-badge warn">Grafikkarte nicht nutzbar – langsamere Vorschau</div>}
         </div>
-        <div className="dv-toolbar">
-          <button className={`dv-iconbtn ${before !== "off" ? "on" : ""}`} onClick={() => setBefore((b) => (b === "on" ? "off" : "on"))} title="Vorher/Nachher (\\)"><Ic.IcCompare /> Vorher/Nachher</button>
-          <button className={`dv-iconbtn ${before === "split" ? "on" : ""}`} onClick={() => setBefore((b) => (b === "split" ? "off" : "split"))} title="Nebeneinander (Y)">Y|Y</button>
-          <button className={`dv-iconbtn ${zoom ? "on" : ""}`} onClick={() => setZoom((z) => !z)} title="Einpassen / 1:1 (Z)"><Ic.IcZoom /> {zoom ? "1:1" : "Einpassen"}</button>
-          <button className={`dv-iconbtn ${clip ? "on" : ""}`} onClick={() => setClip((c) => !c)} title="Beschnittene Lichter/Tiefen zeigen (J)"><Ic.IcClip /> Beschneidung</button>
-          <span className="dv-spacer" />
-          <span className="dv-muted">{exifLine}</span>
-        </div>
         <div className="dv-strip">
           {items.map((it, i) => (
             <button key={it.id} id={`dvs-${it.id}`} className={`dv-thumb ${i === index ? "on" : ""} ${it.decision === "reject" ? "rej" : ""}`}
@@ -1100,6 +1100,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
       {/* ---------------------------------------------------------------- rechts */}
       <aside className="dv-right">
         <Histogram hist={histo} clip={clip} onClip={() => setClip((c) => !c)} />
+        <div className="dv-exif">{exifLine}</div>
         <div className="dv-tools">
           <button className={tool === "edit" ? "on" : ""} onClick={() => { if (tool === "crop") leaveCrop(); setTool("edit"); }} title="Bearbeiten"><Ic.IcSliders size={20} /><span>Bearbeiten</span></button>
           <button className={tool === "crop" ? "on" : ""} onClick={() => (tool === "crop" ? leaveCrop() : startCrop())} title="Zuschneiden und Begradigen (R)"><Ic.IcCrop size={20} /><span>Zuschneiden</span></button>
@@ -1111,7 +1112,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
             <Panel id="basic" title="Grundeinstellungen" right={<button className="dv-auto-btn" onClick={autoTone} title="Automatisch wie in Lightroom (⌘U)">Auto</button>}>
               <div className="dv-row">
                 <span className="dv-lbl">Profil</span>
-                <select value={String(model.profile ?? "Adobe Color").toLowerCase().startsWith("camera") ? "Camera Standard" : "Adobe Color"}
+                <select value={!model.profile || String(model.profile).toLowerCase().startsWith("camera") ? "Camera Standard" : "Adobe Color"}
                   onChange={(e) => { const v = e.target.value; update((m) => ({ ...m, profile: v })); commit(`Profil: ${v === "Camera Standard" ? "Kamera" : "Adobe Color"}`); }}>
                   <option value="Camera Standard">Kamera (wie Original)</option>
                   <option value="Adobe Color">Adobe Color</option>

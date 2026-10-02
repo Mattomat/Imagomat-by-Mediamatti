@@ -306,7 +306,8 @@ export class DevelopGL {
     gl.uniform1f(this.loc(pr, "uWH"), (g.Whites2012 ?? 0) / 100);
     gl.uniform1f(this.loc(pr, "uBL"), (g.Blacks2012 ?? 0) / 100);
     gl.uniform1f(this.loc(pr, "uScale"), scale);
-    const camOn = !!this.cam && String(model.profile ?? "").toLowerCase().startsWith("camera");
+    const prof = String(model.profile ?? "").toLowerCase();
+    const camOn = !!this.cam && (!prof || prof.startsWith("camera"));
     this.tex(pr, "uCam", 3, this.cam ?? this.lut);
     gl.uniform1i(this.loc(pr, "uCamOn"), camOn ? 1 : 0);
     this.draw(t.D);
