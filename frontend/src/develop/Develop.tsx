@@ -1,7 +1,7 @@
 // Entwickeln-Modul wie in Lightroom: links Vorgaben/Verlauf, Mitte das Bild (in der Grafikkarte entwickelt),
 // rechts Histogramm, Werkzeuge und Regler, unten der Filmstreifen. Änderungen werden automatisch gespeichert.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, BASE, ImageItem } from "../api";
+import { api, BASE, ImageItem, pickFiles } from "../api";
 import { Modal } from "../ui";
 import { DevelopGL, MASK_SIDE, MAX_MASKS, maskUniforms, OutOpts } from "./gl";
 import {
@@ -22,6 +22,7 @@ interface EdInfo {
   exif: { iso?: number; exposure_time?: number; aperture?: number; focal_length?: number; camera?: string; lens?: string };
 }
 type Tool = "edit" | "crop" | "mask";
+type StyleOpt = { key: string; label: string; group?: string; user?: boolean };
 type Hist = [Uint32Array, Uint32Array, Uint32Array];
 interface HEntry { label: string; model: EdModel }
 
@@ -33,7 +34,8 @@ function remember(iid: number, s: Source) {
   sources.delete(iid); sources.set(iid, s);
   while (sources.size > 4) sources.delete(sources.keys().next().value as number);
 }
-const srcSize = () => Math.min(2048, Math.max(1200, Math.round(Math.max(window.innerWidth - 560, 800) * Math.min(window.devicePixelRatio || 1, 2))));
+// Arbeitsauflösung = Bildschirmauflösung (Retina bis 3600 px), nicht nur 2000 px
+const srcSize = () => Math.min(3600, Math.max(1600, Math.round(Math.max(window.innerWidth - 560, 900) * Math.min(window.devicePixelRatio || 1, 2) * 1.15)));
 async function fetchSource(iid: number): Promise<Source> {
   const hit = sources.get(iid);
   if (hit) return hit;
@@ -89,7 +91,14 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("edit");
   const [sel, setSel] = useState<number | null>(null);
-  const [overlay, setOverlay] = useState(false);
+  const [overlay, setOverlay] = useState(true);
+  const [adjusting, setAdjusting] = useState(false);
+  const adjT = useRef(0);
+  const [drawing, setDrawing] = useState(false);
+  const [objBox, setObjBox] = useState<[Pt, Pt] | null>(null);
+  const [dnPreview, setDnPreview] = useState<{ url: string; method: string } | null>(null);
+  const [dnBusy, setDnBusy] = useState(false);
+  const [dnPick, setDnPick] = useState(false);
   const [hover, setHover] = useState<number | null>(null);
   const [pipette, setPipette] = useState(false);
   const [before, setBefore] = useState<"off" | "on" | "split">("off");
@@ -98,7 +107,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
   const [histo, setHisto] = useState<Hist | null>(null);
   const [save, setSave] = useState<"saved" | "dirty" | "saving" | "error">("saved");
   const [syncOpen, setSyncOpen] = useState(false);
-  const [styles, setStyles] = useState<{ key: string; label: string }[]>([]);
+  const [styles, setStyles] = useState<StyleOpt[]>([]);
   const [hoverStyle, setHoverStyle] = useState<string | null>(null);
   const [curveCh, setCurveCh] = useState<"param" | "main" | "red" | "green" | "blue">("main");
   const [hslTab, setHslTab] = useState<"Hue" | "Saturation" | "Luminance" | "all">("Hue");
@@ -218,7 +227,28 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [iid]);
 
-  useEffect(() => { api.get<{ key: string; label: string }[]>("/api/styles").then(setStyles).catch(() => undefined); }, []);
+  const loadStyles = useCallback(() => api.get<StyleOpt[]>("/api/styles").then(setStyles).catch(() => undefined), []);
+  useEffect(() => { loadStyles(); }, [loadStyles]);
+  const importPresets = async () => {
+    const files = await pickFiles(["xmp", "lrtemplate"], "Lightroom-Vorgaben wählen (.xmp oder .lrtemplate)");
+    if (!files.length) return;
+    try {
+      const r = await api.post<{ imported: string[]; errors: string[] }>("/api/presets/import", { paths: files });
+      toast(`${r.imported.length} Vorgabe(n) importiert${r.errors.length ? `, ${r.errors.length} übersprungen` : ""}`);
+      loadStyles();
+    } catch (e) { toast((e as Error).message, "error"); }
+  };
+  const runDnPreview = async (p: Pt) => {
+    if (!iid) return;
+    setDnBusy(true);
+    try {
+      const r = await fetch(`${BASE}/api/images/${iid}/denoise/preview`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x: p[0], y: p[1], amount: modelRef.current?.denoise || 50, size: 300 }) });
+      if (!r.ok) throw new Error(`Vorschau: Fehler ${r.status}`);
+      const url = URL.createObjectURL(await r.blob());
+      setDnPreview((o) => { if (o) URL.revokeObjectURL(o.url); return { url, method: r.headers.get("X-Denoise-Method") ?? "" }; });
+    } catch (e) { toast((e as Error).message, "error"); } finally { setDnBusy(false); }
+  };
 
   // Grafikkarte einrichten
   useEffect(() => {
@@ -326,7 +356,8 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
   }, [outW, outH, zoom, before]);
 
   // ---------------------------------------------------------------- Rendern
-  const overlayIdx = tool === "mask" ? (hover ?? (overlay ? sel : null)) : null;
+  // rote Maske wie in Lightroom: beim Malen/Ziehen immer, sonst wenn eingeschaltet (beim Regler-Ziehen kurz aus)
+  const overlayIdx = tool === "mask" ? (hover ?? (drawing || (overlay && !adjusting) ? sel : null)) : null;
   const outOpts = useCallback((): OutOpts => ({ rect: view.rect, ang: view.ang, width: outW, height: outH,
     overlay: overlayIdx ?? -1, clip }), [view, outW, outH, overlayIdx, clip]);
   useEffect(() => {
@@ -410,20 +441,32 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
       m = { ...m, global: { ...m.global, Exposure2012: Math.round(Math.max(-4, Math.min(4, (m.global.Exposure2012 ?? 0) + ev * 0.8)) * 100) / 100 } };
     }
     let s = stats(m);
-    if (s.hi >= 254) m.global.Highlights2012 = -40;
-    if (s.lo <= 4) m.global.Shadows2012 = 25;
+    // Lichter/Tiefen nach Bildinhalt (wie Lightroom: helle Bilder holen Lichter zurück, dunkle Ecken öffnen)
+    m.global.Highlights2012 = s.hi >= 254 ? -60 : s.hi >= 245 ? -35 : -15;
+    m.global.Shadows2012 = s.lo <= 4 ? 40 : s.lo <= 15 ? 25 : 10;
+    m.global.Contrast2012 = 8;
+    m.global.Vibrance = 12;
+    m.global.Saturation = 2;
     for (let it = 0; it < 6; it++) {
       s = stats(m);
       m.global.Whites2012 = Math.round(Math.max(-60, Math.min(60, (m.global.Whites2012 ?? 0) + (247 - s.hi) * 0.8)));
       m.global.Blacks2012 = Math.round(Math.max(-60, Math.min(40, (m.global.Blacks2012 ?? 0) + (6 - s.lo) * 1.2)));
     }
     setModel({ ...m, global: { ...m.global } });
-    commit("Automatisch (Tonwerte)");
+    commit("Auto");
   };
 
   // ---------------------------------------------------------------- Masken
   const setMask = useCallback((i: number, patch: Partial<EdMask>) => update((m) => ({ ...m, masks: m.masks.map((x, j) => (j === i ? { ...x, ...patch } : x)) })), [update]);
-  const addMask = (kind: MaskKind) => {
+  const addMask = (kind: MaskKind | "object") => {
+    if (kind === "object") {
+      const m0 = modelRef.current;
+      if (!m0) return;
+      setModel({ ...m0, masks: [...m0.masks, { name: "Objekt", kind: "brush", local: { Exposure2012: 0.3 }, dabs: [], feather: 30 }] });
+      setSel(m0.masks.length); setOverlay(true); setObjMode(true);
+      commit("Maske: Objekt");
+      return;
+    }
     const n: EdMask = { name: KIND_LABEL[kind], kind, local: {} };
     if (kind === "gradient") { n.zero = [0.5, 0.62]; n.full = [0.5, 0.98]; n.local = { Exposure2012: -0.5 }; }
     if (kind === "radial") { n.box = [0.3, 0.2, 0.7, 0.85]; n.feather = 60; n.invert = false; n.local = { Exposure2012: 0.3 }; }
@@ -436,6 +479,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     if (m.masks.length >= MAX_MASKS) { toast(`Höchstens ${MAX_MASKS} Masken`, "error"); return; }
     setModel({ ...m, masks: [...m.masks, n] });
     setSel(m.masks.length);
+    setOverlay(true); setObjMode(false);
     commit(`Maske: ${KIND_LABEL[kind]}`);
   };
   const delMask = (i: number) => {
@@ -447,11 +491,28 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
   const setLocal = useCallback((k: string, v: number) => {
     const i = selRef.current;
     if (i === null) return;
+    setAdjusting(true);
+    clearTimeout(adjT.current);
+    adjT.current = window.setTimeout(() => setAdjusting(false), 700);
     update((m) => ({ ...m, masks: m.masks.map((x, j) => (j === i ? { ...x, local: { ...x.local, [k]: v } } : x)) }));
   }, [update]);
   const commitLocal = useCallback((k: string, v: number) => commit(`Maske ${labelOf(k)} ${fmtValue(k, v)}`), [commit]);
   const selRef = useRef<number | null>(null);
   selRef.current = sel;
+  const [objMode, setObjMode] = useState(false);
+  const pickObject = async (a: Pt, b: Pt) => {
+    const i = selRef.current;
+    if (i === null || !iid) return;
+    const p1 = viewToImg(view, a), p2 = viewToImg(view, b);
+    try {
+      const r = await api.post<{ dabs: [number, number, number][] }>(`/api/images/${iid}/editor/object`,
+        { box: [Math.min(p1[0], p2[0]), Math.min(p1[1], p2[1]), Math.max(p1[0], p2[0]), Math.max(p1[1], p2[1])] });
+      if (!r.dabs.length) { toast("Kein Objekt gefunden – grösseren Rahmen ziehen", "error"); return; }
+      setMask(i, { dabs: [...(modelRef.current?.masks[i]?.dabs ?? []), ...r.dabs] });
+      commit("Objekt ausgewählt");
+      setObjMode(false);
+    } catch (e) { toast((e as Error).message, "error"); }
+  };
 
   // ---------------------------------------------------------------- Zuschneiden
   const startCrop = () => {
@@ -506,6 +567,17 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     if (!model || !src) return;
     const q = qOf(e);
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    if (dnPick) {
+      const p = viewToImg(view, q);
+      setDnPick(false);
+      runDnPreview(p);
+      return;
+    }
+    if (tool === "mask" && objMode && curMask && sel !== null) {
+      drag.current = { mode: "obj", start: q, q0: q };
+      setObjBox([q, q]); setDrawing(true);
+      return;
+    }
     if (pipette) {
       const p = viewToImg(view, q);
       if (p[0] < 0 || p[1] < 0 || p[0] > 1 || p[1] > 1) return;
@@ -525,11 +597,12 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     }
     if (tool === "mask" && curMask && sel !== null) {
       const k = curMask.kind;
-      if (k === "brush") { drag.current = { mode: "brush", start: q, q0: q }; brushDab(q, e.altKey || brush.erase); return; }
+      if (k === "brush") { drag.current = { mode: "brush", start: q, q0: q }; setDrawing(true); brushDab(q, e.altKey || brush.erase); return; }
       if (k === "gradient" && curMask.zero && curMask.full) {
         const z = imgToView(view, curMask.zero), f = imgToView(view, curMask.full), mid: Pt = [(z[0] + f[0]) / 2, (z[1] + f[1]) / 2];
         const mode = pxDist(z, q) < 14 ? "g-zero" : pxDist(f, q) < 14 ? "g-full" : pxDist(mid, q) < 16 ? "g-move" : "g-new";
         drag.current = { mode, start: q, q0: q, mask: { ...curMask } };
+        setDrawing(true);
         return;
       }
       if (k === "radial" && curMask.box) {
@@ -542,6 +615,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
         const mode = pxDist(ex, q) < 12 || pxDist(exl, q) < 12 ? "r-x" : pxDist(ey, q) < 12 || pxDist(eyb, q) < 12 ? "r-y"
           : pxDist(c, q) < 14 || inside ? "r-move" : "r-new";
         drag.current = { mode, start: q, q0: q, mask: { ...curMask } };
+        setDrawing(true);
         return;
       }
     }
@@ -564,6 +638,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
       return;
     }
     if (d.mode === "brush") { brushDab(q, e.altKey || brush.erase); return; }
+    if (d.mode === "obj") { setObjBox([d.start, q]); return; }
     if (d.mode.startsWith("crop") && d.rect) {
       let [x0, y0, x1, y1] = d.rect;
       const dx = q[0] - d.start[0], dy = q[1] - d.start[1];
@@ -625,7 +700,13 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
   const onUp = (e: React.PointerEvent) => {
     const d = drag.current;
     drag.current = null;
+    setDrawing(false);
     if (!d) return;
+    if (d.mode === "obj") {
+      setObjBox(null);
+      if (pxDist(d.start, qOf(e)) > 8) pickObject(d.start, qOf(e));
+      return;
+    }
     if (d.mode === "click" && Math.hypot(e.clientX - d.start[0], e.clientY - d.start[1]) < 4 && tool !== "crop") {
       // Klick: 1:1 an dieser Stelle
       const q = d.q0;
@@ -663,6 +744,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     if (mod && e.shiftKey && k === "c") { e.preventDefault(); copySettings(); return; }
     if (mod && e.shiftKey && k === "v") { e.preventDefault(); pasteSettings(); return; }
     if (mod && e.shiftKey && k === "s") { e.preventDefault(); setSyncOpen(true); return; }
+    if (mod && k === "u") { e.preventDefault(); autoTone(); return; }
     if (mod) return;
     if (t.tagName === "INPUT" && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
     if (e.key === "Escape") {
@@ -716,7 +798,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     const m = normalize(i.model);
     savedJson.current = JSON.stringify({ model: m });
     setModel(m, false); setSave("saved"); setSel(null);
-    commit("Zurückgesetzt (automatisch)");
+    commit("Zurückgesetzt");
   };
   const applyStyle = async (key: string, label: string) => {
     if (!iid) return;
@@ -785,14 +867,19 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
         return <g><polyline points={pts} fill="none" stroke="#fff" strokeWidth="1.3" />
           {hs.map((p, i) => { const v = imgToView(view, p); return <circle key={i} cx={v[0] * box.w} cy={v[1] * box.h} r={i ? 5 : 7} className={`dv-h ${i ? "" : "main"}`} />; })}</g>;
       })()}
-      {tool === "mask" && curMask?.kind === "brush" && cursor && (
+      {objBox && (
+        <rect x={Math.min(objBox[0][0], objBox[1][0]) * box.w} y={Math.min(objBox[0][1], objBox[1][1]) * box.h}
+          width={Math.abs(objBox[1][0] - objBox[0][0]) * box.w} height={Math.abs(objBox[1][1] - objBox[0][1]) * box.h}
+          fill="rgba(235,40,60,0.18)" stroke="#fff" strokeDasharray="5 4" strokeWidth="1.3" />
+      )}
+      {tool === "mask" && curMask?.kind === "brush" && cursor && !objMode && (
         <circle cx={cursor[0] * box.w} cy={cursor[1] * box.h} r={brush.size * Math.max(box.w / (view.rect[2] - view.rect[0]), box.h / (view.rect[3] - view.rect[1]))}
           fill="none" stroke={brush.erase ? "#ff8080" : "#fff"} strokeWidth="1.2" />
       )}
     </svg>
   );
 
-  const stageCursor = pipette ? "crosshair" : tool === "mask" && curMask && curMask.kind !== "other" && !["subject", "background", "sky", "person"].includes(curMask.kind)
+  const stageCursor = pipette || dnPick || (tool === "mask" && objMode) ? "crosshair" : tool === "mask" && curMask && curMask.kind !== "other" && !["subject", "background", "sky", "person"].includes(curMask.kind)
     ? (curMask.kind === "brush" ? "none" : "crosshair") : tool === "crop" ? "move" : zoom ? "grab" : "zoom-in";
   const saveLabel = { saved: "Gespeichert", dirty: "Geändert …", saving: "Speichert …", error: "Speichern fehlgeschlagen" }[save];
 
@@ -804,13 +891,22 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
           <img src={hoverStyle ? `${BASE}/api/images/${iid}/styled?style=${encodeURIComponent(hoverStyle)}&size=360` : `${BASE}/api/images/${iid}/thumb`} draggable={false} />
           <div className="dv-nav-l">{hoverStyle ? "Vorschau der Vorgabe" : "Navigator"}</div>
         </div>
-        <Panel id="presets" title="Vorgaben">
+        <Panel id="presets" title="Vorgaben" right={<button className="dv-iconbtn sm" onClick={importPresets} title="Lightroom-Vorgaben importieren (.xmp, .lrtemplate)"><Ic.IcPlus size={15} /></button>}>
           <div className="dv-list">
-            {styles.map((s) => (
-              <button key={s.key} onMouseEnter={() => setHoverStyle(s.key)} onMouseLeave={() => setHoverStyle(null)}
-                onClick={() => applyStyle(s.key, s.label)}><Ic.IcPreset size={14} /> {s.label}</button>
+            {[...new Set(styles.map((x) => x.group ?? ""))].map((gname) => (
+              <div key={gname} className="dv-pgroup">
+                <div className="dv-pgroup-t">{gname || "Weitere"}</div>
+                {styles.filter((x) => (x.group ?? "") === gname).map((x) => (
+                  <div key={x.key} className="dv-preset" onMouseEnter={() => setHoverStyle(x.key)} onMouseLeave={() => setHoverStyle(null)}>
+                    <button onClick={() => applyStyle(x.key, x.label)}><Ic.IcPreset size={14} /> {x.label}</button>
+                    {x.user && <button className="dv-pdel" title="Vorgabe löschen" onClick={async () => {
+                      await api.del(`/api/presets/user/${encodeURIComponent(x.key.slice(3))}`); loadStyles();
+                    }}><Ic.IcTrash size={13} /></button>}
+                  </div>
+                ))}
+              </div>
             ))}
-            {styles.length === 0 && <div className="dv-muted">Noch keine eigenen Stile. Unter „Stil“ lernen oder hier bearbeiten und „Auf alle übertragen“.</div>}
+            <button className="dv-import" onClick={importPresets}><Ic.IcPlus size={14} /> Lightroom-Vorgaben importieren …</button>
           </div>
         </Panel>
         <Panel id="history" title="Verlauf" right={<span className="dv-muted">{hist.length - 1}</span>}>
@@ -852,7 +948,9 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
           {before === "on" && <div className="dv-badge">Vorher (\\)</div>}
           {pipette && <div className="dv-badge">Auf etwas Neutrales (Grau/Weiss) klicken · Esc bricht ab</div>}
           {tool === "crop" && <div className="dv-badge">Ecken ziehen · innen verschieben · aussen ziehen dreht · Esc fertig</div>}
-          {tool === "mask" && curMask?.kind === "brush" && <div className="dv-badge">Malen · Alt gedrückt löscht · [ ] Pinselgrösse</div>}
+          {tool === "mask" && curMask?.kind === "brush" && !objMode && <div className="dv-badge">Malen · Alt gedrückt löscht · [ ] Pinselgrösse</div>}
+          {tool === "mask" && objMode && <div className="dv-badge">Rahmen um das Objekt ziehen – Imagomat findet die Kanten</div>}
+          {dnPick && <div className="dv-badge">Auf die Stelle klicken, die du 1:1 sehen willst</div>}
           {noGpu && <div className="dv-badge warn">Grafikkarte nicht nutzbar – langsamere Vorschau</div>}
         </div>
         <div className="dv-toolbar">
@@ -881,13 +979,13 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
           <button className={tool === "edit" ? "on" : ""} onClick={() => { if (tool === "crop") leaveCrop(); setTool("edit"); }} title="Bearbeiten"><Ic.IcSliders size={20} /><span>Bearbeiten</span></button>
           <button className={tool === "crop" ? "on" : ""} onClick={() => (tool === "crop" ? leaveCrop() : startCrop())} title="Zuschneiden und Begradigen (R)"><Ic.IcCrop size={20} /><span>Zuschneiden</span></button>
           <button className={tool === "mask" ? "on" : ""} onClick={() => { if (tool === "crop") leaveCrop(); setTool(tool === "mask" ? "edit" : "mask"); }} title="Masken (M)"><Ic.IcMask size={20} /><span>Masken</span></button>
-          <button className={pipette ? "on" : ""} onClick={() => setPipette((p) => !p)} title="Weissabgleich-Pipette (W)"><Ic.IcPipette size={20} /><span>Pipette</span></button>
         </div>
         <div className="dv-scroll">
           {model && tool === "edit" && <>
-            <Panel id="basic" title="Grundeinstellungen">
-              <div className="dv-row">
-                <span className="dv-lbl">Weissabgl.</span>
+            <Panel id="basic" title="Grundeinstellungen" right={<button className="dv-auto-btn" onClick={autoTone} title="Automatisch wie in Lightroom (⌘U)">Auto</button>}>
+              <div className="dv-row dv-wbrow">
+                <button className={`dv-pipette ${pipette ? "on" : ""}`} onClick={() => setPipette((p) => !p)} title="Weissabgleich-Pipette (W): auf etwas Neutrales klicken"><Ic.IcPipette size={18} /></button>
+                <span className="dv-lbl">WA:</span>
                 <select value={!model.wb_custom ? "asshot" : "custom"} onChange={(e) => {
                   const v = e.target.value;
                   if (v === "asshot") setWB(null, null, "Weissabgleich: Wie Aufnahme");
@@ -899,13 +997,11 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
                   {WB_PRESETS.map(([n]) => <option key={n} value={n}>{n}</option>)}
                   <option value="custom" disabled>Benutzerdefiniert</option>
                 </select>
-                <button className={`dv-iconbtn sm ${pipette ? "on" : ""}`} onClick={() => setPipette((p) => !p)} title="Pipette (W)"><Ic.IcPipette size={16} /></button>
               </div>
               <Slider k="Temperature" label="Temp." value={tempPos(temp)} min={0} max={1000} step={1} track={T_TEMP}
                 fmt={() => `${Math.round(temp)}`} onChange={setTempPos} onCommit={commitWB} dflt={tempPos(asShot[0])} />
               <Slider k="Tint" label="Tönung" value={tint} min={-150} max={150} track={T_TINT} onChange={setTint} onCommit={commitWB} dflt={asShot[1]} />
               <Group title="Ton">
-                <div className="dv-auto"><button className="dv-iconbtn sm" onClick={autoTone} title="Tonwerte automatisch"><Ic.IcWand size={15} /> Automatisch</button></div>
                 {S("Exposure2012", -5, 5, 0.01, T_LIGHT)}
                 {S("Contrast2012", -100, 100)}
                 {S("Highlights2012", -100, 100)}
@@ -982,7 +1078,21 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
                 {S("LuminanceSmoothing", 0, 100, 1, undefined, "Luminanz")}
                 {S("ColorNoiseReduction", 0, 100, 1, undefined, "Farbe")}
               </Group>
-              <div className="dv-hint">Schärfen und Rauschreduzierung wirken in Lightroom; in der Vorschau hier nur bei 1:1 sichtbar.</div>
+              <Group title="KI-Entrauschen">
+                <label className="check"><input type="checkbox" checked={!!model.denoise} onChange={(e) => {
+                  update((m) => ({ ...m, denoise: e.target.checked ? (m.denoise || 50) : null })); commit(e.target.checked ? "KI-Entrauschen an" : "KI-Entrauschen aus");
+                }} /> Entrauschen (KI, wie Lightroom „Entrauschen“)</label>
+                {!!model.denoise && <>
+                  <Slider k="denoise" label="Stärke" value={model.denoise} min={1} max={100} dflt={50} fmt={(v) => `${Math.round(v)}`}
+                    onChange={(_k, v) => update((m) => ({ ...m, denoise: Math.round(v) }))} onCommit={(_k, v) => commit(`KI-Entrauschen ${Math.round(v)}`)} />
+                  <div className="dv-btnrow">
+                    <button onClick={() => runDnPreview([0.5, 0.5])} disabled={dnBusy}>{dnBusy ? "rechnet …" : "Vorschau 1:1 (Mitte)"}</button>
+                    <button className={dnPick ? "on" : ""} onClick={() => setDnPick((x) => !x)} disabled={dnBusy}>Stelle wählen</button>
+                  </div>
+                  {dnPreview && <div className="dv-dn"><img src={dnPreview.url} /><div className="dv-dn-l"><span>vorher</span><span>nachher ({dnPreview.method === "nafnet" ? "KI" : "klassisch"})</span></div></div>}
+                </>}
+                <div className="dv-hint">Beim Export entsteht wie in Lightroom eine „…-Enhanced-NR.dng“ mit deinen Einstellungen. Hohe ISO ist schon vorgeschlagen.</div>
+              </Group>
             </Panel>
             <Panel id="effects" title="Effekte" open={false}>
               <Group title="Vignettierung nach Freistellen">
@@ -1019,6 +1129,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
                 <button onClick={() => addMask("sky")}><Ic.IcSky size={20} /><span>Himmel</span></button>
                 {info?.has_subject && <button onClick={() => addMask("background")}><Ic.IcBackground size={20} /><span>Hintergrund</span></button>}
                 {info?.has_subject && <button onClick={() => addMask("person")}><Ic.IcPeople size={20} /><span>Personen</span></button>}
+                <button onClick={() => addMask("object")} title="Rahmen um ein Objekt ziehen: die Kanten werden automatisch gefunden"><Ic.IcWand size={20} /><span>Objekt</span></button>
                 <button onClick={() => addMask("brush")}><Ic.IcBrush size={20} /><span>Pinsel</span></button>
                 <button onClick={() => addMask("gradient")}><Ic.IcLinear size={20} /><span>Linear</span></button>
                 <button onClick={() => addMask("radial")}><Ic.IcRadial size={20} /><span>Radial</span></button>
@@ -1078,7 +1189,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
             <Ic.IcSync size={16} /> Auf alle übertragen …</button>
           <div className="dv-btnrow">
             <button onClick={usePrevious} disabled={!previous} title="Einstellungen des vorher bearbeiteten Bildes">Vorherige</button>
-            <button onClick={resetAll} title="Eigenen Edit verwerfen: wieder automatisch mit dem Stil des Shoots">Zurücksetzen</button>
+            <button onClick={resetAll} title="Alle Regler auf 0 wie frisch importiert (⌘Z macht es rückgängig)">Zurücksetzen</button>
           </div>
         </div>
       </aside>

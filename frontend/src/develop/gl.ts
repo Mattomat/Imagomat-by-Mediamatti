@@ -3,7 +3,7 @@ import { BLUR, DOWN, FINAL, LIN, MAIN, VERT } from "./shaders";
 import { EdModel, Source, def, wbMult } from "./model";
 
 export const MAX_MASKS = 16;
-export const MASK_SIDE = 768;
+export const MASK_SIDE = 1024;
 
 type Prog = { p: WebGLProgram; u: Map<string, WebGLUniformLocation | null> };
 interface Target { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number }
@@ -322,6 +322,10 @@ export class DevelopGL {
     gl.uniform1i(this.loc(pr, "uOverlay"), target ? -1 : out.overlay);
     gl.uniform1i(this.loc(pr, "uClip"), !target && out.clip ? 1 : 0);
     gl.uniform3f(this.loc(pr, "uBg"), 0.12, 0.12, 0.13);
+    // Schärfen wie pipeline.sharpen_params (Radius relativ zur Grösse des entwickelten Bildes)
+    const amt = (g.Sharpness ?? def("Sharpness")) / 150 * 1.2;
+    const ppx = Math.min(1, Math.max(0.35, Math.max(this.w, this.h) / 6000));
+    gl.uniform2f(this.loc(pr, "uSharp"), target ? 0 : amt, Math.max(0.5, (g.SharpenRadius ?? 1) * 0.7 * ppx));
     this.draw(target, out.width, out.height);
   }
 

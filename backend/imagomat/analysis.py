@@ -74,6 +74,12 @@ def import_folder(db: Database, folder: Path, name: str | None = None, profile: 
     if ctx:
         ctx.set_total(len(files))
         ctx.progress(0, f"EXIF lesen ({len(files)} Dateien)")
+    add_files(db, shoot_id, files, ctx)
+    return shoot_id
+
+
+def add_files(db: Database, shoot_id: int, files: list[Path], ctx: JobContext | None = None) -> None:
+    """Dateien in den Shoot aufnehmen (EXIF lesen); schon bekannte werden aktualisiert."""
     meta = exif_io.read_exif(files)
     for i, p in enumerate(files):
         m = meta.get(str(p), {})
@@ -85,7 +91,6 @@ def import_folder(db: Database, folder: Path, name: str | None = None, profile: 
         })
         if ctx and i % 50 == 0:
             ctx.progress(i, "Import")
-    return shoot_id
 
 
 # ---------------------------------------------------------------------------

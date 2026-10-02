@@ -16,6 +16,27 @@ LOOK = "look:"
 TPL = "tpl:"
 
 
+def _special(db: Database, image_id: int, style: str) -> tuple[dict[str, Any], int | None] | None:
+    """Neutral (wie frisch importiert) und eigene Vorgaben (auf die aktuelle Bearbeitung gelegt)."""
+    import json
+
+    from . import userpresets as up
+
+    if style == up.NEUTRAL:
+        r = db.one("SELECT iso FROM images WHERE id=?", (image_id,))
+        return up.neutral_crs(), up.suggest_denoise(r["iso"] if r else None, load_settings())
+    if style.startswith(up.PREFIX):
+        pr = up.load_preset(style[len(up.PREFIX):])
+        if pr is None:
+            raise KeyError(style)
+        e = db.one("SELECT params, masks, denoise FROM edits WHERE image_id=?", (image_id,))
+        base = json.loads(e["params"]) if e and e["params"] else up.neutral_crs()
+        if e and e["masks"]:
+            base["MaskGroupBasedCorrections"] = json.loads(e["masks"])
+        return up.apply_preset(base, pr["crs"]), (e["denoise"] if e else None)
+    return None
+
+
 def resolve(style: str | None) -> tuple[StyleModel | None, str | None, dict[str, Any] | None]:
     """Stil-Schlüssel -> (gelerntes Profil, Preset, Referenz-Look)."""
     from .presets import PRESETS
@@ -49,6 +70,12 @@ def _model(name: str, mtime: float) -> StyleModel | None:   # mtime: neu laden, 
 
 
 def model_version(name: str) -> float:
+    if name.startswith("up:"):
+        from .userpresets import preset_version
+
+        return preset_version(name[3:])
+    if name == "neutral":
+        return 1.0
     if name.startswith(TPL):
         from .template import template_version
 
@@ -71,7 +98,13 @@ def styles() -> list[dict[str, Any]]:
     from .look import list_looks
     from .template import list_templates
 
-    out = [{"key": f"{TPL}{t['name']}", "label": f"Vorlage: {t['name']}", "n": t.get("n"), "group": "Deine Stile",
+    from .userpresets import NEUTRAL, PREFIX as UP, list_presets
+
+    out = [{"key": NEUTRAL, "label": "Neutral (wie importiert)", "n": None, "group": "Standard",
+            "description": "Alle Regler auf 0, Weissabgleich wie Aufnahme – wie ein frisches RAW in Lightroom."}]
+    out += [{"key": f"{UP}{p['name']}", "label": p["name"], "n": None, "group": "Eigene Vorgaben", "user": True}
+            for p in list_presets()]
+    out += [{"key": f"{TPL}{t['name']}", "label": f"Vorlage: {t['name']}", "n": t.get("n"), "group": "Deine Stile",
             "description": "Deine Lightroom-Bearbeitung 1:1, pro Bild nur Belichtung, Weissabgleich und "
                            "Begradigen angepasst."} for t in list_templates()]
     out += [{"key": f"{LOOK}{lk['name']}", "label": f"Look: {lk['name']}", "n": lk.get("n"), "group": "Deine Stile",
@@ -79,7 +112,7 @@ def styles() -> list[dict[str, Any]]:
     out += [{"key": p["name"], "label": p["name"], "n": p.get("n"), "group": "Deine Stile"} for p in list_profiles()]
     out += [{"key": f"preset:{p.key}", "label": p.name, "n": None, "group": p.group, "description": p.description}
             for p in PRESETS.values() if p.group]
-    out.append({"key": AUTO, "label": "Standard (automatisch)", "n": None, "group": "Standard"})
+    out.append({"key": AUTO, "label": "Automatisch", "n": None, "group": "Standard"})
     return out
 
 
@@ -93,6 +126,10 @@ def label(key: str | None) -> str | None:
         return f"Look: {key[len(LOOK):]}"
     if key and key.startswith(TPL):
         return f"Vorlage: {key[len(TPL):]}"
+    if key == "neutral":
+        return "Neutral"
+    if key and key.startswith("up:"):
+        return key[3:]
     return key
 
 
@@ -131,6 +168,9 @@ def develop_preview(db: Database, shoot_id: int, image_id: int, style: str) -> d
     """Entwicklungseinstellungen (crs) für ein Bild mit einem Stil, ohne sie zu speichern."""
     from .jobs import shoot_records
 
+    sp = _special(db, image_id, style)
+    if sp is not None:
+        return sp[0]
     items = shoot_records(db, shoot_id, only_keep=False, image_ids=[image_id])
     if not items:
         raise KeyError(image_id)
@@ -146,6 +186,17 @@ def apply_to_image(db: Database, shoot_id: int, image_id: int, style: str) -> di
     from ..db import dumps
     from .jobs import shoot_records
 
+    sp = _special(db, image_id, style)
+    if sp is not None:
+        crs, dn = sp
+        masks = crs.get("MaskGroupBasedCorrections")
+        with db.tx() as c:
+            c.execute("INSERT OR REPLACE INTO edits(image_id, profile, params, masks, confidence, denoise, user_params,"
+                      " updated_at) VALUES(?,?,?,?,1.0,?,(SELECT user_params FROM edits WHERE image_id=?),?)",
+                      (image_id, style, dumps({k: v for k, v in crs.items() if k != "MaskGroupBasedCorrections"}),
+                       dumps(masks) if masks else None, dn, image_id, time.time()))
+        db.update_analysis(image_id, {"develop_notes": [label(style) or style], "preset": None})
+        return crs
     items = shoot_records(db, shoot_id, only_keep=False, image_ids=[image_id])
     if not items:
         raise KeyError(image_id)

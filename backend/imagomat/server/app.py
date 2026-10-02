@@ -38,7 +38,7 @@ from ..jobs import JobManager
 from ..lightroom.dialect import Dialect, learn_dialect
 from ..people import roster
 from ..people.registry import assign_cluster, assign_face, persons, upsert_person
-from ..render.pipeline import RENDER_VERSION, render_hybrid
+from ..render.pipeline import RENDER_VERSION, render, render_hybrid
 from ..style.jobs import export_profile, import_profile
 from ..style.model import list_profiles
 from ..style.presets import PRESETS
@@ -102,6 +102,13 @@ class ExportReq(BaseModel):
     include_rejected: bool = True
     template: str | None = None
     jpeg_side: int = 2048
+    long_side: int | None = None      # 0 = Originalgrösse (JPEG/WebP/PNG/TIFF in voller Qualität)
+    quality: int = 90
+    naming: str = "original"          # "original" | "custom" (name_base-001 …)
+    name_base: str = ""
+    denoise: str | None = None        # "off" | "edit" | "all": KI-Entrauschen als DNG / im fertigen Bild
+    min_rating: int = 0
+    render_target: str | None = None  # Ordner für JPEG/WebP/PNG/TIFF (sonst wie target)
 
 
 class SocialReq(BaseModel):
@@ -375,6 +382,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if not folder.is_dir():
             raise HTTPException(400, f"Ordner nicht gefunden: {folder}")
         copy_from = None
+        if not req.profile and not req.preset:
+            req.profile = "neutral"           # wie Lightroom: frisch importiert, ohne Vorgabe darüber
         if req.copy_to and Path(req.copy_to).expanduser().resolve() != folder.resolve():
             dest = Path(req.copy_to).expanduser().resolve()
             try:
@@ -459,7 +468,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "people_check": a.get("people_check", []),
                 "tags": tag_labels(a.get("tags")),
                 "edit_v": int((r["updated_at"] or 0) * 1000) % 10_000_000,
-                "rendered": _render_path(r["id"], r["path"], r["updated_at"], 2000).exists(),
+                "rendered": _rendered_any(r["id"], r["path"], r["updated_at"]) is not None,
                 "hand_edited": r["edit_profile"] == "manual",
             })
         _prerender([o["id"] for o in out if o["decision"] == "keep"])
@@ -597,6 +606,32 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return lin, xyz, wb, orient
 
     _sources: dict[int, tuple[str, float, float]] = {}
+    _hi: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray, int]] = {}
+    _hi_lock = threading.Lock()
+
+    def _linear_hi(iid: int, path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+        """Lineare Daten in hoher Auflösung (halbes RAW, z. B. 3504 px bei 33 MP) für Lupe und Editor auf grossen
+        Bildschirmen. Nur im Speicher (die letzten Bilder), damit der Zwischenspeicher auf der Platte klein bleibt."""
+        key = image_key(iid, path)
+        with _hi_lock:
+            hit = _hi.get(key)
+            if hit is not None:
+                _hi[key] = _hi.pop(key)
+                return hit
+        _linear(iid, path)                     # Quelle / Aufnahme-Weissabgleich ermitteln (aus dem Cache schnell)
+        lin, info = raw_io.decode_any(path, half_size=True)
+        if info.extra.get("from_preview"):
+            return _linear(iid, path)
+        h, w = lin.shape[:2]
+        s = 4096 / max(h, w)
+        if s < 1:
+            lin = cv2.resize(lin, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
+        out = (lin.astype(np.float32), info.xyz_to_cam, info.camera_wb, info.orientation)
+        with _hi_lock:
+            _hi[key] = out
+            while len(_hi) > 3:
+                _hi.pop(next(iter(_hi)))
+        return out
 
     def _with_as_shot(iid: int, crs: dict[str, Any]) -> dict[str, Any]:
         """Bei schon weissabgeglichenen Daten (Apple RAW-Engine, Vorschau) den Aufnahme-Weissabgleich mitgeben."""
@@ -612,9 +647,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def _render_file(iid: int, path: Path, crs: dict[str, Any], size: int, cache: Path) -> Response:
         if not raw_io.is_raw(path):
             return preview(iid)            # fertige JPGs: nichts zu entwickeln, Vorschau zeigen
-        lin, xyz, wb, orient = _linear(iid, path)
         m = load_masks(iid)
         seg = {"subject": m[0], "sky": m[1]} if m else {}
+        if size > 2048:
+            # grosse Vorschau: direkt aus dem RAW in Bildschirmauflösung (mit Schärfen wie Lightroom)
+            lin, xyz, wb, orient = _linear_hi(iid, path)
+            img = render(lin, xyz, wb, _with_as_shot(iid, crs), orient, seg, size)
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(cache), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
+            return FileResponse(cache, media_type="image/jpeg")
+        lin, xyz, wb, orient = _linear(iid, path)
         pr = db.one("SELECT preview_path FROM images WHERE id=?", (iid,))
         detail = None
         if pr and pr["preview_path"] and Path(pr["preview_path"]).exists():
@@ -631,7 +673,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     _render_gate = asyncio.Semaphore(2)
     _busy = {"n": 0, "last": 0.0}
-    _pre: dict[str, Any] = {"queue": [], "thread": None}
+    _pre: dict[str, Any] = {"queue": [], "thread": None, "size": 2880}
     _pre_lock = threading.Lock()
 
     def _prerender(ids: list[int]) -> None:
@@ -658,9 +700,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
             while _busy["n"] > 0 or time.time() - _busy["last"] < 1.5 or jobs.active():
                 time.sleep(0.3)
             try:
-                hit = _render_cache(iid, 2000)
+                hit = _render_cache(iid, _pre["size"])
                 if hit and not hit[1].exists():
-                    render_after(iid, 2000)
+                    render_after(iid, _pre["size"])
             except Exception:  # noqa: BLE001
                 log.debug("Vorberechnen %s fehlgeschlagen", iid, exc_info=True)
 
@@ -679,6 +721,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/api/images/{iid}/render")
     async def render_route(iid: int, request: Request, size: int = 1600) -> Response:
+        if size in LOUPE_SIZES:
+            _pre["size"] = size                      # Grösse der Lupe auf diesem Bildschirm: so vorberechnen
         hit = _render_cache(iid, size)
         if hit and hit[1].exists():                  # schon berechnet: sofort, ohne anzustehen
             return FileResponse(hit[1], media_type="image/jpeg")
@@ -686,6 +730,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     def _render_path(iid: int, path: str, updated_at: float | None, size: int) -> Path:
         return cache_dir() / "renders" / f"{image_key(iid, path)}_{size}_{int((updated_at or 0) * 1000)}_{RENDER_VERSION}.jpg"
+
+    LOUPE_SIZES = (2048, 2880, 3600)
+
+    def _rendered_any(iid: int, path: str, updated_at: float | None) -> Path | None:
+        for sz in (_pre["size"], *LOUPE_SIZES):
+            c = _render_path(iid, path, updated_at, sz)
+            if c.exists():
+                return c
+        return None
 
     def _render_cache(iid: int, size: int) -> tuple[Any, Path] | None:
         r = db.one("SELECT i.path, e.params, e.masks, e.updated_at FROM images i LEFT JOIN edits e "
@@ -708,8 +761,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     # ------------------------------------------------------------------ Eigener Edit (Editor in der Lupe)
     def _edit_row(iid: int) -> tuple[Any, dict[str, Any], int]:
-        r = db.one("SELECT i.*, e.params, e.masks, e.profile FROM images i LEFT JOIN edits e ON e.image_id=i.id "
-                   "WHERE i.id=?", (iid,))
+        r = db.one("SELECT i.*, e.params, e.masks, e.profile, e.denoise AS edit_denoise FROM images i "
+                   "LEFT JOIN edits e ON e.image_id=i.id WHERE i.id=?", (iid,))
         if not r:
             raise HTTPException(404)
         crs = json.loads(r["params"]) if r["params"] else {}
@@ -723,7 +776,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         r, crs, orient = _edit_row(iid)
         a = db.get_analysis(iid) or {}
-        return {"model": crs_to_model(crs, orient), "manual": r["profile"] == "manual", "orientation": orient,
+        model = crs_to_model(crs, orient)
+        model["denoise"] = r["edit_denoise"]
+        return {"model": model, "manual": r["profile"] == "manual", "orientation": orient,
                 "has_subject": load_masks(iid) is not None, "local_keys": LOCAL_KEYS,
                 "as_shot": [a.get("as_shot_temp"), a.get("as_shot_tint")], "profile": r["profile"],
                 "is_raw": raw_io.is_raw(Path(r["path"])),
@@ -769,8 +824,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         path = Path(r["path"])
         if not raw_io.is_raw(path):
             raise HTTPException(400, "Nur RAW-Dateien lassen sich bearbeiten")
-        lin, xyz, wb, orient = _linear(iid, path)
-        size = int(min(max(size, 400), 2048))
+        size = int(min(max(size, 400), 4096))
+        lin, xyz, wb, orient = _linear_hi(iid, path) if size > 2048 else _linear(iid, path)
         h, w = lin.shape[:2]
         s = size / max(h, w)
         if s < 1:
@@ -792,6 +847,84 @@ def create_app(db_path: str | None = None) -> FastAPI:
         data = np.ascontiguousarray(floored.astype("<f2")).tobytes()
         return Response(struct.pack("<I", len(hb)) + hb + data, media_type="application/octet-stream",
                         headers={"Cache-Control": "no-store"})
+
+    _full: dict[str, Any] = {}
+    _full_lock = threading.Lock()
+
+    @app.post("/api/images/{iid}/denoise/preview")
+    def denoise_preview(iid: int, body: dict[str, Any]) -> Response:
+        """1:1-Ausschnitt vorher | nachher fürs KI-Entrauschen (wie das Detail-Fenster in Lightroom)."""
+        from ..denoise.local import denoise_linear
+        from ..render.pipeline import _wb_mult, base_curve, BASE_GAIN, cam_to_srgb, _black_floor
+
+        r = db.one("SELECT path FROM images WHERE id=?", (iid,))
+        if not r or not raw_io.is_raw(Path(r["path"])):
+            raise HTTPException(400, "Nur RAW-Dateien")
+        path = Path(r["path"])
+        with _full_lock:
+            if _full.get("key") != image_key(iid, path):
+                lin, info = raw_io.decode_any(path, half_size=False)
+                _full.clear()
+                _full.update(key=image_key(iid, path), lin=lin, info=info, noise=raw_io.estimate_noise(path))
+            lin, info, noise = _full["lin"], _full["info"], _full["noise"]
+        h, w = lin.shape[:2]
+        side, pad = int(min(max(int(body.get("size") or 360), 128), 720)), 32
+        cx, cy = float(body.get("x", 0.5)) * w, float(body.get("y", 0.5)) * h
+        x0 = int(min(max(cx - side / 2, 0), max(w - side, 0)))
+        y0 = int(min(max(cy - side / 2, 0), max(h - side, 0)))
+        xa, ya, xb, yb = max(x0 - pad, 0), max(y0 - pad, 0), min(x0 + side + pad, w), min(y0 + side + pad, h)
+        crop = lin[ya:yb, xa:xb].astype(np.float32)
+        amount = int(min(max(int(body.get("amount") or 50), 1), 100))
+        den, used = denoise_linear(crop, info.camera_wb, noise["sigma_mid"], amount,
+                                   load_settings().denoise.local_model)
+        _r, crs, _o = _edit_row(iid)
+
+        def show(x: np.ndarray) -> np.ndarray:
+            x = _black_floor(x) * _wb_mult(info.xyz_to_cam, info.camera_wb, _with_as_shot(iid, crs))[None, None, :]
+            x = np.clip(x @ cam_to_srgb(info.xyz_to_cam).T.astype(np.float32), 0, None)
+            from ..render.pipeline import _n
+
+            x = x * (BASE_GAIN * 2.0 ** _n(crs, "Exposure2012"))
+            d = base_curve(x, _n(crs, "Contrast2012"))
+            return (np.clip(d, 0, 1) * 255 + 0.5).astype(np.uint8)[y0 - ya:y0 - ya + side, x0 - xa:x0 - xa + side]
+
+        a, b = show(crop), show(den)
+        img = np.concatenate([a, np.full((a.shape[0], 4, 3), 30, np.uint8), b], 1)
+        ok, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
+        return Response(buf.tobytes(), media_type="image/jpeg", headers={"X-Denoise-Method": used,
+                                                                         "Cache-Control": "no-store"})
+
+    @app.post("/api/images/{iid}/editor/object")
+    def editor_object(iid: int, body: dict[str, Any]) -> dict[str, Any]:
+        """Objekt auswählen: Rahmen um ein Objekt -> Maske an seinen Kanten (GrabCut), als Pinsel-Tupfer, die
+        Lightroom genauso übernimmt."""
+        from ..style.masks import mask_to_dabs
+
+        r = db.one("SELECT * FROM images WHERE id=?", (iid,))
+        if not r:
+            raise HTTPException(404)
+        img = load_cached_preview(r)
+        h0, w0 = img.shape[:2]
+        s = 900 / max(h0, w0)
+        small = cv2.resize(img, (int(w0 * s), int(h0 * s)), interpolation=cv2.INTER_AREA) if s < 1 else img
+        h, w = small.shape[:2]
+        bx = [float(v) for v in (body.get("box") or [0.3, 0.3, 0.7, 0.7])]
+        x0, y0 = int(max(0, min(bx[0], bx[2])) * w), int(max(0, min(bx[1], bx[3])) * h)
+        x1, y1 = int(min(1, max(bx[0], bx[2])) * w), int(min(1, max(bx[1], bx[3])) * h)
+        if x1 - x0 < 6 or y1 - y0 < 6:
+            raise HTTPException(400, "Rahmen zu klein")
+        mask = np.zeros((h, w), np.uint8)
+        bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+        try:
+            cv2.grabCut(cv2.cvtColor(small, cv2.COLOR_RGB2BGR), mask, (x0, y0, x1 - x0, y1 - y0), bgd, fgd, 5,
+                        cv2.GC_INIT_WITH_RECT)
+            m = np.isin(mask, (cv2.GC_FGD, cv2.GC_PR_FGD)).astype(np.uint8)
+        except cv2.error:
+            m = np.zeros((h, w), np.uint8)
+            m[y0:y1, x0:x1] = 1
+        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        dabs = mask_to_dabs(m, max_dabs=900)
+        return {"dabs": [[round(x, 5), round(y, 5), round(rr, 5)] for x, y, rr in dabs]}
 
     @app.post("/api/images/{iid}/editor/mask")
     def editor_mask(iid: int, body: dict[str, Any]) -> Response:
@@ -850,12 +983,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
         _r, base, orient = _edit_row(iid)
         crs = model_to_crs(model, base, orient)
         masks = crs.get("MaskGroupBasedCorrections")
+        old = db.one("SELECT denoise FROM edits WHERE image_id=?", (iid,))
+        dn = model.get("denoise") if "denoise" in model else (old["denoise"] if old else None)
+        dn = int(dn) if dn else None
         with db.tx() as c:
             c.execute("INSERT OR REPLACE INTO edits(image_id, profile, params, masks, confidence, denoise, user_params,"
-                      " updated_at) VALUES(?, 'manual', ?, ?, 1.0, (SELECT denoise FROM edits WHERE image_id=?),"
-                      " (SELECT user_params FROM edits WHERE image_id=?), ?)",
+                      " updated_at) VALUES(?, 'manual', ?, ?, 1.0, ?, (SELECT user_params FROM edits WHERE image_id=?), ?)",
                       (iid, dumps({k: v for k, v in crs.items() if k != "MaskGroupBasedCorrections"}),
-                       dumps(masks) if masks else None, iid, iid, time.time()))
+                       dumps(masks) if masks else None, dn, iid, time.time()))
         db.update_analysis(iid, {"develop_notes": ["von Hand bearbeitet"]})
         return crs
 
@@ -872,7 +1007,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         r = db.one("SELECT i.shoot_id, s.profile FROM images i JOIN shoots s ON s.id=i.shoot_id WHERE i.id=?", (iid,))
         if not r:
             raise HTTPException(404)
-        style = r["profile"] or load_settings().default_profile or cmp.AUTO
+        style = "neutral"                     # wie in Lightroom: Zurücksetzen = alle Regler auf 0
         try:
             cmp.apply_to_image(db, r["shoot_id"], iid, style)
         except KeyError as e:
@@ -913,8 +1048,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
                    "ON e.image_id=i.id LEFT JOIN culling c ON c.image_id=i.id WHERE i.id=?", (iid,))
         if not r:
             raise HTTPException(404)
-        edited = _render_path(iid, r["path"], r["updated_at"], 2000) if r["decision"] == "keep" else None
-        src = edited if edited is not None and edited.exists() else (Path(r["preview_path"]) if r["preview_path"] else None)
+        edited = _rendered_any(iid, r["path"], r["updated_at"]) if r["decision"] == "keep" else None
+        src = edited if edited is not None else (Path(r["preview_path"]) if r["preview_path"] else None)
         if src is None or not src.exists():
             return preview(iid)
         tag = "e" + str(int((r["updated_at"] or 0) * 1000)) if src == edited else "c"
@@ -1372,6 +1507,31 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/profiles")
     def profiles() -> list[dict[str, Any]]:
         return list_profiles()
+
+    @app.get("/api/presets/user")
+    def user_presets() -> list[dict[str, Any]]:
+        from ..style.userpresets import list_presets
+
+        return list_presets()
+
+    @app.post("/api/presets/import")
+    def import_user_presets(body: dict[str, Any]) -> dict[str, Any]:
+        """Lightroom-Presets (.xmp, .lrtemplate oder ein Ordner damit) als eigene Vorgaben übernehmen."""
+        from ..style.userpresets import import_presets
+
+        paths = [Path(str(x)).expanduser() for x in body.get("paths") or []]
+        if not paths:
+            raise HTTPException(400, "Keine Dateien angegeben")
+        done, errors = import_presets(paths)
+        if not done:
+            raise HTTPException(400, errors[0] if errors else "Keine Lightroom-Vorgaben gefunden")
+        return {"imported": done, "errors": errors}
+
+    @app.delete("/api/presets/user/{name}")
+    def delete_user_preset(name: str) -> dict[str, Any]:
+        from ..style.userpresets import delete_preset
+
+        return {"ok": delete_preset(name)}
 
     @app.get("/api/presets")
     def presets() -> list[dict[str, Any]]:

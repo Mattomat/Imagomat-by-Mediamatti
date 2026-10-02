@@ -191,6 +191,24 @@ def _white_black(disp: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
     return disp * (np.maximum(Y2, 0) / Y)[..., None]
 
 
+def sharpen_params(crs: dict[str, Any], long_side: int) -> tuple[float, float]:
+    """Schärfen wie Lightroom (Standard 40, Radius 1.0) -> (Stärke, Sigma in Pixel der Vorschau)."""
+    amt = to_number(crs.get("Sharpness"))
+    amt = 40.0 if amt is None else float(amt)
+    rad = to_number(crs.get("SharpenRadius"))
+    rad = 1.0 if rad is None else float(rad)
+    ppx = min(1.0, max(0.35, long_side / 6000))        # Vorschau kleiner als das Original: Radius mitskalieren
+    return amt / 150 * 1.2, max(0.5, rad * 0.7 * ppx)
+
+
+def _sharp_detail(disp: np.ndarray, crs: dict[str, Any]) -> np.ndarray | None:
+    amt, sig = sharpen_params(crs, max(disp.shape[:2]))
+    if amt <= 0:
+        return None
+    Y = _lum(disp).astype(np.float32)
+    return (amt * (Y - _blur(Y, sig)))[..., None]
+
+
 def _presence(disp: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarray:
     clar, tex, dehaze = _n(crs, "Clarity2012") / 100, _n(crs, "Texture") / 100, _n(crs, "Dehaze") / 100
     Y = _lum(disp).astype(np.float32)
@@ -505,11 +523,14 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
     img = _apply_local(img, crs.get("MaskGroupBasedCorrections") or [], orientation, seg, scale)
     disp = base_curve(img, _n(crs, "Contrast2012")).astype(np.float32)
     disp = _white_black(disp, crs)
+    sharp = _sharp_detail(disp, crs)
     disp = _presence(disp, crs, scale)
     disp = _chroma_nr(disp, crs, scale)
     disp = _hsl_and_color(disp, crs)
     disp = _apply_curve(disp, crs)
     disp = _vignette(disp, crs)
+    if sharp is not None:
+        disp = np.clip(disp + sharp, 0, 1)
     disp = _geometry(disp, crs, orientation)
     return (np.clip(disp, 0, 1) * 255 + 0.5).astype(np.uint8)
 
@@ -518,7 +539,7 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
 # Saubere Vorschau: Details aus dem Kamera-JPEG, Licht und Farbe aus der RAW-Entwicklung
 # ---------------------------------------------------------------------------
 
-RENDER_VERSION = "h4"          # ändern, wenn die Vorschau anders aussieht: alte Zwischenspeicher verfallen
+RENDER_VERSION = "h5"          # ändern, wenn die Vorschau anders aussieht: alte Zwischenspeicher verfallen
 HYBRID_LO_SIDE = 560          # Auflösung der RAW-Entwicklung für Licht/Farbe (rauscht dort kaum)
 
 

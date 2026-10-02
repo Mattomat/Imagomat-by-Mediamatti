@@ -105,28 +105,35 @@ def denoise_image(disp: np.ndarray, strength: float, method: str = "auto") -> tu
     return classical(disp, strength), "classical"
 
 
+def denoise_linear(lin: np.ndarray, wb: np.ndarray, sigma_mid: float, amount: int = 50,
+                   method: str = "auto") -> tuple[np.ndarray, str]:
+    """KI-Entrauschen linearer Kamerafarben (ohne Weissabgleich): Ergebnis wieder linear, gleiche Skala."""
+    wb = np.asarray(wb, dtype=np.float32)[:3]
+    # Headroom: Lichter nicht abschneiden
+    gain = 1.0 / max(float(np.percentile(lin * wb[None, None, :3], 99.9)), 1e-3)
+    gain = min(gain, 8.0)
+    disp = _to_display(lin, wb, gain).astype(np.float32)
+    # Rauschsigma im Anzeigeraum grob an der Mitteltonstelle (Gamma-Ableitung)
+    sigma_disp = float(sigma_mid) * gain * GAMMA * (0.18 * gain) ** (GAMMA - 1)
+    strength = sigma_disp * (0.5 + amount / 100.0)
+    den, used = denoise_image(disp, strength, method)
+    # Stärke steuern: Mischung mit dem Original (amount 100 = volle Wirkung)
+    mix = float(np.clip(amount / 70.0, 0.2, 1.0))
+    den = mix * den + (1 - mix) * disp
+    return _from_display(den, wb, gain).astype(np.float32), used
+
+
 def denoise_to_dng(src: Path, dst: Path, amount: int = 50, method: str = "auto", xmp: bytes | None = None,
                    exif: dict | None = None) -> dict:
     """Entrauscht eine RAW-Datei und schreibt eine lineare DNG. Das Original bleibt unverändert."""
     lin, info = raw_io.decode(src, half_size=False, oriented=False)
     noise = raw_io.estimate_noise(src)
     wb = np.asarray(info.camera_wb, dtype=np.float32)
-    # Headroom: Lichter nicht abschneiden
-    gain = 1.0 / max(float(np.percentile(lin * wb[None, None, :3], 99.9)), 1e-3)
-    gain = min(gain, 8.0)
-    disp = _to_display(lin, wb, gain).astype(np.float32)
-    # Rauschsigma im Anzeigeraum grob an der Mitteltonstelle (Gamma-Ableitung)
-    sigma_disp = float(noise["sigma_mid"]) * gain * GAMMA * (0.18 * gain) ** (GAMMA - 1)
-    strength = sigma_disp * (0.5 + amount / 100.0)
-    den, used = denoise_image(disp, strength, method)
-    # Stärke steuern: Mischung mit dem Original (amount 100 = volle Wirkung)
-    mix = float(np.clip(amount / 70.0, 0.2, 1.0))
-    den = mix * den + (1 - mix) * disp
-    out_lin = _from_display(den, wb, gain)
+    out_lin, used = denoise_linear(lin, wb, noise["sigma_mid"], amount, method)
     data16 = np.clip(out_lin * 65535, 0, 65535).astype(np.uint16)
     e = exif or {}
     write_dng(dst, data16, cfa=False, color_matrix=info.xyz_to_cam,
-              as_shot_neutral=tuple((1.0 / wb).tolist()), make=str(e.get("make") or "Imagomat"),
+              as_shot_neutral=tuple((1.0 / wb[:3]).tolist()), make=str(e.get("make") or "Imagomat"),
               model=str(e.get("camera") or "Denoised"), iso=int(e["iso"]) if e.get("iso") else None,
               exposure_time=e.get("exposure_time"), fnumber=e.get("aperture"), focal_length=e.get("focal_length"),
               orientation=info.orientation, xmp=xmp)

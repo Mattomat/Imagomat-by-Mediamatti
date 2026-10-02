@@ -190,6 +190,7 @@ uniform vec3 uVig;
 uniform int uOverlay;
 uniform int uClip;
 uniform vec3 uBg;
+uniform vec2 uSharp;
 const float HUE_C[8] = float[8](0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 275.0, 315.0);
 vec3 rgb2hsv(vec3 c) {
   float v = max(max(c.r, c.g), c.b), mn = min(min(c.r, c.g), c.b), d = v - mn;
@@ -215,6 +216,16 @@ vec4 blurD(vec2 p) {
   }
   return acc / ws;
 }
+float sharpDetail(vec2 p, float Y) {
+  if (uSharp.x <= 0.0) return 0.0;
+  float acc = 0.0, ws = 0.0;
+  float inv = 1.0 / (2.0 * uSharp.y * uSharp.y);
+  for (int y = -2; y <= 2; y++) for (int x = -2; x <= 2; x++) {
+    float w = exp(-float(x * x + y * y) * inv);
+    acc += w * texture(uD, p + vec2(float(x), float(y)) / uImg).a; ws += w;
+  }
+  return uSharp.x * (Y - acc / ws);
+}
 void main() {
   vec2 q = vec2(gl_FragCoord.x, uOut.y - gl_FragCoord.y) / uOut;
   vec2 qp = (uRect.xy + q * (uRect.zw - uRect.xy)) * uImg;
@@ -226,6 +237,7 @@ void main() {
   vec4 dd = texture(uD, p);
   vec3 col = dd.rgb;
   float Y = dd.a;
+  float sharp = sharpDetail(p, Y);
   vec4 rb = texture(uRb, p);
   vec4 bs = blurD(p);
   if (abs(uClar) > 1e-3) col += uClar * 0.9 * (Y - rb.r) * clamp(1.0 - abs(Y - 0.5) * 2.0, 0.2, 1.0);
@@ -270,6 +282,7 @@ void main() {
     float dv2 = length((p - 0.5) * 2.0) / sqrt(2.0);
     col = clamp(col * (1.0 + uVig.x * 0.8 * ss(uVig.y * 0.9, uVig.y * 0.9 + uVig.z, dv2)), 0.0, 1.0);
   }
+  col = clamp(col + sharp, 0.0, 1.0);
   if (uOverlay >= 0) {
     float m = maskAt(uOverlay, p) / max(uMF[uOverlay].y, 1e-3);
     col = mix(col, vec3(0.92, 0.16, 0.24), 0.55 * clamp(m, 0.0, 1.0));

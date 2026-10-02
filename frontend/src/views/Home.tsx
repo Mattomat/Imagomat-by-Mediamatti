@@ -8,7 +8,6 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
   const [ov, setOv] = useState<Overview | null>(null);
   const [shoots, setShoots] = useState<Shoot[]>([]);
   const [folder, setFolder] = useState("");
-  const [profile, setProfile] = useState<string>("");
   const [sel, setSel] = useState<Selection>("normal");
   const [maxKeep, setMaxKeep] = useState("");
   const [mode, setMode] = useState<"full" | "people">("full");
@@ -25,7 +24,6 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
     api.get<Overview>("/api/overview").then((o) => {
       setOv(o);
       api.get<{ default_profile: string | null; library_root: string | null }>("/api/settings").then((s) => {
-        setProfile(s.default_profile ?? "");
         setLibrary(s.library_root);
         if (!s.library_root) setAskLibrary(true);        // beim ersten Start: zuerst den Ablageort festlegen
       });
@@ -61,7 +59,7 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
     setBusy(true);
     try {
       const r = await api.post<{ shoot_id: number }>("/api/shoots/import", {
-        folder, profile: profile || undefined, teams, mode, name: shootName.trim() || undefined,
+        folder, teams, mode, name: shootName.trim() || undefined,
         copy_to: mode === "full" && copyTo ? copyTo : undefined,
         ...(mode === "full" ? SELECTION_PARAMS[sel] : {}),
         max_keep: mode === "full" && maxKeep ? Math.max(1, parseInt(maxKeep, 10)) : undefined,
@@ -131,17 +129,7 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
             ? "z. B. fertige JPGs: Personen erkennen und Namen hineinschreiben, dann wieder exportieren"
             : "RAWs: beste Bilder auswählen, bearbeiten, Personen benennen, an Lightroom übergeben"}</div>
         </div>
-        {mode === "full" && <><div className="opt">
-          <label>Stil</label>
-          <select value={profile} onChange={(e) => setProfile(e.target.value)}>
-            <option value="">Automatisch (passender Stil je Situation)</option>
-            {ov?.profiles.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
-          </select>
-          {ov && ov.profiles.length === 0 && (
-            <button className="link" onClick={() => ctx.go({ name: "style" })}>Eigenen Stil aus Lightroom lernen →</button>
-          )}
-        </div>
-        <div className="opt">
+        {mode === "full" && <>        <div className="opt">
           <label>Auswahl</label>
           <Segmented value={sel} options={SELECTIONS} onChange={setSel} />
           <div className="hint">{SELECTION_HINT[sel]}</div>

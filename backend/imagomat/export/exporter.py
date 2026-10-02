@@ -173,7 +173,21 @@ def _doc(it: ExportItem, with_develop: bool) -> XmpDoc:
                   crs=it.crs if with_develop else {}, regions=it.regions, region_dims=it.region_dims)
 
 
-def export_xmp(items: list[ExportItem], target: Path, mode: str, ctx: JobContext | None = None) -> None:
+def denoise_amount_for(it: ExportItem, denoise: str | None) -> int | None:
+    """KI-Entrauschen für dieses Bild? denoise: "off" | "edit" (wie pro Bild eingestellt) | "all"."""
+    if it.decision != "keep" or not raw_io.is_raw(it.src) or it.src.suffix.lower() == ".dng" and "-Enhanced-NR" in it.src.name:
+        return None
+    if denoise == "off":
+        return None
+    if denoise == "all":
+        return int(it.denoise or 50)
+    if denoise == "edit" or (denoise is None and load_settings().denoise.mode == "local"):
+        return int(it.denoise) if it.denoise else None
+    return None
+
+
+def export_xmp(items: list[ExportItem], target: Path, mode: str, ctx: JobContext | None = None,
+               denoise: str | None = None) -> None:
     s = load_settings()
     from ..denoise.local import denoise_to_dng
 
@@ -181,17 +195,27 @@ def export_xmp(items: list[ExportItem], target: Path, mode: str, ctx: JobContext
         if ctx:
             ctx.check()
         with_develop = it.decision == "keep" and bool(it.crs)
-        local_dn = s.denoise.mode == "local" and it.denoise and raw_io.is_raw(it.src) and with_develop
-        if local_dn:
+        amount = denoise_amount_for(it, denoise) if with_develop else None
+        if amount:
+            if ctx:
+                ctx.progress(message=f"KI-Entrauschen {it.src.name} ({i + 1}/{len(items)}) …")
             crs = {k: v for k, v in it.crs.items() if not k.startswith("Enhance")}
             doc = XmpDoc(rating=it.rating, label=it.label, keywords=it.keywords, crs=crs, regions=it.regions,
                          region_dims=it.region_dims)
-            dst = target / f"{it.src.stem}-DN.dng"
-            if not dst.exists():
-                res = denoise_to_dng(it.src, dst, int(it.denoise or 50), s.denoise.local_model,
-                                     xmp=serialize(doc, include_parent_keywords=s.keywords.write_parent_keywords),
-                                     exif=it.exif)
-                it.notes.append(f"lokal entrauscht ({res['method']})")
+            # wie Lightroom "Entrauschen": DNG neben dem Original (im Ablageort) bzw. im Export-Ordner
+            folder = it.src.parent if mode == "inplace" else target
+            dst = folder / f"{it.src.stem}-Enhanced-NR.dng"
+            packet = serialize(doc, include_parent_keywords=s.keywords.write_parent_keywords)
+            import hashlib
+
+            marker = dst.with_name(f".{dst.stem}.imagomat")
+            sig = f"{amount}|{hashlib.sha1(packet).hexdigest()}"
+            if not dst.exists() or not marker.exists() or marker.read_text() != sig:
+                res = denoise_to_dng(it.src, dst, amount, s.denoise.local_model, xmp=packet, exif=it.exif)
+                marker.write_text(sig)
+                it.notes.append(f"KI-entrauscht ({res['method']}, Stärke {amount})")
+            if mode == "inplace" and it.src.suffix.lower() != ".dng":
+                write_sidecar(it.src, _doc(it, with_develop), include_parent_keywords=s.keywords.write_parent_keywords)
             it.out = dst
         elif mode == "inplace":
             if not raw_io.is_raw(it.src) or it.src.suffix.lower() == ".dng":
@@ -245,6 +269,80 @@ def export_jpeg(items: list[ExportItem], target: Path, long_side: int = 2048, ct
             log.warning("JPEG-Export fehlgeschlagen für %s: %s", it.src.name, e)
         if ctx:
             ctx.progress(advance=1, message=f"JPEG {i + 1}/{len(items)}")
+
+
+RENDER_FORMATS = {"jpeg": ".jpg", "webp": ".webp", "png": ".png", "tiff": ".tif"}
+
+
+def render_full(it: ExportItem, long_side: int | None, denoise_amount: int | None = None) -> np.ndarray:
+    """Bild für den Export entwickeln: aus dem RAW in voller (oder gewählter) Grösse, optional KI-entrauscht."""
+    from ..render.pipeline import AS_SHOT_TEMP, AS_SHOT_TINT
+
+    if not raw_io.is_raw(it.src):
+        img, _ = raw_io.load_preview(it.src, long_side or 100000)
+        return img
+    half = bool(long_side and long_side <= 3000)
+    lin, info = raw_io.decode_any(it.src, half_size=half)
+    if denoise_amount:
+        from ..denoise.local import denoise_linear
+
+        lin, _ = denoise_linear(lin, info.camera_wb, raw_io.estimate_noise(it.src)["sigma_mid"], denoise_amount,
+                                load_settings().denoise.local_model)
+    crs = {k: v for k, v in it.crs.items() if not ("Denoise" in k and "Amount" in k)}
+    src = "preview" if info.extra.get("from_preview") else str(info.extra.get("source", "libraw"))
+    if src != "libraw":
+        crs = {**crs, AS_SHOT_TEMP: info.as_shot_temp or crs.get("Temperature"), AS_SHOT_TINT: info.as_shot_tint or 0}
+    masks = load_masks(it.image_id)
+    seg = {"subject": masks[0], "sky": masks[1]} if masks else {}
+    return render(lin, info.xyz_to_cam, info.camera_wb, crs, info.orientation, seg, long_side)
+
+
+def export_rendered(items: list[ExportItem], target: Path, formats: list[str], long_side: int | None = None,
+                    quality: int = 90, naming: str = "original", name_base: str = "", denoise: str | None = None,
+                    ctx: JobContext | None = None) -> None:
+    """JPEG / WebP / PNG / TIFF aus der eigenen Entwicklung (Personen, Sterne und Stichwörter im JPEG)."""
+    s = load_settings()
+    fmts = [f for f in formats if f in RENDER_FORMATS]
+    if not fmts:
+        return
+    target.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for i, it in enumerate(items):
+        if ctx:
+            ctx.check()
+        if it.decision != "keep":
+            if ctx:
+                ctx.progress(advance=1)
+            continue
+        n += 1
+        stem = it.src.stem if naming == "original" else f"{(name_base or 'Bild').strip()}-{n:03d}"
+        try:
+            amount = denoise_amount_for(it, denoise)
+            if ctx:
+                ctx.progress(message=f"Entwickle {it.src.name} ({i + 1}/{len(items)})"
+                             + (" mit KI-Entrauschen …" if amount else " …"))
+            img = render_full(it, long_side, amount)
+            bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            for f in fmts:
+                out = target / f"{stem}{RENDER_FORMATS[f]}"
+                params = {"jpeg": [cv2.IMWRITE_JPEG_QUALITY, int(quality)],
+                          "webp": [cv2.IMWRITE_WEBP_QUALITY, int(quality)],
+                          "png": [cv2.IMWRITE_PNG_COMPRESSION, 3], "tiff": []}[f]
+                cv2.imwrite(str(out), bgr, params)
+                if f == "jpeg":
+                    try:
+                        from ..io.jpegxmp import embed_xmp
+
+                        embed_xmp(out, serialize(XmpDoc(rating=it.rating, label=it.label, keywords=it.keywords),
+                                                 include_parent_keywords=s.keywords.write_parent_keywords))
+                    except Exception as e:  # noqa: BLE001
+                        log.debug("Metadaten nicht eingebettet (%s): %s", out.name, e)
+            it.notes.append(f"exportiert: {', '.join(fmts)}")
+        except Exception as e:  # noqa: BLE001
+            log.warning("Export fehlgeschlagen für %s: %s", it.src.name, e)
+            it.notes.append(f"Export fehlgeschlagen: {e}")
+        if ctx:
+            ctx.progress(advance=1)
 
 
 def _collections(shoot_name: str, it: ExportItem) -> list[str]:
@@ -314,7 +412,9 @@ def write_log(items: list[ExportItem], target: Path, meta: dict[str, Any]) -> No
 @job("export")
 def export_shoot(ctx: JobContext, shoot_id: int, target: str, formats: list[str] | None = None,
                  copy_mode: str = "copy", include_rejected: bool = True, template: str | None = None,
-                 jpeg_side: int = 2048) -> None:
+                 jpeg_side: int = 2048, long_side: int | None = None, quality: int = 90, naming: str = "original",
+                 name_base: str = "", denoise: str | None = None, min_rating: int = 0,
+                 render_target: str | None = None) -> None:
     db = ctx.db
     formats = formats or ["xmp"]
     shoot = db.one("SELECT * FROM shoots WHERE id=?", (shoot_id,))
@@ -322,16 +422,24 @@ def export_shoot(ctx: JobContext, shoot_id: int, target: str, formats: list[str]
     tgt = Path(target).expanduser()
     tgt.mkdir(parents=True, exist_ok=True)
     items = _items(db, shoot_id, include_rejected)
-    ctx.set_total(len(items) * (("xmp" in formats) + ("jpeg" in formats)) + 1)
+    if min_rating:
+        items = [it for it in items if it.decision != "keep" or (it.rating or 0) >= min_rating]
+    # long_side: None = schnelle Vorschau-JPEGs (alt), 0 = Originalgrösse, sonst lange Kante in Pixel
+    render_fmts = [f for f in formats if f in RENDER_FORMATS]
+    legacy_jpeg = render_fmts == ["jpeg"] and long_side is None
+    ctx.set_total(len(items) * (("xmp" in formats) + bool(render_fmts)) + 1)
     if "xmp" in formats or "catalog" in formats:
-        export_xmp(items, tgt, copy_mode, ctx)
+        export_xmp(items, tgt, copy_mode, ctx, denoise)
     meta: dict[str, Any] = {"shoot": name, "formats": formats, "copy_mode": copy_mode}
     if "catalog" in formats:
         if not template:
             raise ValueError("Für den Katalog-Export wird ein leerer Vorlagen-Katalog aus Lightroom benötigt")
         meta["catalog"] = export_catalog(items, tgt, Path(template), name)
-    if "jpeg" in formats:
+    if legacy_jpeg:
         export_jpeg(items, tgt, jpeg_side, ctx)
+    elif render_fmts:
+        rt = Path(render_target).expanduser() if render_target else tgt
+        export_rendered(items, rt, render_fmts, long_side or None, quality, naming, name_base, denoise, ctx)
     write_log(items, tgt, meta)
     row = db.one("SELECT settings FROM shoots WHERE id=?", (shoot_id,))
     st = json.loads(row["settings"] or "{}") if row else {}

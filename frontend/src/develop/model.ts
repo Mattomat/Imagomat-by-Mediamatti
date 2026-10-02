@@ -30,6 +30,7 @@ export interface EdModel {
   masks: EdMask[];
   curves: Curves;
   crop: Crop;
+  denoise?: number | null;      // KI-Entrauschen (Stärke) oder aus
 }
 
 export const DEFAULTS: Record<string, number> = {
@@ -43,7 +44,7 @@ export const NO_CROP: Crop = { HasCrop: false, CropLeft: 0, CropTop: 0, CropRigh
 
 export function normalize(m: EdModel): EdModel {
   return { global: m.global ?? {}, wb_custom: !!m.wb_custom, masks: m.masks ?? [], curves: m.curves ?? {},
-    crop: { ...NO_CROP, ...(m.crop ?? {}) } };
+    crop: { ...NO_CROP, ...(m.crop ?? {}) }, denoise: m.denoise ?? null };
 }
 
 // ------------------------------------------------------------------ Quelle (lineare RAW-Daten vom Server)

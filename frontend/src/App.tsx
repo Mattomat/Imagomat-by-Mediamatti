@@ -6,14 +6,12 @@ import HomeView from "./views/Home";
 import PeopleView from "./views/People";
 import SettingsView from "./views/Settings";
 import ShootView from "./views/ShootView";
-import StyleView from "./views/Style";
 
-export type Page = { name: "home" } | { name: "shoot"; id: number } | { name: "people" } | { name: "style" } | { name: "settings" };
+export type Page = { name: "home" } | { name: "shoot"; id: number } | { name: "people" } | { name: "settings" };
 
 const NAV: [Page["name"], string, string][] = [
   ["home", "Start", "⌂"],
   ["people", "Personen", "☺"],
-  ["style", "Mein Stil", "✦"],
   ["settings", "Einstellungen", "⚙"],
 ];
 
@@ -131,7 +129,6 @@ export default function App() {
         {page.name === "home" && <HomeView ctx={ctx} setDrop={(h) => (dropHandler.current = h)} />}
         {page.name === "shoot" && <ShootView ctx={ctx} id={page.id} key={page.id} />}
         {page.name === "people" && <PeopleView ctx={ctx} setDrop={(h) => (dropHandler.current = h)} />}
-        {page.name === "style" && <StyleView ctx={ctx} setDrop={(h) => (dropHandler.current = h)} />}
         {page.name === "settings" && <SettingsView ctx={ctx} />}
       </main>
       {dragging && <div className="drop-overlay">Loslassen zum Importieren</div>}

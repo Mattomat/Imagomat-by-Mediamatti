@@ -37,7 +37,10 @@ def ingest(ctx: JobContext, shoot_id: int, source: Path) -> int:
     if need > free * 0.98:
         raise ValueError(f"Zu wenig Platz am Ablageort: {need / 1e9:.1f} GB nötig, {free / 1e9:.1f} GB frei ({dest})")
     ctx.set_total(len(todo))
+    ctx.progress(0, f"Kopieren 0/{len(files)} nach {dest.name}")
     copied = 0
+    batch: list[Path] = []
+    shown = set(files)
     for i, p in enumerate(todo):
         ctx.check()
         out = dest / p.name
@@ -52,8 +55,13 @@ def ingest(ctx: JobContext, shoot_id: int, source: Path) -> int:
         finally:
             tmp.unlink(missing_ok=True)
         copied += 1
-        if i % 5 == 0:
-            ctx.progress(i + 1, f"Kopieren {i + 1}/{len(todo)} nach {dest.name}")
+        if p in shown:
+            batch.append(out)
+        if len(batch) >= 8:
+            # schon kopierte Bilder sofort zeigen (Galerie füllt sich während des Kopierens)
+            analysis.add_files(db, shoot_id, batch)
+            batch = []
+        ctx.progress(i + 1, f"Kopieren {min(i + 1, len(files))}/{len(files)} nach {dest.name}")
     analysis.import_folder(db, dest, shoot["name"], shoot["profile"])
     db.update_shoot_settings(shoot_id, library=True, source=str(source))
     ctx.progress(len(todo), f"{copied} Dateien nach {dest} kopiert")

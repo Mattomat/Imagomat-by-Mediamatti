@@ -189,6 +189,13 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
     db = ctx.db
     settings = load_settings()
     shoot = db.one("SELECT * FROM shoots WHERE id=?", (shoot_id,))
+    from . import userpresets as up
+
+    style = profile or (shoot["profile"] if shoot else None) or up.NEUTRAL
+    if not preset and (style == up.NEUTRAL or style.startswith(up.PREFIX)):
+        # Neutral (wie frisch importiert) oder eigene Vorgabe: kein automatischer Stil darüber
+        _develop_special(ctx, shoot_id, style, only_keep, overwrite_manual, keep)
+        return
     look, look_key = None, None
     if not (profile and profile.startswith(("look:", "preset:", "tpl:"))):
         profile = profile or (shoot["profile"] if shoot else None) or settings.default_profile
@@ -244,6 +251,29 @@ def develop_shoot(ctx: JobContext, shoot_id: int, profile: str | None = None, pr
             upd["subj_level"] = it.record.analysis["subj_level"]      # Bezug für Einzelbild-Vorschauen
         db.update_analysis(it.image_id, upd)
     ctx.progress(len(items), "Entwicklung fertig")
+
+
+def _develop_special(ctx: JobContext, shoot_id: int, style: str, only_keep: bool, overwrite_manual: bool,
+                     keep: list[int] | None) -> None:
+    from .compare import apply_to_image, label
+
+    db = ctx.db
+    ids = [int(r["id"]) for r in db.query(
+        "SELECT i.id FROM images i LEFT JOIN culling c ON c.image_id=i.id WHERE i.shoot_id=?"
+        + (" AND COALESCE(c.decision,'keep')='keep'" if only_keep else ""), (shoot_id,))]
+    manual = set() if overwrite_manual else {int(r[0]) for r in db.query(
+        "SELECT e.image_id FROM edits e JOIN images i ON i.id=e.image_id WHERE i.shoot_id=? AND e.profile='manual'",
+        (shoot_id,))}
+    manual |= {int(k) for k in keep or []}
+    ids = [i for i in ids if i not in manual]
+    ctx.set_total(len(ids))
+    ctx.progress(0, f"Entwickle {len(ids)} Bilder: {label(style)}")
+    for n, iid in enumerate(ids):
+        ctx.check()
+        apply_to_image(db, shoot_id, iid, style)
+        if n % 10 == 0:
+            ctx.progress(n + 1, f"{label(style)}: {n + 1}/{len(ids)}")
+    ctx.progress(len(ids), "Entwicklung fertig")
 
 
 def user_changed(predicted: dict[str, Any], final: dict[str, Any]) -> bool:
