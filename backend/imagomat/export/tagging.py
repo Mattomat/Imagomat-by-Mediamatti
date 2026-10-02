@@ -65,10 +65,12 @@ def unique_target(folder: Path, name: str) -> Path:
 
 
 @job("tag_export")
-def tag_export(ctx: JobContext, shoot_id: int, target: str, only_with_people: bool = False) -> dict[str, Any]:
+def tag_export(ctx: JobContext, shoot_id: int, target: str, only_with_people: bool = False,
+               inplace: bool = False) -> dict[str, Any]:
+    """Namen schreiben. inplace: RAWs bekommen eine XMP-Datei direkt daneben (Original unverändert, vorhandene
+    Einstellungen bleiben); JPG/DNG/TIFF werden nie verändert und landen mit Namen im Zielordner."""
     db = ctx.db
     tgt = Path(target).expanduser()
-    tgt.mkdir(parents=True, exist_ok=True)
     rows = db.query("SELECT id, path, filename, orientation, width, height FROM images WHERE shoot_id=? "
                     "ORDER BY capture_time, filename", (shoot_id,))
     kw = load_settings().keywords
@@ -79,6 +81,7 @@ def tag_export(ctx: JobContext, shoot_id: int, target: str, only_with_people: bo
         ensure_tags(db, [r["id"] for r in rows])
     ctx.set_total(len(rows))
     written = named = 0
+    in_place = 0
     for i, r in enumerate(rows):
         ctx.check()
         src = Path(r["path"])
@@ -87,6 +90,18 @@ def tag_export(ctx: JobContext, shoot_id: int, target: str, only_with_people: bo
             ctx.progress(i + 1)
             continue
         try:
+            if inplace and src.suffix.lower() not in JPEG_EXT and src.suffix.lower() not in (".dng", ".tif", ".tiff"):
+                side = src.with_suffix(".xmp")
+                existing = side.read_bytes() if side.exists() else None
+                doc = tagged_doc(db, r["id"], existing, None, with_regions=False)
+                side.write_bytes(serialize(doc, existing, include_parent_keywords=kw.write_parent_keywords,
+                                           replace_develop=False))
+                written += 1
+                in_place += 1
+                named += bool(people)
+                ctx.progress(i + 1, f"Namen schreiben {i + 1}/{len(rows)}")
+                continue
+            tgt.mkdir(parents=True, exist_ok=True)
             if src.suffix.lower() in JPEG_EXT:
                 with Image.open(src) as im:
                     dims = im.size
@@ -113,8 +128,10 @@ def tag_export(ctx: JobContext, shoot_id: int, target: str, only_with_people: bo
             log.warning("Namen schreiben fehlgeschlagen für %s: %s", src.name, e, exc_info=True)
         ctx.progress(i + 1, f"Namen schreiben {i + 1}/{len(rows)}")
     db.update_shoot_settings(shoot_id, last_tag_export=str(tgt))
-    ctx.progress(len(rows), f"{written} Bilder gespeichert, davon {named} mit Namen -> {tgt}")
-    return {"target": str(tgt), "written": written, "named": named}
+    where = f"{in_place} direkt neben den RAWs" + (f", {written - in_place} in {tgt.name}" if written > in_place else "") \
+        if inplace else str(tgt)
+    ctx.progress(len(rows), f"{written} Bilder gespeichert, davon {named} mit Namen ({where}) -> {tgt}")
+    return {"target": str(tgt), "written": written, "named": named, "in_place": in_place}
 
 
 def safe_folder_name(name: str) -> str:

@@ -402,3 +402,8 @@ table.list td { border-bottom: 1px solid var(--line); padding: 7px 4px; font-siz
 .exp-foot { grid-column: 1 / -1; align-items: center; }
 .exp-foot .spacer { flex: 1; }
 input[type="radio"] { width: auto; margin-right: 8px; accent-color: var(--accent); }
+.cell-names { color: var(--text); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.lib-who { display: block; }
+.who-panel { max-width: 1200px; }
+.who-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
+.lib-actions button.on { border-color: var(--accent); color: var(--accent); }

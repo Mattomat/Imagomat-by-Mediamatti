@@ -81,6 +81,7 @@ export interface ImageItem {
   rendered?: boolean;
   hand_edited?: boolean;
   edited?: boolean;
+  faces?: number;
   preset: string | null;
   moment: string | null;
   action: number | null;

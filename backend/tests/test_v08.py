@@ -153,3 +153,36 @@ def test_camera_profile_matches_original(tmp_path: Path):
         d = np.abs(img.astype(np.float32) - pre.astype(np.float32)).mean()
         assert d < 10, d                                                  # bei 0 wie das Original
         assert not c.get(f"/api/shoots/{sid}/images").json()[0]["edited"]
+
+
+def test_tag_export_inplace_raw_sidecar(tmp_path: Path):
+    import shutil
+
+    from imagomat.db import Database
+    from imagomat.export.tagging import tag_export
+    from imagomat.jobs import JobContext
+    from imagomat.lightroom.xmp import read_xmp
+    from imagomat.people.registry import upsert_person
+
+    from .synth import write_shoot
+
+    write_shoot(tmp_path / "s", n=2)
+    dng = sorted((tmp_path / "s").glob("*.dng"))[0]
+    arw = dng.with_suffix(".ARW")
+    shutil.move(dng, arw)
+    original = arw.read_bytes()
+    db = Database(tmp_path / "a.db")
+    from imagomat.analysis import import_folder
+
+    sid = import_folder(db, tmp_path / "s")
+    iid = db.one("SELECT id FROM images WHERE path=?", (str(arw),))["id"]
+    pid = upsert_person(db, "Max Muster", "FCW", "7")
+    with db.tx() as c:
+        c.execute("INSERT INTO numbers(image_id, text, confidence, bbox, person_id) VALUES(?,?,?,?,?)",
+                  (iid, "7", 0.9, "[0.3,0.4,0.35,0.5]", pid))
+    jid = db.create_job("tag_export", sid, {})
+    res = tag_export(JobContext(db, jid), sid, str(tmp_path / "out"), inplace=True)
+    assert res["in_place"] == 1
+    assert "Max Muster" in read_xmp(arw.with_suffix(".xmp")).keywords
+    assert arw.read_bytes() == original                       # Original unverändert
+    assert list((tmp_path / "out").glob("*.dng"))              # DNG nie verändert: Kopie mit Namen

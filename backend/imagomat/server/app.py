@@ -497,7 +497,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if not body.get("target"):
             raise HTTPException(400, "Zielordner fehlt")
         return {"job_id": jobs.submit("tag_export", sid, target=body["target"],
-                                      only_with_people=bool(body.get("only_with_people"))),
+                                      only_with_people=bool(body.get("only_with_people")),
+                                      inplace=bool(body.get("inplace"))),
                 "target": body["target"]}
 
     @app.post("/api/lightroom/open")
