@@ -1,0 +1,25 @@
+# Imagomat
+
+> Imagomat ist eine Desktop-App für Mac und Windows von Mediamatti, die Personen und Bildinhalte auf Fotos automatisch erkennt und als Namen und Stichwörter in die Metadaten der Bilder und in Adobe Lightroom Classic schreibt. Sie ersetzt das stundenlange Verschlagworten Bild für Bild. Die Erkennung läuft lokal, Fotos werden nicht hochgeladen.
+
+## Was Imagomat macht
+- Erkennt Gesichter und fasst gleiche Personen zu Gruppen zusammen; ein Name pro Gruppe gilt für alle Bilder dieser Person. Benannte Personen werden in späteren Shoots wiedererkannt.
+- Teamlisten (CSV) importieren oder ohne Liste starten; Rückennummern helfen, wenn kein Gesicht sichtbar ist.
+- Eigene Stichwörter für Objekte und Szenen (z. B. Fans, Maskottchen, Brautstrauss, Bühne): Imagomat schlägt passende Bilder per Beschreibung oder Beispielbild vor; man bestätigt oder verwirft. Fertige Listen für Fussball, Hochzeit und Events.
+- Schreibt Standard-Metadaten: IPTC "Person im Bild" (Iptc4xmpExt:PersonInImage), Stichwörter (dc:subject, lr:hierarchicalSubject) und Gesichtsbereiche (MWG Regions). Bei JPG in der Datei, bei RAW als XMP-Datei daneben. Originale werden nie verändert.
+- Lightroom Classic: Namen und Stichwörter aus einem Katalog übernehmen, in den Katalog zurückschreiben (mit Sicherung) oder als neuen Lightroom-Katalog speichern.
+- Nutzen: Namen stehen beim Hochladen in Bilddatenbanken, Medienportale, Agenturen und Kunden-Galerien automatisch in den Metadaten.
+
+## Für wen
+Sport- und Vereinsfotografen, Hochzeitsfotografen, Event- und Firmenfotografen, Schul- und Kitafotografen, Agenturen und Bildarchive, Fotoclubs.
+
+## Systemvoraussetzungen
+- Mac mit Apple-Chip (M1 oder neuer), macOS 13 oder neuer
+- Windows 10 oder 11, 64 Bit
+- RAW (u. a. Sony inkl. A7 V, Canon, Nikon, Fujifilm), JPG, TIFF, DNG
+
+## Links
+- Website und Download: https://imagomat.mediamatti.ch/
+- Installationsanleitung: https://imagomat.mediamatti.ch/#installieren
+- Häufige Fragen: https://imagomat.mediamatti.ch/#fragen
+- Herausgeber: Mediamatti, https://mediamatti.ch

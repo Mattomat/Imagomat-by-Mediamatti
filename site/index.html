@@ -33,6 +33,9 @@
  "description":"Personen und Bildinhalte automatisch erkennen und als Stichwörter nach Lightroom bringen.",
  "publisher":{"@type":"Organization","name":"Mediamatti","url":"https://mediamatti.ch"}}
 </script>
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Was ist Imagomat?", "acceptedAnswer": {"@type": "Answer", "text": "Imagomat ist eine App für Mac und Windows, die Personen und Bildinhalte auf Fotos erkennt. Du bestätigst die Vorschläge mit einem Klick, danach stehen Namen und Stichwörter in den Metadaten der Bilder und in Lightroom Classic. So musst du Fotos nicht mehr Bild für Bild verschlagworten."}}, {"@type": "Question", "name": "Funktioniert Imagomat mit Lightroom Classic?", "acceptedAnswer": {"@type": "Answer", "text": "Ja. Imagomat übernimmt Namen und Stichwörter aus deinem Lightroom-Katalog und schreibt neue zurück: direkt in den Katalog (mit Sicherung), als neuen Katalog oder als XMP-Dateien neben den RAWs, die Lightroom mit „Metadaten aus Datei lesen“ übernimmt."}}, {"@type": "Question", "name": "Werden meine Fotos hochgeladen?", "acceptedAnswer": {"@type": "Answer", "text": "Nein. Die Erkennung läuft lokal auf deinem Computer. Es gibt keine Cloud und kein Konto. Nur beim ersten Start lädt die App ihre KI-Bausteine aus dem Internet."}}, {"@type": "Question", "name": "Wie kommen die Namen in eine Bilddatenbank?", "acceptedAnswer": {"@type": "Answer", "text": "Imagomat schreibt die Namen in Standard-Metadaten: ins IPTC-Feld „Person im Bild“, als Stichwörter und als Gesichtsbereiche. Bilddatenbanken, Medienportale und Agenturen, die Metadaten lesen, zeigen die Namen beim Hochladen automatisch an. Beim Export aus Lightroom „Personeninfo entfernen“ ausgeschaltet lassen."}}, {"@type": "Question", "name": "Kann ich eigene Stichwörter verwenden?", "acceptedAnswer": {"@type": "Answer", "text": "Ja. Du legst eigene Stichwörter an oder nimmst fertige Listen für Fussball, Hochzeit oder Events. Mit einer Beschreibung oder ein paar Beispielbildern schlägt Imagomat alle passenden Bilder im Shoot vor."}}, {"@type": "Question", "name": "Welche Dateien und Kameras werden unterstützt?", "acceptedAnswer": {"@type": "Answer", "text": "RAW-Dateien der gängigen Kameras (zum Beispiel Sony, Canon, Nikon, Fujifilm, auch die Sony A7 V) sowie JPG, TIFF und DNG. Deine Originale verändert Imagomat nie."}}, {"@type": "Question", "name": "Was brauche ich dafür?", "acceptedAnswer": {"@type": "Answer", "text": "Einen Mac mit Apple-Chip (M1 oder neuer) und macOS 13 oder neuer, oder einen PC mit Windows 10 oder 11 (64 Bit). Lightroom Classic ist optional."}}, {"@type": "Question", "name": "Warum warnt mein Computer beim ersten Öffnen?", "acceptedAnswer": {"@type": "Answer", "text": "Imagomat ist noch nicht bei Apple und Microsoft registriert. Die Warnung lässt sich in ein paar Klicks bestätigen, die Installationsanleitung oben zeigt jeden Schritt."}}]}
+</script>
 <!--
   Hosting: diesen Ordner (site/) komplett in den Ordner der Subdomain laden und die beiden Installer dazulegen:
     Imagomat-mac.dmg            (Build-Artefakt "Imagomat-macOS")
@@ -150,6 +153,23 @@ ul.ticks li{display:flex;gap:12px}ul.ticks li::before{content:"✓";color:var(--
 .step h3{margin:14px 0 6px;font-size:18px}
 .step p{margin:0;font-size:15px;line-height:1.6;color:var(--muted)}
 .meta-split{display:grid;grid-template-columns:minmax(0,1fr);gap:40px;align-items:center}
+.cmp-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:16px;background:var(--panel)}
+.cmp{width:100%;border-collapse:collapse;font-size:15px;min-width:640px}
+.cmp th,.cmp td{text-align:left;padding:16px 20px;border-bottom:1px solid var(--line);vertical-align:top}
+.cmp tbody tr:last-child th,.cmp tbody tr:last-child td{border-bottom:0}
+.cmp thead th{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);font-weight:700}
+.cmp thead th.me{color:var(--accent)}
+.cmp tbody th{font-weight:650;color:var(--text);width:32%}
+.cmp td{color:var(--muted)}
+.cmp td.me{color:var(--text);background:rgba(240,180,60,.05)}
+.cmp .y{color:var(--accent);font-weight:800;margin-right:8px}
+.faq{display:flex;flex-direction:column;gap:10px;max-width:880px}
+.faq details{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:0 20px}
+.faq summary{cursor:pointer;list-style:none;padding:18px 0;font-weight:650;font-size:16px;display:flex;justify-content:space-between;gap:16px}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";color:var(--accent);font-weight:800;font-size:20px;line-height:1}
+.faq details[open] summary::after{content:"–"}
+.faq p{margin:0 0 18px;color:var(--soft);line-height:1.65}
 .ig-steps{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
 .final{position:relative;overflow:hidden;border-radius:22px;border:1px solid #3a3220;background:#1a1710;padding:64px 28px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:18px;margin-bottom:96px}
 .final::before{content:"";position:absolute;left:50%;top:-220px;width:700px;height:440px;margin-left:-350px;background:radial-gradient(closest-side,rgba(240,180,60,.28),rgba(240,180,60,0));pointer-events:none}
@@ -184,11 +204,14 @@ footer img{height:22px;vertical-align:middle;margin-right:8px}
 <header class="top">
 <a class="brand" href="./"><img src="logo-on-dark.svg" alt="Imagomat"><small>by Mediamatti</small></a>
 <nav class="nav">
-<a href="#so-gehts">So geht’s</a><a href="#metadaten">Metadaten</a><a href="#stichwoerter">Stichwörter</a><a href="#lightroom">Lightroom</a><a href="#installieren">Installieren</a>
+<a href="#so-gehts">So geht’s</a><a href="#metadaten">Metadaten</a><a href="#stichwoerter">Stichwörter</a><a href="#mehrwert">Lightroom</a><a href="#installieren">Installieren</a>
 <a class="cta" href="#download">Download</a>
 </nav>
 </header>
+</div>
 
+<main>
+<div class="wrap">
 <div class="hero">
 <div>
 <div class="pill"><i></i>Für Lightroom Classic · Mac und Windows</div>
@@ -357,6 +380,16 @@ footer img{height:22px;vertical-align:middle;margin-right:8px}
 <h3>Schreiben</h3><p>Namen als Personen, deine Stichwörter als Stichwörter: direkt in den Katalog, als neuer Katalog oder als XMP. Vor jeder Änderung am Katalog legt Imagomat eine Sicherung an.</p></div>
 </div>
 </section></div></div>
+
+<div class="wrap">
+<section class="blk" id="mehrwert" style="padding-top:0">
+<div class="head"><p class="kicker">Mehrwert zu Lightroom</p><h2>Lightroom bleibt. Imagomat nimmt dir die Fleissarbeit ab.</h2>
+<p class="sub">Imagomat ersetzt Lightroom nicht, es arbeitet ihm zu. Was in Lightroom Bild für Bild geht, erledigst du hier in Gruppen und mit Vorschlägen. Das Ergebnis landet wieder in deinem Katalog.</p></div>
+<div class="cmp-wrap"><table class="cmp">
+<thead><tr><th scope="col"></th><th scope="col">Nur Lightroom Classic</th><th scope="col" class="me">Lightroom + Imagomat</th></tr></thead>
+<tbody><tr><th scope="row">Personen auf vielen Bildern benennen</th><td>Gesichtserkennung im Katalog, Namen pro Person bestätigen</td><td class="me"><span class="y">✓</span>Gruppen bestätigen, Teamlisten aus CSV, Rückennummern als Hilfe</td></tr><tr><th scope="row">Inhalts-Stichwörter (Fans, Bühne, Brautstrauss …)</th><td>von Hand, Bild für Bild</td><td class="me"><span class="y">✓</span>Vorschläge per Beschreibung oder Beispielbild, mit einem Klick bestätigt</td></tr><tr><th scope="row">IPTC-Feld „Person im Bild“</th><td>von Hand im Metadatenfeld</td><td class="me"><span class="y">✓</span>automatisch ausgefüllt</td></tr><tr><th scope="row">Fertige Stichwort-Listen für Sport, Hochzeit, Event</th><td>–</td><td class="me"><span class="y">✓</span>inklusive, plus eigene</td></tr><tr><th scope="row">Arbeiten ohne Katalog (JPG-Kopien, XMP, neuer Katalog)</th><td>–</td><td class="me"><span class="y">✓</span>inklusive</td></tr><tr><th scope="row">Bleibt alles in Lightroom?</th><td>ja</td><td class="me"><span class="y">✓</span>ja: Abgleich in beide Richtungen, Sicherung vor jeder Änderung</td></tr></tbody></table></div>
+</section>
+</div>
 
 <div class="wrap">
 <section class="blk">
@@ -543,6 +576,12 @@ footer img{height:22px;vertical-align:middle;margin-right:8px}
 
 </section>
 
+
+<div class="wrap"><section class="blk" id="fragen" style="padding-top:0">
+<div class="head"><p class="kicker">Fragen</p><h2>Häufige Fragen</h2></div>
+<div class="faq"><details><summary>Was ist Imagomat?</summary><p>Imagomat ist eine App für Mac und Windows, die Personen und Bildinhalte auf Fotos erkennt. Du bestätigst die Vorschläge mit einem Klick, danach stehen Namen und Stichwörter in den Metadaten der Bilder und in Lightroom Classic. So musst du Fotos nicht mehr Bild für Bild verschlagworten.</p></details><details><summary>Funktioniert Imagomat mit Lightroom Classic?</summary><p>Ja. Imagomat übernimmt Namen und Stichwörter aus deinem Lightroom-Katalog und schreibt neue zurück: direkt in den Katalog (mit Sicherung), als neuen Katalog oder als XMP-Dateien neben den RAWs, die Lightroom mit „Metadaten aus Datei lesen“ übernimmt.</p></details><details><summary>Werden meine Fotos hochgeladen?</summary><p>Nein. Die Erkennung läuft lokal auf deinem Computer. Es gibt keine Cloud und kein Konto. Nur beim ersten Start lädt die App ihre KI-Bausteine aus dem Internet.</p></details><details><summary>Wie kommen die Namen in eine Bilddatenbank?</summary><p>Imagomat schreibt die Namen in Standard-Metadaten: ins IPTC-Feld „Person im Bild“, als Stichwörter und als Gesichtsbereiche. Bilddatenbanken, Medienportale und Agenturen, die Metadaten lesen, zeigen die Namen beim Hochladen automatisch an. Beim Export aus Lightroom „Personeninfo entfernen“ ausgeschaltet lassen.</p></details><details><summary>Kann ich eigene Stichwörter verwenden?</summary><p>Ja. Du legst eigene Stichwörter an oder nimmst fertige Listen für Fussball, Hochzeit oder Events. Mit einer Beschreibung oder ein paar Beispielbildern schlägt Imagomat alle passenden Bilder im Shoot vor.</p></details><details><summary>Welche Dateien und Kameras werden unterstützt?</summary><p>RAW-Dateien der gängigen Kameras (zum Beispiel Sony, Canon, Nikon, Fujifilm, auch die Sony A7 V) sowie JPG, TIFF und DNG. Deine Originale verändert Imagomat nie.</p></details><details><summary>Was brauche ich dafür?</summary><p>Einen Mac mit Apple-Chip (M1 oder neuer) und macOS 13 oder neuer, oder einen PC mit Windows 10 oder 11 (64 Bit). Lightroom Classic ist optional.</p></details><details><summary>Warum warnt mein Computer beim ersten Öffnen?</summary><p>Imagomat ist noch nicht bei Apple und Microsoft registriert. Die Warnung lässt sich in ein paar Klicks bestätigen, die Installationsanleitung oben zeigt jeden Schritt.</p></details></div>
+</section></div>
+
 <div class="wrap">
 <div class="final">
 <h2>Dein Archiv, endlich auffindbar.</h2>
@@ -554,6 +593,7 @@ footer img{height:22px;vertical-align:middle;margin-right:8px}
 </div>
 </div>
 
+</main>
 <footer><div class="wrap">
 <span><img src="mark.svg" alt="">Imagomat ist ein Projekt von <a href="https://mediamatti.ch">Mediamatti</a></span>
 <span>Lightroom ist eine Marke von Adobe. Imagomat ist unabhängig und nicht mit Adobe verbunden.</span>
