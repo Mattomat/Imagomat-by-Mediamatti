@@ -57,7 +57,8 @@ label.check { display: flex; align-items: center; color: var(--text); font-size:
 .sidebar { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 14px 10px; overflow: hidden; }
 .app.native .sidebar { padding-top: 34px; }
 .sidebar .drag { position: absolute; top: 0; left: 0; right: 0; height: 30px; }
-.brand { font-weight: 800; font-size: 19px; padding: 6px 12px 16px; letter-spacing: -0.3px; }
+.brand { font-weight: 800; font-size: 19px; padding: 6px 12px 16px; letter-spacing: -0.3px; display: flex; align-items: center; gap: 10px; }
+.brand img { width: 26px; height: 26px; }
 .sidebar nav { display: flex; flex-direction: column; gap: 2px; }
 .sidebar nav button, .recent button {
   background: none; border: none; text-align: left; color: var(--muted); padding: 9px 12px; border-radius: 8px;

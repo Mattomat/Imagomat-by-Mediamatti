@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://imagomat.mediamatti.ch/sitemap.xml
