@@ -261,3 +261,14 @@ jobs:
           name: Tagmatti-Website
           path: out/
           if-no-files-found: error
+      # Ohne Windows-Installer: Chrome blockiert ZIPs mit unsignierter .exe als "gefährlich"
+      - name: Paket ohne Windows-Installer
+        run: |
+          mkdir -p out-light
+          cp -r out/. out-light/
+          rm -f out-light/*.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tagmatti-Website-ohne-Windows
+          path: out-light/
+          if-no-files-found: error
