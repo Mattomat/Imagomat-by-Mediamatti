@@ -256,10 +256,10 @@ function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; s
           <p className="success">{msg}</p>
           <ol className="steps">
             {mode === "catalog"
-              ? <li>Den neuen Katalog in <code>{target.split("/").pop()}</code> in Lightroom öffnen (Datei → Katalog öffnen).</li>
+              ? <li>Den neuen Katalog in <code>{target.split(/[\\/]/).pop()}</code> in Lightroom öffnen (Datei → Katalog öffnen).</li>
               : mode === "inplace"
               ? <li>Schon in Lightroom: Bilder markieren → <b>Metadaten → Metadaten aus Datei lesen</b>. Noch nicht: einfach importieren (<b>Hinzufügen</b>).</li>
-              : <li>In Lightroom <b>Importieren</b> → Ordner <code>{target.split("/").pop()}</code> → <b>Hinzufügen</b>.</li>}
+              : <li>In Lightroom <b>Importieren</b> → Ordner <code>{target.split(/[\\/]/).pop()}</code> → <b>Hinzufügen</b>.</li>}
           </ol>
           <div className="modal-foot">
             <button onClick={() => reveal(mode === "inplace" ? shoot.folder : target)}>Im Finder zeigen</button>

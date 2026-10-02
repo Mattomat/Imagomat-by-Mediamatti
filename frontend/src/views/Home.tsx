@@ -35,7 +35,7 @@ export default function HomeView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h: (
       setBusy(false);
     }
   };
-  const folderName = folder.split("/").filter(Boolean).pop();
+  const folderName = folder.split(/[\\/]/).filter(Boolean).pop();
 
   return (
     <div className="page home">

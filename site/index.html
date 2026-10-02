@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imagomat</title>
+<meta name="description" content="Imagomat erkennt die Personen auf deinen Fotos, du benennst sie einmal, und die Namen landen in Lightroom. Lokal auf deinem Computer, für Mac und Windows.">
+<!--
+  Hosting: Diese Datei zusammen mit den beiden Installern in denselben Ordner legen:
+    Imagomat-mac.dmg            (aus dem Build-Artefakt "Imagomat-macOS")
+    Imagomat-windows-setup.exe  (aus dem Build-Artefakt "Imagomat-Windows")
+  Andere Dateinamen oder Speicherorte: unten bei DOWNLOADS anpassen.
+-->
+<style>
+  :root {
+    --bg: #f6f5f2; --surface: #ffffff; --text: #17171a; --muted: #5d5d66; --line: #e3e1db;
+    --accent: #e0562b; --accent-ink: #ffffff; --accent-soft: #fbe6de; --shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111113; --surface: #1b1b1f; --text: #f1f0ec; --muted: #a3a2a9; --line: #2c2c32;
+      --accent: #ff7247; --accent-ink: #1a0d08; --accent-soft: #3a1f16; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #111113; --surface: #1b1b1f; --text: #f1f0ec; --muted: #a3a2a9; --line: #2c2c32;
+    --accent: #ff7247; --accent-ink: #1a0d08; --accent-soft: #3a1f16; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+  header.top { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 19px; letter-spacing: -.01em; }
+  .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; }
+  .logo svg { width: 18px; height: 18px; }
+  .by { color: var(--muted); font-weight: 500; font-size: 14px; }
+  nav a { color: var(--muted); text-decoration: none; font-size: 15px; margin-left: 18px; }
+  nav a:hover { color: var(--text); }
+
+  .hero { padding: 56px 0 40px; display: grid; grid-template-columns: 1.1fr .9fr; gap: 48px; align-items: center; }
+  .hero > * { min-width: 0; }
+  h1 { font-size: clamp(34px, 5.2vw, 54px); line-height: 1.06; letter-spacing: -.025em; margin: 0 0 18px; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .lead { font-size: 19px; color: var(--muted); margin: 0 0 28px; max-width: 34em; }
+  .dl { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 12px; padding: 13px 20px; border-radius: 12px;
+    text-decoration: none; font-weight: 600; border: 1px solid var(--line); background: var(--surface); color: var(--text);
+    box-shadow: var(--shadow); transition: transform .12s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .btn svg { width: 22px; height: 22px; flex: none; }
+  .btn small { display: block; font-weight: 500; font-size: 12.5px; opacity: .8; }
+  .fine { color: var(--muted); font-size: 13.5px; margin-top: 14px; }
+
+  .mock {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 18px;
+  }
+  .mock h3 { margin: 0 0 4px; font-size: 15px; }
+  .mock p { margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+  .group { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
+  .faces { display: flex; gap: 6px; margin-bottom: 10px; }
+  .face { width: 38px; height: 38px; border-radius: 50%; background: var(--accent-soft); display: grid; place-items: center; }
+  .face svg { width: 22px; height: 22px; color: var(--accent); }
+  .field { display: flex; gap: 8px; align-items: center; }
+  .input { flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font-size: 13.5px; background: var(--bg); }
+  .input.typed::after { content: "|"; color: var(--accent); margin-left: 1px; animation: blink 1s steps(1) infinite; }
+  .tag { font-size: 12px; padding: 4px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 600; white-space: nowrap; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  section { padding: 44px 0; }
+  h2 { font-size: 28px; letter-spacing: -.015em; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 28px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+  .card .ic { width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; margin-bottom: 12px; }
+  .card .ic svg { width: 20px; height: 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 16.5px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+
+  ol.steps { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; counter-reset: s; }
+  ol.steps li { counter-increment: s; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; font-size: 15px; color: var(--muted); }
+  ol.steps li::before { content: counter(s); display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+  ol.steps b { color: var(--text); display: block; margin-bottom: 2px; }
+
+  .install { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .install .card h3 { display: flex; align-items: center; gap: 8px; }
+  .install .card h3 svg { width: 18px; height: 18px; }
+  .install ul { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 15px; }
+  .install li { margin: 4px 0; }
+  kbd { font: 600 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; color: var(--text); }
+
+  footer { border-top: 1px solid var(--line); padding: 26px 0 40px; color: var(--muted); font-size: 13.5px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; gap: 32px; padding-top: 28px; }
+    .grid, .install { grid-template-columns: 1fr; }
+    ol.steps { grid-template-columns: 1fr 1fr; }
+    nav { display: none; }
+  }
+  @media (max-width: 480px) {
+    ol.steps { grid-template-columns: 1fr; }
+    .btn { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-apple" viewBox="0 0 24 24"><path fill="currentColor" d="M16.4 12.6c0-2.4 2-3.6 2.1-3.7-1.2-1.7-3-1.9-3.6-2-1.5-.2-3 .9-3.8.9s-2-.9-3.3-.9c-1.7 0-3.3 1-4.2 2.5-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8s2 .8 3.3.8c1.4 0 2.3-1.2 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9-.1 0-2.8-1-2.8-4.2zM14 5.2c.7-.9 1.2-2 1-3.2-1 0-2.3.7-3 1.6-.7.8-1.2 2-1.1 3.1 1.2.1 2.4-.6 3.1-1.5z"/></symbol>
+  <symbol id="i-win" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5.1 10.4 4v7.1H3V5.1zm0 13.8 7.4 1.1v-7H3v5.9zm8.4 1.2L21 21.5V13h-9.6v7.1zm0-16.2v7.2H21V2.5l-9.6 1.4z"/></symbol>
+  <symbol id="i-person" viewBox="0 0 24 24"><path fill="currentColor" d="M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zm0 2c-4.4 0-8 2.2-8 5v2h16v-2c0-2.8-3.6-5-8-5z"/></symbol>
+</svg>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="14" rx="3"/><circle cx="12" cy="13" r="3.6"/><path d="M8.5 6 10 3.8h4L15.5 6"/></svg></span>
+      Imagomat <span class="by">by Mediamatti</span>
+    </div>
+    <nav><a href="#funktionen">Funktionen</a><a href="#ablauf">So geht’s</a><a href="#download">Download</a></nav>
+  </header>
+
+  <div class="hero">
+    <div>
+      <h1>Wer ist auf dem Bild?<br><em>Einmal benennen. Fertig.</em></h1>
+      <p class="lead">Imagomat findet alle Gesichter in deinem Shoot und fasst gleiche Personen zusammen. Du tippst jeden Namen nur einmal, die Namen kommen danach in Lightroom an. Alles läuft auf deinem Computer, die Fotos bleiben bei dir.</p>
+      <div class="dl" id="download">
+        <a class="btn" data-os="mac" href="Imagomat-mac.dmg" download>
+          <svg><use href="#i-apple"/></svg><span>Für Mac laden<small>Apple-Chip (M1 oder neuer), macOS 13+</small></span>
+        </a>
+        <a class="btn" data-os="win" href="Imagomat-windows-setup.exe" download>
+          <svg><use href="#i-win"/></svg><span>Für Windows laden<small>Windows 10 / 11, 64 Bit</small></span>
+        </a>
+      </div>
+      <p class="fine">Version <span id="ver">1.2.0</span> · Beim ersten Start lädt die App einmalig ihre KI-Bausteine aus dem Internet, das dauert ein paar Minuten.</p>
+    </div>
+
+    <div class="mock" aria-hidden="true">
+      <h3>Wer ist das?</h3>
+      <p>Jede Gruppe ist eine Person. Name tippen, Enter.</p>
+      <div class="group">
+        <div class="faces"><span class="face"><svg><use href="#i-person"/></svg></span><span class="face"><svg><use href="#i-person"/></svg></span><span class="face"><svg><use href="#i-person"/></svg></span><span class="face"><svg><use href="#i-person"/></svg></span></div>
+        <div class="field"><span class="input typed">Lena Meier</span><span class="tag">38 Bilder</span></div>
+      </div>
+      <div class="group">
+        <div class="faces"><span class="face"><svg><use href="#i-person"/></svg></span><span class="face"><svg><use href="#i-person"/></svg></span><span class="face"><svg><use href="#i-person"/></svg></span></div>
+        <div class="field"><span class="input" style="color:var(--muted)">Name eingeben, Enter</span><span class="tag">21 Bilder</span></div>
+      </div>
+      <div class="group" style="margin-bottom:0">
+        <div class="faces"><span class="face"><svg><use href="#i-person"/></svg></span><span class="face"><svg><use href="#i-person"/></svg></span></div>
+        <div class="field"><span class="input" style="color:var(--muted)">Name eingeben, Enter</span><span class="tag">12 Bilder</span></div>
+      </div>
+    </div>
+  </div>
+
+  <section id="funktionen">
+    <h2>Gemacht für Fotografen mit vielen Gesichtern</h2>
+    <p class="sub">Sport, Events, Schulen, Hochzeiten: überall, wo du hunderte Bilder Personen zuordnen musst.</p>
+    <div class="grid">
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20c0-3 2.7-5 6-5s6 2 6 5M15 15.5c3 0 6 1.4 6 4.5"/></svg></div>
+        <h3>Gesichter automatisch gruppiert</h3><p>Gleiche Personen landen in einer Gruppe. Ein Name gilt für alle Bilder dieser Person.</p></div>
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/></svg></div>
+        <h3>Mit Lightroom abgleichen</h3><p>Namen, die du in Lightroom schon vergeben hast, übernehmen, oder neue Namen direkt in deinen Katalog schreiben. Vorher legt Imagomat eine Sicherung an.</p></div>
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h10l6 6v10H4z"/><path d="M14 4v6h6M8 15h8M8 18h5"/></svg></div>
+        <h3>Als Lightroom-Katalog speichern</h3><p>Neuer Katalog mit allen Bildern und Namen, oder die Namen als XMP neben die RAWs. Deine Originale ändert die App nie.</p></div>
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 7h11M8 12h11M8 17h11M4 7h.01M4 12h.01M4 17h.01"/></svg></div>
+        <h3>Teamlisten importieren</h3><p>Kader aus einer CSV-Liste laden oder ganz neu anfangen. Bekannte Personen erkennt Imagomat beim nächsten Shoot wieder.</p></div>
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div>
+        <h3>Lokal und privat</h3><p>Keine Cloud, kein Upload. Die Erkennung läuft auf deinem Computer.</p></div>
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></div>
+        <h3>Ein Name pro Person</h3><p>Nicht mehr jedes Bild einzeln verschlagworten: ein Name pro Gruppe, und alle Bilder dieser Person haben ihn.</p></div>
+    </div>
+  </section>
+
+  <section id="ablauf">
+    <h2>So geht’s</h2>
+    <p class="sub">Vier Schritte vom Ordner bis zu Lightroom.</p>
+    <ol class="steps">
+      <li><b>Ordner reinziehen</b>RAW oder JPG, direkt von der Karte oder aus dem Archiv.</li>
+      <li><b>Personen erkennen</b>Imagomat findet die Gesichter und bildet Gruppen.</li>
+      <li><b>Namen tippen</b>Ein Name pro Gruppe, Enter, nächste Gruppe.</li>
+      <li><b>In Lightroom</b>Abgleichen, als Katalog speichern oder als XMP zu den Bildern.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Installieren</h2>
+    <p class="sub">Die App ist noch nicht bei Apple und Microsoft registriert. Beim ersten Öffnen kommt deshalb eine Warnung, so geht’s trotzdem:</p>
+    <div class="install">
+      <div class="card"><h3><svg><use href="#i-apple"/></svg>Mac</h3>
+        <ul>
+          <li>DMG öffnen, Imagomat in den Ordner <b>Programme</b> ziehen.</li>
+          <li>Beim ersten Mal: <kbd>ctrl</kbd>-Klick auf Imagomat → <b>Öffnen</b> → <b>Öffnen</b>.</li>
+          <li>Oder Systemeinstellungen → Datenschutz &amp; Sicherheit → <b>Dennoch öffnen</b>.</li>
+        </ul></div>
+      <div class="card"><h3><svg><use href="#i-win"/></svg>Windows</h3>
+        <ul>
+          <li>Installer starten. Keine Admin-Rechte nötig.</li>
+          <li>Meldet SmartScreen „Der Computer wurde geschützt“: <b>Weitere Informationen</b> → <b>Trotzdem ausführen</b>.</li>
+          <li>Imagomat danach aus dem Startmenü öffnen.</li>
+        </ul></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>© <span id="year">2026</span> Mediamatti · Imagomat</span>
+    <span>Lightroom ist eine Marke von Adobe. Imagomat ist ein unabhängiges Programm und nicht mit Adobe verbunden.</span>
+  </footer>
+</div>
+
+<script>
+  // Passenden Download hervorheben
+  (function () {
+    var ua = navigator.userAgent || "";
+    var os = /Windows/i.test(ua) ? "win" : /Mac/i.test(ua) ? "mac" : null;
+    var btns = document.querySelectorAll(".btn[data-os]");
+    var hit = false;
+    btns.forEach(function (b) { if (b.dataset.os === os) { b.classList.add("primary"); hit = true; } });
+    if (!hit && btns[0]) btns[0].classList.add("primary");
+    if (os === "win" && btns[1]) btns[1].parentNode.insertBefore(btns[1], btns[0]);
+    document.getElementById("year").textContent = new Date().getFullYear();
+  })();
+</script>
+</body>
+</html>

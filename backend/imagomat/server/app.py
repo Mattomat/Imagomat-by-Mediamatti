@@ -353,6 +353,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
         path = Path(body["path"]).expanduser()
         if not path.exists():
             raise HTTPException(404, "Ordner nicht gefunden")
+        if sys.platform == "win32":
+            import os
+
+            os.startfile(str(path))  # noqa: S606 - Explorer
+            return {"ok": True}
         cmd = ["open", str(path)] if sys.platform == "darwin" else ["xdg-open", str(path)]
         subprocess.Popen(cmd)
         return {"ok": True}

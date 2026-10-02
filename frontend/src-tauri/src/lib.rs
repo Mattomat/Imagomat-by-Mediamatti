@@ -1,8 +1,8 @@
 //! Tauri-Hülle für Imagomat.
 //!
 //! Beim ersten Start (bzw. nach einem App-Update) richtet die App ihre Python-Laufzeit ein:
-//! Der mitgelieferte Python-Code wird nach ~/Library/Application Support/Imagomat/runtime
-//! kopiert, `uv` (liegt im App-Bundle) erstellt dort eine Python-Umgebung und installiert
+//! Der mitgelieferte Python-Code wird in den Datenordner kopiert (macOS: ~/Library/Application
+//! Support/Imagomat/runtime, Windows: %APPDATA%\\Imagomat\\runtime), `uv` (liegt im App-Bundle) erstellt dort eine Python-Umgebung und installiert
 //! die Pakete. Danach startet das Backend auf 127.0.0.1:8765.
 //! Fortschritt geht als Event "setup" an die Oberfläche.
 //!
@@ -30,6 +30,20 @@ const ML_PACKAGES: &[&str] = &[
     "pyobjc-framework-Quartz>=10.0",
     "insightface>=0.7.3",
 ];
+/// Nur auf dem Mac sinnvoll (Apple Vision, Core Image).
+const MAC_ONLY: &[&str] = &["ocrmac", "pyobjc"];
+
+/// Befehl ohne Konsolenfenster (Windows öffnet sonst für jeden Aufruf ein schwarzes Fenster).
+fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut c = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    c
+}
 
 #[derive(Clone, Serialize, Default)]
 struct SetupEvent {
@@ -61,7 +75,7 @@ fn emit(app: &AppHandle, stage: &str, message: &str, progress: f32, done: bool, 
     let _ = app.emit("setup", evt);
 }
 
-/// Einrichtungsprotokoll in ~/Library/Application Support/Imagomat/logs/setup.log
+/// Einrichtungsprotokoll in <Datenordner>/logs/setup.log
 fn log_setup(line: &str) {
     use std::io::Write;
     let dir = data_root().join("logs");
@@ -77,14 +91,31 @@ fn setup_status(state: tauri::State<AppState>) -> SetupEvent {
     state.last.lock().unwrap().clone()
 }
 
+/// Gleicher Ordner wie im Backend (imagomat.config.data_dir).
 fn data_root() -> PathBuf {
+    if cfg!(windows) {
+        let base = std::env::var("APPDATA").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".into());
+        return PathBuf::from(base).join("Imagomat");
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join("Library/Application Support/Imagomat")
+}
+
+/// Python der App-Umgebung (Windows: Scripts\\python.exe).
+fn venv_python(venv: &Path) -> PathBuf {
+    if cfg!(windows) {
+        venv.join("Scripts").join("python.exe")
+    } else {
+        venv.join("bin").join("python")
+    }
 }
 
 /// PATH für GUI-Apps um Homebrew ergänzen (z. B. für ExifTool).
 fn gui_path() -> String {
     let base = std::env::var("PATH").unwrap_or_default();
+    if cfg!(windows) {
+        return base;
+    }
     format!("/opt/homebrew/bin:/usr/local/bin:{base}")
 }
 
@@ -137,7 +168,7 @@ fn run_logged(app: &AppHandle, stage: &str, progress: f32, cmd: &mut Command) ->
 /// macOS-Quarantäne-Markierung entfernen (sonst kann Gatekeeper den Start blockieren).
 fn prepare_uv(res: &Path, runtime: &Path) -> Result<PathBuf, String> {
     let src = res.join("bin").join("uv");
-    let dst = runtime.join("bin").join("uv");
+    let dst = runtime.join("bin").join(if cfg!(windows) { "uv.exe" } else { "uv" });
     fs::create_dir_all(runtime.join("bin")).map_err(|e| e.to_string())?;
     fs::copy(&src, &dst).map_err(|e| format!("uv kopieren: {e}"))?;
     #[cfg(unix)]
@@ -165,15 +196,24 @@ fn install_bundled_wheels(app: &AppHandle, uv: &Path, python: &Path, dir: &Path)
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
         let package = name.split('-').next().unwrap_or("").to_string();
-        let installed = run_logged(
-            app,
-            stage,
-            0.28,
-            Command::new(uv).args(["pip", "install", "--reinstall", "--no-deps", "--python"]).arg(python).arg(&path),
-        );
+        // rawpy ohne Abhängigkeiten (numpy ist schon da), andere Pakete (insightface unter Windows) mit
+        let mut cmd = command(uv);
+        cmd.args(["pip", "install", "--reinstall"]);
+        if package == "rawpy" {
+            cmd.arg("--no-deps");
+        }
+        let installed = run_logged(app, stage, 0.28, cmd.arg("--python").arg(python).arg(&path));
+        if let Err(e) = &installed {
+            emit(app, stage, &format!("{name}: {e}"), 0.28, false, false);
+        }
+        if package != "rawpy" {
+            // z. B. insightface (Windows): braucht onnxruntime, das erst später kommt -> hier nicht laden
+            continue;
+        }
+        let check = "import rawpy, importlib; importlib.import_module('rawpy._rawpy')";
         let loads = installed.is_ok()
-            && Command::new(python)
-                .args(["-c", &format!("import {package}, importlib; importlib.import_module('{package}._{package}')")])
+            && command(python)
+                .args(["-c", check])
                 .env("PATH", gui_path())
                 .output()
                 .map(|o| o.status.success())
@@ -184,7 +224,7 @@ fn install_bundled_wheels(app: &AppHandle, uv: &Path, python: &Path, dir: &Path)
                 app,
                 stage,
                 0.28,
-                Command::new(uv).args(["pip", "install", "--reinstall", "--python"]).arg(python).arg(&package),
+                command(uv).args(["pip", "install", "--reinstall", "--python"]).arg(python).arg(&package),
             );
         }
     }
@@ -194,7 +234,7 @@ fn bootstrap(app: &AppHandle) -> Result<PathBuf, String> {
     let res = app.path().resource_dir().map_err(|e| e.to_string())?;
     let runtime = data_root().join("runtime");
     let venv = runtime.join("venv");
-    let python = venv.join("bin").join("python");
+    let python = venv_python(&venv);
     let version = app.package_info().version.to_string();
     let marker = runtime.join("version.txt");
     let installed = fs::read_to_string(&marker).unwrap_or_default();
@@ -212,28 +252,33 @@ fn bootstrap(app: &AppHandle) -> Result<PathBuf, String> {
             app,
             "Python einrichten",
             0.08,
-            Command::new(&uv).args(["venv", "--python", "3.12"]).arg(&venv),
+            command(&uv).args(["venv", "--python", "3.12"]).arg(&venv),
         )?;
     }
     run_logged(
         app,
         "Grundpakete installieren",
         0.2,
-        Command::new(&uv)
+        command(&uv)
             .args(["pip", "install", "--python"])
             .arg(&python)
             .arg(format!("{}[scrape]", src.display())),
     )?;
     install_bundled_wheels(app, &uv, &python, &res.join("wheels"));
-    let n = ML_PACKAGES.len() as f32;
-    for (i, pkg) in ML_PACKAGES.iter().enumerate() {
+    let packages: Vec<&str> = ML_PACKAGES
+        .iter()
+        .copied()
+        .filter(|p| cfg!(target_os = "macos") || !MAC_ONLY.iter().any(|m| p.starts_with(m)))
+        .collect();
+    let n = packages.len() as f32;
+    for (i, pkg) in packages.iter().enumerate() {
         let p = 0.3 + 0.65 * (i as f32) / n;
-        let stage = format!("KI-Pakete ({}/{})", i + 1, ML_PACKAGES.len());
+        let stage = format!("KI-Pakete ({}/{})", i + 1, packages.len());
         if let Err(e) = run_logged(
             app,
             &stage,
             p,
-            Command::new(&uv).args(["pip", "install", "--python"]).arg(&python).arg(pkg),
+            command(&uv).args(["pip", "install", "--python"]).arg(&python).arg(pkg),
         ) {
             // Nicht fatal: die App nutzt dann Ersatzverfahren
             emit(app, &stage, &format!("übersprungen: {e}"), p, false, false);
@@ -248,7 +293,7 @@ fn start_backend(python: &Path) -> Result<Child, String> {
     fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
     let log = fs::File::create(logs.join("backend.log")).map_err(|e| e.to_string())?;
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
-    Command::new(python)
+    command(python)
         .args(["-m", "imagomat.cli", "serve", "--port", "8765"])
         .env("PATH", gui_path())
         .stdout(Stdio::from(log))

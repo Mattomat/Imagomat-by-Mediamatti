@@ -75,7 +75,7 @@ export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h:
     setDrop(async (paths) => {
       const csv = paths.find((p) => /\.(csv|txt)$/i.test(p));
       if (csv) {
-        const teamName = team.trim() || csv.split("/").pop()!.replace(/\.\w+$/, "").replace(/[_-]+/g, " ");
+        const teamName = team.trim() || csv.split(/[\\/]/).pop()!.replace(/\.\w+$/, "").replace(/[_-]+/g, " ");
         try {
           const r = await api.post<{ entries: unknown[] }>("/api/roster", { team: teamName, path: csv, save: true });
           ctx.toast(`${r.entries.length} Personen gespeichert (${teamName})`);
@@ -154,7 +154,7 @@ export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h:
             <>
               {catalogs.length > 0 && (
                 <button className="primary" onClick={() => learnFrom({ catalog: catalogs[0] })} title={catalogs[0]}>
-                  Übernehmen aus „{catalogs[0].split("/").pop()}“
+                  Übernehmen aus „{catalogs[0].split(/[\\/]/).pop()}“
                 </button>
               )}
               <button className={catalogs.length ? "link" : "primary"} onClick={async () => {
