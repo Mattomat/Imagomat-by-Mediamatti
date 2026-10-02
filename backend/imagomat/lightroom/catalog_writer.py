@@ -90,6 +90,24 @@ class CatalogWriter:
         self._interned: dict[tuple[str, str], int] = {}
         self.warnings: list[str] = []
 
+    @classmethod
+    def existing(cls, catalog: str | Path) -> "CatalogWriter":
+        """Bestehenden Katalog direkt bearbeiten (Aufrufer sichert ihn vorher)."""
+        self = cls.__new__(cls)
+        self.target = Path(catalog)
+        self.conn = sqlite3.connect(str(self.target))
+        self.conn.row_factory = sqlite3.Row
+        self._schema = {}
+        self._next_id = self._max_id() + 1
+        self._keyword_ids = {}
+        self._collection_ids = {}
+        self._folders = {}
+        self._roots = {}
+        self._stacks = {}
+        self._interned = {}
+        self.warnings = []
+        return self
+
     # ---- Schema-Helfer ----------------------------------------------
     def tables(self) -> set[str]:
         return {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}

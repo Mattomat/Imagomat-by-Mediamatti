@@ -186,3 +186,50 @@ def test_tag_export_inplace_raw_sidecar(tmp_path: Path):
     assert "Max Muster" in read_xmp(arw.with_suffix(".xmp")).keywords
     assert arw.read_bytes() == original                       # Original unverändert
     assert list((tmp_path / "out").glob("*.dng"))              # DNG nie verändert: Kopie mit Namen
+
+
+def test_lightroom_sync_pull_and_push(tmp_path: Path):
+    import sqlite3
+
+    from imagomat.analysis import import_folder
+    from imagomat.db import Database
+    from imagomat.lightroom.catalog_writer import CatalogPhoto, write_catalog
+    from imagomat.lightroom.sync import pull, push
+    from imagomat.people.registry import image_people
+
+    from .lrcat_fixture import make_template
+    from .synth import write_shoot
+
+    write_shoot(tmp_path / "s", n=2)
+    files = sorted((tmp_path / "s").glob("*.dng"))
+    cat = tmp_path / "c.lrcat"
+    write_catalog(make_template(tmp_path / "t.lrcat"), cat, tmp_path / "s",
+                  [CatalogPhoto(path=f, width=900, height=600) for f in files])
+    c = sqlite3.connect(cat)
+    img = c.execute("SELECT i.id_local FROM Adobe_images i JOIN AgLibraryFile f ON i.rootFile=f.id_local "
+                    "WHERE f.baseName=?", (files[0].stem,)).fetchone()[0]
+    c.execute("INSERT INTO AgLibraryKeyword (id_local, id_global, name, parent, keywordType) VALUES (900, 'K', 'Lena Lightroom', 20, 'person')")
+    c.execute("INSERT INTO AgLibraryFace (id_local, id_global, image, tl_x, tl_y, br_x, br_y) VALUES (901, 'F1', ?, 0.4, 0.2, 0.5, 0.35)", (img,))
+    c.execute("INSERT INTO AgLibraryKeywordFace (face, tag, userPick) VALUES (901, 900, 1)")
+    c.commit()
+    c.close()
+    db = Database(tmp_path / "a.db")
+    sid = import_folder(db, tmp_path / "s")
+    r = pull(db, sid, cat)
+    assert r["images"] == 1 and r["faces"] + r["image_level"] == 1
+    iid0 = db.one("SELECT id FROM images WHERE path=?", (str(files[0]),))["id"]
+    assert [p.name for p in image_people(db, iid0)] == ["Lena Lightroom"]
+    # zweite Person in Imagomat benennen und in den Katalog schreiben
+    from imagomat.people.registry import upsert_person
+
+    pid = upsert_person(db, "Max Muster", None, None)
+    iid1 = db.one("SELECT id FROM images WHERE path=?", (str(files[1]),))["id"]
+    with db.tx() as cx:
+        cx.execute("INSERT INTO numbers(image_id, text, confidence, bbox, person_id) VALUES(?,?,?,?,?)",
+                   (iid1, "#x", 1.0, "[0.1,0.1,0.2,0.2]", pid))
+    res = push(db, sid, cat)
+    assert res["keywords"] >= 1 and Path(res["backup"]).exists()
+    c = sqlite3.connect(cat)
+    names = {r[0] for r in c.execute("SELECT k.name FROM AgLibraryKeywordImage ki JOIN AgLibraryKeyword k ON k.id_local=ki.tag")}
+    assert "Max Muster" in names
+    assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

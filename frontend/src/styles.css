@@ -407,3 +407,6 @@ input[type="radio"] { width: auto; margin-right: 8px; accent-color: var(--accent
 .who-panel { max-width: 1200px; }
 .who-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
 .lib-actions button.on { border-color: var(--accent); color: var(--accent); }
+.lr-sync { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+.lr-sync .card { display: flex; flex-direction: column; gap: 6px; padding: 14px; }
+.lr-sync .card button { align-self: flex-start; margin-top: auto; }

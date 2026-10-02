@@ -501,6 +501,21 @@ def create_app(db_path: str | None = None) -> FastAPI:
                                       inplace=bool(body.get("inplace"))),
                 "target": body["target"]}
 
+    @app.post("/api/shoots/{sid}/lightroom/{direction}")
+    def lightroom_sync(sid: int, direction: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Mit einem Lightroom-Katalog synchronisieren: "pull" (Namen übernehmen) oder "push" (Namen schreiben)."""
+        cat = Path(str(body.get("catalog") or "")).expanduser()
+        if cat.suffix.lower() != ".lrcat" or not cat.exists():
+            raise HTTPException(400, "Bitte einen Lightroom-Katalog (.lrcat) wählen")
+        if direction == "push":
+            from ..lightroom.sync import catalog_open
+
+            if catalog_open(cat):
+                raise HTTPException(409, "Lightroom hat diesen Katalog geöffnet – bitte Lightroom beenden")
+        if direction not in ("pull", "push"):
+            raise HTTPException(404)
+        return {"job_id": jobs.submit(f"lr_{direction}", sid, catalog=str(cat))}
+
     @app.post("/api/lightroom/open")
     def lightroom_open(body: dict[str, str]) -> dict[str, Any]:
         """Ordner an Lightroom Classic übergeben: öffnet den Import-Dialog mit diesem Ordner."""

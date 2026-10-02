@@ -136,3 +136,26 @@ def tag_export(ctx: JobContext, shoot_id: int, target: str, only_with_people: bo
 
 def safe_folder_name(name: str) -> str:
     return re.sub(r"[/:\\]", "-", name).strip() or "Imagomat"
+
+
+@job("lr_pull")
+def lr_pull(ctx: JobContext, shoot_id: int, catalog: str) -> dict[str, Any]:
+    """Namen aus Lightroom übernehmen."""
+    from ..lightroom.sync import pull
+
+    ctx.progress(0, "Lightroom-Katalog lesen …")
+    team = (ctx.db.shoot_settings(shoot_id).get("teams") or [None])[0]
+    r = pull(ctx.db, shoot_id, Path(catalog).expanduser(), team)
+    ctx.progress(1, f"Aus Lightroom: {r['faces']} Gesichter und {r['image_level']} weitere Namen in {r['images']} Bildern")
+    return r
+
+
+@job("lr_push")
+def lr_push(ctx: JobContext, shoot_id: int, catalog: str) -> dict[str, Any]:
+    """Namen in den Lightroom-Katalog schreiben (Lightroom geschlossen, Sicherung vorher)."""
+    from ..lightroom.sync import push
+
+    ctx.progress(0, "Namen in den Lightroom-Katalog schreiben …")
+    r = push(ctx.db, shoot_id, Path(catalog).expanduser())
+    ctx.progress(1, f"In Lightroom: {r['keywords']} Namen in {r['images']} Bildern (Sicherung: {Path(r['backup']).name})")
+    return r

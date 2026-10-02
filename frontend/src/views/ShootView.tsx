@@ -1,7 +1,7 @@
 // Personen benennen: Shoot als Raster/Lupe, "Wer ist das?" für Gesichtsgruppen, Namen speichern für Lightroom.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppCtx } from "../App";
-import { api, ImageItem, IS_APP, pickFolder, reveal, Shoot, waitForJob } from "../api";
+import { api, ImageItem, IS_APP, pickFile, pickFolder, reveal, Shoot, waitForJob } from "../api";
 import PeoplePanel from "../components/PeoplePanel";
 import WhoPanel from "../components/WhoPanel";
 import { Modal, Progress } from "../ui";
@@ -19,6 +19,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const [loupe, setLoupe] = useState(false);
   const [who, setWho] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [lrSync, setLrSync] = useState(false);
   const [cell, setCell] = useState(() => +stored("imagomat.cell", "210"));
   const [teamsAll, setTeamsAll] = useState<string[]>([]);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -104,6 +105,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         </div>
         <div className="lib-actions">
           <button className={who ? "on" : ""} onClick={() => setWho((w) => !w)} disabled={running}>Wer ist das?</button>
+          <button onClick={() => setLrSync(true)} disabled={running} title="Namen aus Lightroom übernehmen oder in den Katalog schreiben">Mit Lightroom abgleichen …</button>
           <button className="primary" disabled={running || items.length === 0} onClick={() => setSaving(true)}>Namen speichern …</button>
         </div>
       </header>
@@ -175,6 +177,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         {!loupe && !who && <label className="lib-size">Miniaturen <input type="range" min={130} max={420} value={cell}
           onChange={(e) => { setCell(+e.target.value); store("imagomat.cell", e.target.value); }} /></label>}
       </footer>
+      {lrSync && <LightroomSyncDialog ctx={ctx} shoot={shoot} onClose={() => setLrSync(false)} onDone={load} />}
       {saving && <TagExportDialog ctx={ctx} shoot={shoot} total={items.length} named={counts.named} onClose={() => setSaving(false)} />}
     </div>
   );
@@ -183,7 +186,8 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
 /** Namen speichern: RAW-Dateien bekommen die Namen als XMP daneben (Original unverändert), JPGs als Kopie mit Namen. */
 function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; shoot: Shoot; total: number; named: number; onClose: () => void }) {
   const parent = shoot.folder.replace(/\/[^/]+\/?$/, "");
-  const [mode, setMode] = useState<"inplace" | "copy">(stored("imagomat.tagMode", "inplace") as "inplace" | "copy");
+  const [mode, setMode] = useState<"inplace" | "copy" | "catalog">(stored("imagomat.tagMode", "inplace") as "inplace" | "copy" | "catalog");
+  const [template, setTemplate] = useState(stored("imagomat.lrTemplate", ""));
   const [root, setRoot] = useState(stored("imagomat.tagRoot", parent));
   const [folderName, setFolderName] = useState(`${shoot.name} – mit Namen`);
   const [onlyPeople, setOnlyPeople] = useState(false);
@@ -196,7 +200,10 @@ function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; s
     setState("busy");
     store("imagomat.tagMode", mode);
     try {
-      const r = await api.post<{ job_id: number }>(`/api/shoots/${shoot.id}/tag-export`, { target, only_with_people: onlyPeople, inplace: mode === "inplace" });
+      const r = mode === "catalog"
+        ? await api.post<{ job_id: number; target: string }>(`/api/shoots/${shoot.id}/export`, {
+          target, formats: ["xmp", "catalog"], copy_mode: "hardlink", include_rejected: true, template })
+        : await api.post<{ job_id: number }>(`/api/shoots/${shoot.id}/tag-export`, { target, only_with_people: onlyPeople, inplace: mode === "inplace" });
       ctx.refreshJobs();
       const j = await waitForJob(r.job_id, (x) => setProgress(x.total ? x.progress / x.total : 0));
       if (j.status !== "done") throw new Error(j.error?.split("\n")[0] ?? "Speichern fehlgeschlagen");
@@ -217,7 +224,16 @@ function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; s
             Direkt zu den Bildern (RAW: XMP-Datei daneben, Original bleibt unverändert)</label>
           <label className="check"><input type="radio" checked={mode === "copy"} onChange={() => setMode("copy")} />
             Kopie in einen neuen Ordner (JPGs mit Namen in der Datei)</label>
-          {(mode === "copy") && <>
+          <label className="check"><input type="radio" checked={mode === "catalog"} onChange={() => setMode("catalog")} />
+            Neuer Lightroom-Katalog (Bilder + Namen, direkt in Lightroom öffnen)</label>
+          {mode === "catalog" && <>
+            <label>Leerer Vorlagen-Katalog aus deiner Lightroom-Version (einmalig: Lightroom → Datei → Neuer Katalog, dann Lightroom schliessen)</label>
+            <div className="row">
+              <input value={template} placeholder="…/Leer.lrcat" onChange={(e) => { setTemplate(e.target.value); store("imagomat.lrTemplate", e.target.value); }} />
+              <button onClick={async () => { const f = await pickFile(["lrcat"], "Leeren Lightroom-Katalog wählen"); if (f) { setTemplate(f); store("imagomat.lrTemplate", f); } }}>Wählen…</button>
+            </div>
+          </>}
+          {(mode === "copy" || mode === "catalog") && <>
             <label>Ordner (wird gemerkt)</label>
             <div className="row">
               <input value={root} onChange={(e) => { setRoot(e.target.value); store("imagomat.tagRoot", e.target.value); }} />
@@ -230,7 +246,7 @@ function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; s
           <label className="check"><input type="checkbox" checked={onlyPeople} onChange={(e) => setOnlyPeople(e.target.checked)} /> nur Bilder mit erkannten Personen</label>
           <div className="modal-foot">
             <button className="ghost" onClick={onClose}>Abbrechen</button>
-            <button className="primary" onClick={go}>Speichern</button>
+            <button className="primary" disabled={mode === "catalog" && !template} onClick={go}>Speichern</button>
           </div>
         </>
       )}
@@ -239,7 +255,9 @@ function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; s
         <>
           <p className="success">{msg}</p>
           <ol className="steps">
-            {mode === "inplace"
+            {mode === "catalog"
+              ? <li>Den neuen Katalog in <code>{target.split("/").pop()}</code> in Lightroom öffnen (Datei → Katalog öffnen).</li>
+              : mode === "inplace"
               ? <li>Schon in Lightroom: Bilder markieren → <b>Metadaten → Metadaten aus Datei lesen</b>. Noch nicht: einfach importieren (<b>Hinzufügen</b>).</li>
               : <li>In Lightroom <b>Importieren</b> → Ordner <code>{target.split("/").pop()}</code> → <b>Hinzufügen</b>.</li>}
           </ol>
@@ -250,6 +268,62 @@ function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; s
           </div>
         </>
       )}
+    </Modal>
+  );
+}
+
+/** Mit einem Lightroom-Katalog abgleichen: Namen übernehmen oder hineinschreiben. */
+function LightroomSyncDialog({ ctx, shoot, onClose, onDone }: { ctx: AppCtx; shoot: Shoot; onClose: () => void; onDone: () => void }) {
+  const [catalogs, setCatalogs] = useState<string[]>([]);
+  const [cat, setCat] = useState(stored("imagomat.lrCatalog", ""));
+  const [busy, setBusy] = useState<"" | "pull" | "push">("");
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    api.get<{ catalogs: string[] }>("/api/overview").then((o) => {
+      setCatalogs(o.catalogs);
+      if (!cat && o.catalogs[0]) setCat(o.catalogs[0]);
+    }).catch(() => undefined);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const run = async (dir: "pull" | "push") => {
+    setBusy(dir); setMsg("");
+    store("imagomat.lrCatalog", cat);
+    try {
+      const r = await api.post<{ job_id: number }>(`/api/shoots/${shoot.id}/lightroom/${dir}`, { catalog: cat });
+      ctx.refreshJobs();
+      const j = await waitForJob(r.job_id);
+      if (j.status !== "done") throw new Error(j.error?.split("\n")[0] ?? "Abgleich fehlgeschlagen");
+      setMsg(j.message ?? "Fertig");
+      onDone();
+    } catch (e) { ctx.toast((e as Error).message, "error"); } finally { setBusy(""); }
+  };
+  return (
+    <Modal title="Mit Lightroom abgleichen" onClose={onClose}>
+      <label>Lightroom-Katalog</label>
+      <div className="row">
+        <select value={cat} onChange={(e) => setCat(e.target.value)}>
+          {!catalogs.includes(cat) && cat && <option value={cat}>{cat}</option>}
+          {catalogs.map((c) => <option key={c} value={c}>{c}</option>)}
+          {!cat && <option value="">– Katalog wählen –</option>}
+        </select>
+        <button onClick={async () => { const f = await pickFile(["lrcat"], "Lightroom-Katalog wählen"); if (f) setCat(f); }}>Wählen…</button>
+      </div>
+      <div className="lr-sync">
+        <div className="card">
+          <b>Namen aus Lightroom übernehmen</b>
+          <p className="hint">Gesichter, die du in Lightroom schon benannt hast, kommen auf dieselben Bilder hier. Lightroom darf offen sein.</p>
+          <button disabled={!cat || !!busy} onClick={() => run("pull")}>{busy === "pull" ? "liest …" : "Übernehmen"}</button>
+        </div>
+        <div className="card">
+          <b>Namen in Lightroom schreiben</b>
+          <p className="hint">Die Namen kommen als Personen-Stichwörter direkt in den Katalog (nur Bilder, die dort schon sind).
+            Lightroom vorher beenden – der Katalog wird zuerst gesichert.</p>
+          <button className="primary" disabled={!cat || !!busy} onClick={() => run("push")}>{busy === "push" ? "schreibt …" : "Schreiben"}</button>
+        </div>
+      </div>
+      {msg && <p className="success">{msg}</p>}
+      <p className="hint">Die Gesichtsbereiche selbst bekommt Lightroom über „Namen speichern“ (XMP) und dort „Metadaten aus Datei lesen“.</p>
+      <div className="modal-foot"><button onClick={onClose}>Schliessen</button></div>
     </Modal>
   );
 }
