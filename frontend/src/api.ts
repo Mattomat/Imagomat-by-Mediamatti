@@ -76,6 +76,7 @@ export interface ImageItem {
   denoise: number | null;
   people: string[];
   tags?: string[];
+  keywords?: string[];
   notes: string[];
   edit_v?: number;
   rendered?: boolean;

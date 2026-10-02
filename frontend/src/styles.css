@@ -410,3 +410,33 @@ input[type="radio"] { width: auto; margin-right: 8px; accent-color: var(--accent
 .lr-sync { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
 .lr-sync .card { display: flex; flex-direction: column; gap: 6px; padding: 14px; }
 .lr-sync .card button { align-self: flex-start; margin-top: auto; }
+
+/* Eigene Stichwörter */
+.kw-add { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(220px, 2fr) auto; gap: 8px; margin-bottom: 10px; }
+.kw-themes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 16px; font-size: 12px; }
+.kw-themes button.small { margin: 0; }
+.kw-list { display: flex; flex-direction: column; gap: 6px; }
+.kw-row { display: flex; align-items: center; gap: 10px; background: var(--panel); border-radius: 10px; padding: 10px 12px; }
+.kw-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.kw-main input { padding: 4px 8px; font-size: 12px; }
+.kw-prompt { text-align: left; font-size: 12px; color: var(--muted) !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kw-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.kw-review { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.kw-sug { position: relative; padding: 0; border: 2px solid var(--accent); border-radius: 8px; overflow: hidden; background: #000; aspect-ratio: 3 / 2; }
+.kw-sug img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.kw-sug.off { border-color: transparent; }
+.kw-sug.off img { opacity: 0.3; }
+.kw-mark { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 12px; font-weight: 700; background: var(--accent); color: var(--accent-ink); }
+.kw-sug.off .kw-mark { background: var(--panel2); color: var(--muted); }
+.kw-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.kw-bar .kw-input { width: 260px; }
+.kw-chips { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.kw-chips .kw-input { width: 140px; padding: 3px 8px; font-size: 12px; }
+.kw-chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 8px; border-radius: 999px; font-size: 11px;
+  background: rgba(240, 180, 60, 0.14); color: var(--accent); font-weight: 600; }
+.kw-chip button { background: none; border: none; color: inherit; padding: 0 4px; font-size: 10px; }
+.cellx.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.cell-check { position: absolute; top: 3px; right: 6px; font-size: 11px; font-weight: 800; color: var(--accent); }
+.cell-kw { position: absolute; top: 3px; left: 28px; right: 22px; font-size: 10px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lib-actions button { white-space: nowrap; }

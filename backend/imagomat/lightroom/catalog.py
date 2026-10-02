@@ -122,6 +122,15 @@ class CatalogReader:
 
         return {i: path(i) for i in rows}
 
+    def person_keywords(self) -> set[str]:
+        """Pfade der Stichwörter vom Typ Person (Lightroom-Gesichter)."""
+        cols = _columns(self.conn, "AgLibraryKeyword")
+        if "keywordType" not in cols:
+            return set()
+        paths = self._keyword_paths()
+        return {paths[r["id_local"]] for r in self.conn.execute(
+            "SELECT id_local FROM AgLibraryKeyword WHERE keywordType='person'") if r["id_local"] in paths}
+
     def _image_keywords(self) -> dict[int, list[str]]:
         if not _columns(self.conn, "AgLibraryKeywordImage"):
             return {}

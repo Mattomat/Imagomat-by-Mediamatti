@@ -41,14 +41,39 @@ def pull(db: Database, shoot_id: int, lrcat: Path, team: str | None = None) -> d
 
     from .catalog import CatalogReader
 
+    from ..config import load_settings
+    from ..keywords import get_or_create, set_state
+
     with CatalogReader(lrcat) as cat:
         named = cat.named_faces()
+        lr_kws = {_key(i.path): i.keywords for i in cat.images(include_virtual_copies=False)}
+        person_kw = cat.person_keywords()
+    kw_by_name: dict[str, list[list[str]]] = {}
+    for p, v in lr_kws.items():
+        kw_by_name.setdefault(Path(p).name, []).append(v)
+    people_names = {n.lower() for v in named.values() for n, _ in v}
+    root = load_settings().keywords.people_root
+    skip_roots = {root.lower(), "imagomat"}
+    kw_added = 0
     by_path = {_key(p): v for p, v in named.items()}
     by_name: dict[str, list[Any]] = {}
     for p, v in named.items():
         by_name.setdefault(p.name.lower(), []).append(v)
     faces_set = images_hit = image_level = 0
     for img in db.query("SELECT id, path FROM images WHERE shoot_id=?", (shoot_id,)):
+        # Stichwörter (keine Personen, keine Imagomat-Arbeitsstichwörter) übernehmen
+        lk = lr_kws.get(_key(img["path"]))
+        if lk is None:
+            cand_k = kw_by_name.get(Path(img["path"]).name.lower()) or []
+            lk = cand_k[0] if len(cand_k) == 1 else []
+        for path in lk:
+            parts = [x for x in path.split("|") if x]
+            if not parts or parts[0].lower() in skip_roots or path in person_kw or parts[-1].lower() in people_names:
+                continue
+            kid = get_or_create(db, parts[-1], theme="lightroom")
+            if not db.one("SELECT 1 FROM image_keywords WHERE image_id=? AND keyword_id=?", (img["id"], kid)):
+                set_state(db, [img["id"]], kid, "lightroom")
+                kw_added += 1
         lr = by_path.get(_key(img["path"]))
         if lr is None:
             cand = by_name.get(Path(img["path"]).name.lower()) or []
@@ -70,11 +95,12 @@ def pull(db: Database, shoot_id: int, lrcat: Path, team: str | None = None) -> d
                         c.execute("INSERT INTO numbers(image_id, text, confidence, bbox, person_id) VALUES(?,?,?,?,?)",
                                   (img["id"], "#lr", 1.0, json.dumps(list(box)), pid))
                     image_level += 1
-    return {"images": images_hit, "faces": faces_set, "image_level": image_level,
+    return {"images": images_hit, "faces": faces_set, "image_level": image_level, "keywords": kw_added,
             "names": len({n for v in named.values() for n, _ in v})}
 
 
 def push(db: Database, shoot_id: int, lrcat: Path) -> dict[str, Any]:
+    from ..keywords import image_keywords
     from ..people.registry import image_people
     from .catalog import CatalogReader
     from .catalog_writer import CatalogWriter
@@ -93,9 +119,16 @@ def push(db: Database, shoot_id: int, lrcat: Path) -> dict[str, Any]:
         for img in db.query("SELECT id, path FROM images WHERE shoot_id=?", (shoot_id,)):
             lr_id = ids.get(_key(img["path"]))
             people = image_people(db, img["id"])
-            if lr_id is None or not people:
+            own = image_keywords(db, img["id"])
+            if lr_id is None or not (people or own):
                 continue
             images += 1
+            for name in own:
+                kid = w.keyword(name)
+                if kid is not None and not w.conn.execute(
+                        "SELECT 1 FROM AgLibraryKeywordImage WHERE image=? AND tag=?", (lr_id, kid)).fetchone():
+                    w.insert("AgLibraryKeywordImage", {"image": lr_id, "tag": kid})
+                    added += 1
             for p in people:
                 kid = w.keyword(p.name)
                 if kid is None:

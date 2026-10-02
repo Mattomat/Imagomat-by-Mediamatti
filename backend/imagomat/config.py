@@ -103,7 +103,7 @@ class KeywordSettings:
     workflow_keywords: bool = False
     # Inhalts-Stichwörter (Fans, Team, Jubel, Trainer ...): "no_person" = nur wenn keine Person erkannt,
     # "always" = immer zusätzlich, "off" = nie
-    content_keywords: str = "no_person"
+    content_keywords: str = "off"
 
 
 @dataclass

@@ -11,6 +11,7 @@ from .culling import engine
 from .export import exporter
 from .export import social  # noqa: F401  (registriert Job social)
 from .export import tagging  # noqa: F401  (registriert Job tag_export)
+from . import keywords as _keywords  # noqa: F401  (registriert Job kw_suggest)
 from .jobs import JobContext, job
 from .people import clustering
 from .people import reference  # noqa: F401  (registriert Job learn_people)

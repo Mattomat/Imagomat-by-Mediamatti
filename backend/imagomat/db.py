@@ -115,6 +115,23 @@ CREATE TABLE IF NOT EXISTS numbers (
   person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL
 );
 
+-- Eigene Stichwörter (Objekte, Szenen, Fans ...): Bibliothek + Zuordnung zu Bildern
+CREATE TABLE IF NOT EXISTS keywords (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  prompt TEXT,                     -- Beschreibung für die Suche (CLIP), optional
+  theme TEXT,                      -- Fussball | Hochzeit | Event | lightroom | NULL (eigenes)
+  created_at REAL
+);
+CREATE TABLE IF NOT EXISTS image_keywords (
+  image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+  keyword_id INTEGER NOT NULL REFERENCES keywords(id) ON DELETE CASCADE,
+  state TEXT NOT NULL,             -- manual | confirmed | lightroom | suggested | rejected
+  score REAL,
+  PRIMARY KEY (image_id, keyword_id)
+);
+CREATE INDEX IF NOT EXISTS idx_imgkw_kw ON image_keywords(keyword_id);
+
 -- "Das ist nicht X": nie wieder automatisch zuordnen (Gesicht oder ganzes Bild)
 CREATE TABLE IF NOT EXISTS person_rejects (
   image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,

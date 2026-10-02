@@ -118,6 +118,9 @@ def _items(db: Database, shoot_id: int, include_rejected: bool) -> list[ExportIt
         for p in image_people(db, r["id"]):
             it.keywords.append(p.keyword)
             it.people.append(p.name)
+        from ..keywords import image_keywords
+
+        it.keywords += [k for k in image_keywords(db, r["id"]) if k not in it.keywords]
         if kw.content_keywords == "always" or (kw.content_keywords == "no_person" and not it.people):
             it.keywords += [t for t in tag_labels(a.get("tags")) if t not in it.keywords]
         # Arbeits-Stichwörter (Behalten, Denoise, Prüfen ...) nur auf Wunsch; Standard: nur Personen

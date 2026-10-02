@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppCtx } from "../App";
 import { api, ImageItem, IS_APP, pickFile, pickFolder, reveal, Shoot, waitForJob } from "../api";
 import PeoplePanel from "../components/PeoplePanel";
+import KeywordPanel from "../components/KeywordPanel";
 import WhoPanel from "../components/WhoPanel";
 import { Modal, Progress } from "../ui";
 
@@ -17,7 +18,12 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const [person, setPerson] = useState("");
   const [sel, setSel] = useState(0);
   const [loupe, setLoupe] = useState(false);
-  const [who, setWho] = useState(false);
+  const [panel, setPanel] = useState<"" | "who" | "kw">("");
+  const who = panel !== "";
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [kwFilter, setKwFilter] = useState("");
+  const [kwNames, setKwNames] = useState<string[]>([]);
+  const anchor = useRef(0);
   const [saving, setSaving] = useState(false);
   const [lrSync, setLrSync] = useState(false);
   const [cell, setCell] = useState(() => +stored("imagomat.cell", "210"));
@@ -31,6 +37,9 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   }, [id]);
   useEffect(load, [load, ctx.tick]);
   useEffect(() => { api.get<{ teams: string[] }>("/api/overview").then((o) => setTeamsAll(o.teams)).catch(() => undefined); }, []);
+  useEffect(() => {
+    api.get<{ keywords: { name: string }[] }>("/api/keywords").then((r) => setKwNames(r.keywords.map((k) => k.name))).catch(() => undefined);
+  }, [ctx.tick, items]);
 
   const liveJob = ctx.jobs.find((j) => j.id === shoot?.job?.id);
   const job = liveJob ?? shoot?.job ?? null;
@@ -53,17 +62,47 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     items.forEach((i) => i.people.forEach((p) => m.set(p, (m.get(p) ?? 0) + 1)));
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
   }, [items]);
+  const kwCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    items.forEach((i) => (i.keywords ?? []).forEach((k) => m.set(k, (m.get(k) ?? 0) + 1)));
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [items]);
   const shown = useMemo(() => items.filter((i) => {
     if (person && !i.people.includes(person)) return false;
+    if (kwFilter && !(i.keywords ?? []).includes(kwFilter)) return false;
     if (tab === "named") return i.people.length > 0;
     if (tab === "unnamed") return (i.faces ?? 0) > 0 && i.people.length === 0;
     if (tab === "check") return isCheck(i);
     return true;
-  }), [items, tab, person]);
+  }), [items, tab, person, kwFilter]);
   const curIdx = Math.min(sel, Math.max(0, shown.length - 1));
   const cur = shown[curIdx];
   const settings = (() => { try { return JSON.parse(shoot?.settings || "{}"); } catch { return {}; } })();
   const shootTeams: string[] = settings.teams ?? [];
+
+  const onSelect = useCallback((idx: number, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
+    const id = shown[idx]?.id;
+    if (id === undefined) return;
+    if (e && (e.metaKey || e.ctrlKey)) {
+      setPicked((s) => { const n = new Set(s.size ? s : shown[sel] ? [shown[sel].id] : []); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+      anchor.current = idx;
+    } else if (e && e.shiftKey) {
+      const [a, b] = [Math.min(anchor.current, idx), Math.max(anchor.current, idx)];
+      setPicked(new Set(shown.slice(a, b + 1).map((x) => x.id)));
+    } else {
+      setPicked(new Set());
+      anchor.current = idx;
+    }
+    setSel(idx);
+  }, [shown, sel]);
+  const applyKeyword = async (name: string, ids: number[], state: "manual" | "remove" = "manual") => {
+    if (!name.trim() || ids.length === 0) return;
+    try {
+      await api.post("/api/images/keywords", { name: name.trim(), image_ids: ids, state });
+      if (state === "manual") ctx.toast(`„${name.trim()}“ für ${ids.length} ${ids.length === 1 ? "Bild" : "Bilder"}`);
+      load();
+    } catch (e) { ctx.toast((e as Error).message, "error"); }
+  };
 
   const setTeam = async (t: string) => {
     await api.patch(`/api/shoots/${id}`, { teams: t ? [t] : [] });
@@ -79,6 +118,8 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
       const t = e.target as HTMLElement;
       if (["INPUT", "SELECT", "TEXTAREA"].includes(t.tagName) || saving || who || !cur) return;
       const k = e.key;
+      if ((e.metaKey || e.ctrlKey) && (k === "a" || k === "A") && !loupe) { setPicked(new Set(shown.map((x) => x.id))); e.preventDefault(); return; }
+      if (k === "Escape" && picked.size) { setPicked(new Set()); e.preventDefault(); return; }
       const cols = gridRef.current ? Math.max(1, Math.floor(gridRef.current.clientWidth / (cell + 8))) : 5;
       if (k === "ArrowRight") setSel((s) => Math.min(shown.length - 1, s + 1));
       else if (k === "ArrowLeft") setSel((s) => Math.max(0, s - 1));
@@ -91,7 +132,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [cur, shown.length, loupe, saving, who, cell]);
+  }, [cur, shown, loupe, saving, who, cell, picked.size]);
   useEffect(() => { document.getElementById(`t-${cur?.id}`)?.scrollIntoView({ block: "nearest" }); }, [cur?.id]);
 
   if (!shoot) return <div className="page" />;
@@ -104,7 +145,9 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
           <span className="muted">{items.length} Bilder · {counts.named} mit Namen</span>
         </div>
         <div className="lib-actions">
-          <button className={who ? "on" : ""} onClick={() => setWho((w) => !w)} disabled={running}>Wer ist das?</button>
+          <button className={panel === "who" ? "on" : ""} onClick={() => setPanel((p) => (p === "who" ? "" : "who"))} disabled={running}>Wer ist das?</button>
+          <button className={panel === "kw" ? "on" : ""} onClick={() => setPanel((p) => (p === "kw" ? "" : "kw"))} disabled={running}
+            title="Eigene Stichwörter: Objekte, Szenen, Fans …">Stichwörter</button>
           <button onClick={() => setLrSync(true)} disabled={running} title="Namen aus Lightroom übernehmen oder in den Katalog schreiben">Mit Lightroom abgleichen …</button>
           <button className="primary" disabled={running || items.length === 0} onClick={() => setSaving(true)}>Namen speichern …</button>
         </div>
@@ -136,6 +179,12 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
               {people.map(([p, n]) => <option key={p} value={p}>{p} ({n})</option>)}
             </select>
           )}
+          {kwCounts.length > 0 && (
+            <select value={kwFilter} onChange={(e) => { setKwFilter(e.target.value); setSel(0); }}>
+              <option value="">Alle Stichwörter ({kwCounts.length})</option>
+              {kwCounts.map(([k, n]) => <option key={k} value={k}>{k} ({n})</option>)}
+            </select>
+          )}
           <span className="spacer" />
           {teamsAll.length > 0 && (
             <select value={shootTeams[0] ?? ""} disabled={running} title="Nur Personen dieses Teams erkennen"
@@ -147,11 +196,18 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         </div>
       )}
 
-      {who ? <div className="lib-grid lib-who"><WhoPanel ctx={ctx} shootId={id} onChanged={load} /></div>
+      {!who && !loupe && picked.size > 0 && (
+        <KeywordBar count={picked.size} names={kwNames}
+          onApply={(n) => applyKeyword(n, [...picked])} onRemove={(n) => applyKeyword(n, [...picked], "remove")}
+          common={kwCounts.map(([k]) => k).filter((k) => shown.filter((x) => picked.has(x.id)).every((x) => (x.keywords ?? []).includes(k)))}
+          onClear={() => setPicked(new Set())} />
+      )}
+      {panel === "who" ? <div className="lib-grid lib-who"><WhoPanel ctx={ctx} shootId={id} onChanged={load} /></div>
+        : panel === "kw" ? <div className="lib-grid lib-who"><KeywordPanel ctx={ctx} shootId={id} items={items} onChanged={load} /></div>
         : !loupe ? (
           <div className="lib-grid" ref={gridRef}>
             {shown.length === 0 && <div className="empty">{running ? "Bilder werden eingelesen …" : "Keine Bilder in dieser Ansicht."}</div>}
-            {shown.map((i, idx) => <Thumb key={i.id} i={i} idx={idx} selected={idx === curIdx} onSelect={setSel} onOpen={openLoupe} />)}
+            {shown.map((i, idx) => <Thumb key={i.id} i={i} idx={idx} selected={idx === curIdx} picked={picked.has(i.id)} onSelect={onSelect} onOpen={openLoupe} />)}
           </div>
         ) : cur && (
           <div className="lib-loupe">
@@ -162,6 +218,12 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
             <div className="loupe-bar">
               <span className="fname">{cur.filename}</span>
               {cur.people.length > 0 && <span className="who">{cur.people.join(", ")}</span>}
+              <span className="kw-chips">
+                {(cur.keywords ?? []).map((k) => (
+                  <span key={k} className="kw-chip">{k}<button aria-label={`${k} entfernen`} onClick={() => applyKeyword(k, [cur.id], "remove")}>✕</button></span>
+                ))}
+                <KeywordInput names={kwNames} placeholder="+ Stichwort" onSubmit={(n) => applyKeyword(n, [cur.id])} />
+              </span>
               <span className="spacer" />
               <button disabled={curIdx === 0} onClick={() => setSel(curIdx - 1)}>←</button>
               <button disabled={curIdx >= shown.length - 1} onClick={() => setSel(curIdx + 1)}>→</button>
@@ -170,9 +232,9 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
           </div>
         )}
       <footer className="lib-bottom">
-        <button className={!loupe && !who ? "on" : ""} onClick={() => { setWho(false); setLoupe(false); }} title="Raster (G)">▦</button>
-        <button className={loupe && !who ? "on" : ""} onClick={() => { setWho(false); if (cur) setLoupe(true); }} title="Lupe (E)">▢</button>
-        <span className="muted keyhint">Doppelklick: Bild öffnen und Gesichter benennen · ← → blättern · G Raster</span>
+        <button className={!loupe && !who ? "on" : ""} onClick={() => { setPanel(""); setLoupe(false); }} title="Raster (G)">▦</button>
+        <button className={loupe && !who ? "on" : ""} onClick={() => { setPanel(""); if (cur) setLoupe(true); }} title="Lupe (E)">▢</button>
+        <span className="muted keyhint">Doppelklick: Bild öffnen · ⌘/Ctrl- oder Shift-Klick: mehrere Bilder für Stichwörter wählen · ← → blättern · G Raster</span>
         <span className="spacer" />
         {!loupe && !who && <label className="lib-size">Miniaturen <input type="range" min={130} max={420} value={cell}
           onChange={(e) => { setCell(+e.target.value); store("imagomat.cell", e.target.value); }} /></label>}
@@ -219,7 +281,7 @@ function TagExportDialog({ ctx, shoot, total, named, onClose }: { ctx: AppCtx; s
     <Modal title="Namen speichern" onClose={onClose}>
       {state === "form" && (
         <>
-          <p>{named} von {total} Bildern haben Namen. Gespeichert werden Stichwörter und Gesichtsbereiche – Lightroom zeigt die Personen danach in „Personen“ und in den Stichwörtern.</p>
+          <p>{named} von {total} Bildern haben Namen. Gespeichert werden Namen, Gesichtsbereiche und deine eigenen Stichwörter – Lightroom zeigt die Personen danach in „Personen“ und alles in den Stichwörtern.</p>
           <label className="check"><input type="radio" checked={mode === "inplace"} onChange={() => setMode("inplace")} />
             Direkt zu den Bildern (RAW: XMP-Datei daneben, Original bleibt unverändert)</label>
           <label className="check"><input type="radio" checked={mode === "copy"} onChange={() => setMode("copy")} />
@@ -310,13 +372,13 @@ function LightroomSyncDialog({ ctx, shoot, onClose, onDone }: { ctx: AppCtx; sho
       </div>
       <div className="lr-sync">
         <div className="card">
-          <b>Namen aus Lightroom übernehmen</b>
-          <p className="hint">Gesichter, die du in Lightroom schon benannt hast, kommen auf dieselben Bilder hier. Lightroom darf offen sein.</p>
+          <b>Aus Lightroom übernehmen</b>
+          <p className="hint">Benannte Gesichter und Stichwörter aus Lightroom kommen auf dieselben Bilder hier. Lightroom darf offen sein.</p>
           <button disabled={!cat || !!busy} onClick={() => run("pull")}>{busy === "pull" ? "liest …" : "Übernehmen"}</button>
         </div>
         <div className="card">
-          <b>Namen in Lightroom schreiben</b>
-          <p className="hint">Die Namen kommen als Personen-Stichwörter direkt in den Katalog (nur Bilder, die dort schon sind).
+          <b>In Lightroom schreiben</b>
+          <p className="hint">Namen (als Personen) und deine Stichwörter kommen direkt in den Katalog (nur Bilder, die dort schon sind).
             Lightroom vorher beenden – der Katalog wird zuerst gesichert.</p>
           <button className="primary" disabled={!cat || !!busy} onClick={() => run("push")}>{busy === "push" ? "schreibt …" : "Schreiben"}</button>
         </div>
@@ -328,13 +390,17 @@ function LightroomSyncDialog({ ctx, shoot, onClose, onDone }: { ctx: AppCtx; sho
   );
 }
 
-const Thumb = memo(function Thumb({ i, idx, selected, onSelect, onOpen }: {
-  i: ImageItem; idx: number; selected: boolean; onSelect: (i: number) => void; onOpen: (i: number) => void;
+const Thumb = memo(function Thumb({ i, idx, selected, picked, onSelect, onOpen }: {
+  i: ImageItem; idx: number; selected: boolean; picked: boolean;
+  onSelect: (i: number, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => void; onOpen: (i: number) => void;
 }) {
+  const kws = i.keywords ?? [];
   return (
-    <div id={`t-${i.id}`} className={`cellx ${selected ? "sel" : ""}`}
-      onClick={() => onSelect(idx)} onDoubleClick={() => onOpen(idx)}>
+    <div id={`t-${i.id}`} className={`cellx ${selected ? "sel" : ""} ${picked ? "picked" : ""}`}
+      onClick={(e) => onSelect(idx, e)} onDoubleClick={() => onOpen(idx)}>
       <span className="cell-n">{idx + 1}</span>
+      {picked && <span className="cell-check">✓</span>}
+      {kws.length > 0 && <span className="cell-kw" title={kws.join(", ")}>{kws.length === 1 ? kws[0] : `${kws[0]} +${kws.length - 1}`}</span>}
       <div className="cell-img"><img loading="lazy" decoding="async" draggable={false}
         src={api.img(`/api/images/${i.id}/thumb`)} /></div>
       <div className="cell-foot">
@@ -360,3 +426,33 @@ function StageImage({ src, placeholder }: { src: string; placeholder?: string })
   );
 }
 
+
+/** Stichwort tippen mit Vorschlägen aus der Bibliothek; Enter setzt es. */
+function KeywordInput({ names, placeholder, onSubmit, autoFocus }: { names: string[]; placeholder: string; onSubmit: (n: string) => void; autoFocus?: boolean }) {
+  const [v, setV] = useState("");
+  return (
+    <>
+      <input className="kw-input" list="kw-names" value={v} placeholder={placeholder} autoFocus={autoFocus}
+        onChange={(e) => setV(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && v.trim()) { onSubmit(v); setV(""); } e.stopPropagation(); }} />
+      <datalist id="kw-names">{names.map((n) => <option key={n} value={n} />)}</datalist>
+    </>
+  );
+}
+
+/** Leiste für mehrere ausgewählte Bilder: Stichwort setzen oder entfernen. */
+function KeywordBar({ count, names, common, onApply, onRemove, onClear }: {
+  count: number; names: string[]; common: string[]; onApply: (n: string) => void; onRemove: (n: string) => void; onClear: () => void;
+}) {
+  return (
+    <div className="kw-bar">
+      <b>{count} {count === 1 ? "Bild" : "Bilder"} ausgewählt</b>
+      <KeywordInput names={names} placeholder="Stichwort tippen, Enter" onSubmit={onApply} autoFocus />
+      {common.map((k) => (
+        <span key={k} className="kw-chip">{k}<button aria-label={`${k} entfernen`} onClick={() => onRemove(k)}>✕</button></span>
+      ))}
+      <span className="spacer" />
+      <button className="ghost small" onClick={onClear}>Auswahl aufheben</button>
+    </div>
+  );
+}

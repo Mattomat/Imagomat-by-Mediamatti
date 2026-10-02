@@ -47,7 +47,9 @@ def tagged_doc(db, image_id: int, existing: bytes | None, dims: tuple[int, int] 
     mode = load_settings().keywords.content_keywords
     content = labels(db.get_analysis(image_id).get("tags")) if mode == "always" or (
         mode == "no_person" and not people) else []
-    kws = list(dict.fromkeys([*old.keywords, *people, *content]))
+    from ..keywords import image_keywords
+
+    kws = list(dict.fromkeys([*old.keywords, *people, *image_keywords(db, image_id), *content]))
     regions = list(old.regions)
     if with_regions:
         known = {r.name for r in regions}
@@ -146,7 +148,8 @@ def lr_pull(ctx: JobContext, shoot_id: int, catalog: str) -> dict[str, Any]:
     ctx.progress(0, "Lightroom-Katalog lesen …")
     team = (ctx.db.shoot_settings(shoot_id).get("teams") or [None])[0]
     r = pull(ctx.db, shoot_id, Path(catalog).expanduser(), team)
-    ctx.progress(1, f"Aus Lightroom: {r['faces']} Gesichter und {r['image_level']} weitere Namen in {r['images']} Bildern")
+    ctx.progress(1, f"Aus Lightroom: {r['faces']} Gesichter, {r['image_level']} weitere Namen und "
+                    f"{r.get('keywords', 0)} Stichwörter in {r['images']} Bildern")
     return r
 
 
@@ -157,5 +160,6 @@ def lr_push(ctx: JobContext, shoot_id: int, catalog: str) -> dict[str, Any]:
 
     ctx.progress(0, "Namen in den Lightroom-Katalog schreiben …")
     r = push(ctx.db, shoot_id, Path(catalog).expanduser())
-    ctx.progress(1, f"In Lightroom: {r['keywords']} Namen in {r['images']} Bildern (Sicherung: {Path(r['backup']).name})")
+    ctx.progress(1, f"In Lightroom: {r['keywords']} Namen und Stichwörter in {r['images']} Bildern "
+                    f"(Sicherung: {Path(r['backup']).name})")
     return r

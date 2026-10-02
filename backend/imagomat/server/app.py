@@ -458,6 +458,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "SELECT image_id, person_id FROM numbers) x JOIN persons p ON p.id=x.person_id "
                 "JOIN images i ON i.id=x.image_id WHERE i.shoot_id=?", (sid,)):
             people.setdefault(r["image_id"], []).append(r["name"])
+        from ..keywords import shoot_image_keywords
+
+        own_kws = shoot_image_keywords(db, sid)
         out = []
         for r in rows:
             a = json.loads(r["data"]) if r["data"] else {}
@@ -473,6 +476,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "moment": MOMENTS_DE.get(a.get("moment") or ""), "action": a.get("action"),
                 "people_check": a.get("people_check", []),
                 "tags": tag_labels(a.get("tags")),
+                "keywords": own_kws.get(r["id"], []),
                 "edit_v": int((r["updated_at"] or 0) * 1000) % 10_000_000,
                 "rendered": _rendered_any(r["id"], r["path"], r["updated_at"]) is not None,
                 "hand_edited": r["edit_profile"] == "manual",
@@ -520,6 +524,86 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if direction not in ("pull", "push"):
             raise HTTPException(404)
         return {"job_id": jobs.submit(f"lr_{direction}", sid, catalog=str(cat))}
+
+    # ------------------------------------------------------------------ Eigene Stichwörter
+    @app.get("/api/keywords")
+    def keywords_list() -> dict[str, Any]:
+        from .. import keywords as K
+
+        return {"keywords": K.library(db), "themes": {t: list(v) for t, v in K.THEMES.items()}}
+
+    @app.post("/api/keywords")
+    def keywords_create(body: dict[str, Any]) -> dict[str, Any]:
+        from .. import keywords as K
+
+        if body.get("theme"):
+            try:
+                return {"added": K.add_theme(db, str(body["theme"]))}
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
+        try:
+            return {"id": K.get_or_create(db, str(body.get("name") or ""), body.get("prompt") or None)}
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.patch("/api/keywords/{kid}")
+    def keywords_update(kid: int, body: dict[str, Any]) -> dict[str, Any]:
+        with db.tx() as c:
+            if "name" in body and str(body["name"]).strip():
+                try:
+                    c.execute("UPDATE keywords SET name=? WHERE id=?", (" ".join(str(body["name"]).split()), kid))
+                except Exception as e:  # noqa: BLE001 - doppelter Name
+                    raise HTTPException(409, "Dieses Stichwort gibt es schon") from e
+            if "prompt" in body:
+                c.execute("UPDATE keywords SET prompt=? WHERE id=?", (str(body["prompt"] or "").strip() or None, kid))
+        return {"ok": True}
+
+    @app.delete("/api/keywords/{kid}")
+    def keywords_delete(kid: int) -> dict[str, Any]:
+        with db.tx() as c:
+            c.execute("DELETE FROM image_keywords WHERE keyword_id=?", (kid,))
+            c.execute("DELETE FROM keywords WHERE id=?", (kid,))
+        return {"ok": True}
+
+    @app.get("/api/shoots/{sid}/keywords")
+    def shoot_keywords(sid: int) -> list[dict[str, Any]]:
+        from .. import keywords as K
+
+        return K.shoot_keywords(db, sid)
+
+    @app.post("/api/shoots/{sid}/keywords/{kid}/suggest")
+    def keywords_suggest(sid: int, kid: int) -> dict[str, Any]:
+        k = db.one("SELECT prompt FROM keywords WHERE id=?", (kid,))
+        if k is None:
+            raise HTTPException(404, "Stichwort nicht gefunden")
+        has_examples = db.one("SELECT 1 FROM image_keywords WHERE keyword_id=? AND state IN "
+                              "('manual','confirmed','lightroom')", (kid,))
+        if not k["prompt"] and not has_examples:
+            raise HTTPException(400, "Zuerst eine Beschreibung eingeben oder ein paar Bilder von Hand zuordnen")
+        return {"job_id": jobs.submit("kw_suggest", sid, keyword_id=kid)}
+
+    @app.get("/api/shoots/{sid}/keywords/{kid}/suggestions")
+    def keywords_suggestions(sid: int, kid: int) -> list[dict[str, Any]]:
+        from .. import keywords as K
+
+        return K.suggestions(db, sid, kid)
+
+    @app.post("/api/images/keywords")
+    def images_keywords(body: dict[str, Any]) -> dict[str, Any]:
+        """Stichwort für mehrere Bilder setzen. state: manual | confirmed | rejected | remove."""
+        from .. import keywords as K
+
+        ids = [int(i) for i in body.get("image_ids") or []]
+        try:
+            kid = int(body["keyword_id"]) if body.get("keyword_id") else K.get_or_create(db, str(body.get("name") or ""))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        state = body.get("state") or "manual"
+        try:
+            n = K.set_state(db, ids, kid, None if state == "remove" else state)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"keyword_id": kid, "changed": n}
 
     @app.post("/api/lightroom/open")
     def lightroom_open(body: dict[str, str]) -> dict[str, Any]:

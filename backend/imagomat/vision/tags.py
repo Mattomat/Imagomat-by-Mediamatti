@@ -89,23 +89,20 @@ def labels(keys: list[str] | None) -> list[str]:
     return [TAGS[k][0] for k in keys or [] if k in TAGS]
 
 
-def ensure_tags(db: Any, image_ids: list[int]) -> None:
-    """Stichwörter für Bilder berechnen, die noch keine (aktuellen) haben. Braucht CLIP; ohne CLIP nichts."""
+def clip_embeddings(db: Any, image_ids: list[int], progress: Any = None) -> tuple[Any, dict[int, np.ndarray]] | None:
+    """CLIP-Embeddings dieser Bilder (fehlende werden berechnet und gespeichert). Ohne CLIP: None."""
     from ..analysis import load_cached_preview
     from .embeddings import get_embedder
 
-    todo = [i for i in image_ids if db.get_analysis(i).get("tags_v") != TAGS_VERSION]
-    if not todo:
-        return
     try:
         emb = get_embedder()
     except Exception as e:  # noqa: BLE001
-        log.info("Inhalts-Stichwörter nicht verfügbar: %s", e)
-        return
+        log.info("CLIP nicht verfügbar: %s", e)
+        return None
     if getattr(emb, "name", "") != "clip":
-        return
-    stored = db.embeddings(todo)
-    missing = [i for i in todo if i not in stored or db.get_analysis(i).get("embedder") != "clip"]
+        return None
+    stored = db.embeddings(image_ids)
+    missing = [i for i in image_ids if i not in stored or db.get_analysis(i).get("embedder") != "clip"]
     for start in range(0, len(missing), 16):                 # z. B. Nur-Personen-Modus: noch ohne Embedding
         chunk = missing[start:start + 16]
         imgs, ok = [], []
@@ -119,7 +116,36 @@ def ensure_tags(db: Any, image_ids: list[int]) -> None:
         if imgs:
             for i, v in zip(ok, emb.embed(imgs)):
                 stored[i] = v
-    ids = [i for i in todo if i in stored and len(stored[i]) == len(next(iter(stored.values())))]
+                db.update_analysis(i, {"embedder": "clip"}, embedding=v)
+        if progress:
+            progress(min(start + 16, len(missing)), len(missing))
+    if stored:
+        dim = max((len(v) for v in stored.values()), key=lambda d: sum(len(v) == d for v in stored.values()))
+        stored = {i: v for i, v in stored.items() if len(v) == dim}
+    return emb, stored
+
+
+def encode_text(emb: Any, prompts: list[str]) -> np.ndarray:
+    """Text-Embeddings (normiert) für Beschreibungen."""
+    from .embeddings import _LOCK
+
+    torch = emb.torch
+    with _LOCK, torch.no_grad():
+        t = emb.model.encode_text(emb.tokenizer(prompts).to(emb.device)).float()
+        t = t / t.norm(dim=-1, keepdim=True)
+    return t.cpu().numpy()
+
+
+def ensure_tags(db: Any, image_ids: list[int]) -> None:
+    """Stichwörter für Bilder berechnen, die noch keine (aktuellen) haben. Braucht CLIP; ohne CLIP nichts."""
+    todo = [i for i in image_ids if db.get_analysis(i).get("tags_v") != TAGS_VERSION]
+    if not todo:
+        return
+    res = clip_embeddings(db, todo)
+    if res is None:
+        return
+    emb, stored = res
+    ids = [i for i in todo if i in stored]
     if not ids:
         return
     for i, t in zip(ids, classify(emb, np.stack([stored[i] for i in ids]))):
