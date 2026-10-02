@@ -119,3 +119,29 @@ def test_keywords_lightroom_pull_and_push(tmp_path: Path):
         "SELECT k.name FROM AgLibraryKeywordImage ki JOIN AgLibraryKeyword k ON k.id_local=ki.tag")}
     assert {"Pyro", "Maskottchen"} <= names
     assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_person_in_image_metadata(tmp_path: Path):
+    """Namen stehen auch im IPTC-Feld „Person im Bild“ (lesen Bilddatenbanken und Agenturen)."""
+    from imagomat.export.tagging import tag_export
+    from imagomat.io import jpegxmp
+    from imagomat.lightroom.xmp import parse_xmp
+    from imagomat.people.registry import upsert_person
+    from PIL import Image
+
+    (tmp_path / "s").mkdir()
+    Image.new("RGB", (800, 600), (90, 120, 160)).save(tmp_path / "s" / "a.jpg", quality=90)
+    db = Database(tmp_path / "a.db")
+    sid = import_folder(db, tmp_path / "s")
+    iid = db.one("SELECT id FROM images")["id"]
+    pid = upsert_person(db, "Lena Meier", None, None)
+    with db.tx() as c:
+        c.execute("INSERT INTO numbers(image_id, text, confidence, bbox, person_id) VALUES(?,?,?,?,?)",
+                  (iid, "#x", 1.0, "[0.1,0.1,0.2,0.2]", pid))
+    jid = db.create_job("tag_export", sid, {})
+    tag_export(JobContext(db, jid), sid, str(tmp_path / "out"))
+    out = next((tmp_path / "out").glob("*.jpg"))
+    doc = parse_xmp(jpegxmp.read_jpeg_xmp(out))
+    people = doc.other.get("Iptc4xmpExt:PersonInImage")
+    assert "Lena Meier" in (people if isinstance(people, list) else [people])
+    assert "Lena Meier" in doc.keywords

@@ -178,7 +178,8 @@ def _place(src: Path, dst: Path, mode: str) -> Path:
 
 def _doc(it: ExportItem, with_develop: bool) -> XmpDoc:
     return XmpDoc(rating=it.rating, label=it.label, keywords=it.keywords,
-                  crs=it.crs if with_develop else {}, regions=it.regions, region_dims=it.region_dims)
+                  crs=it.crs if with_develop else {}, regions=it.regions, region_dims=it.region_dims,
+                  people=list(it.people))
 
 
 def denoise_amount_for(it: ExportItem, denoise: str | None) -> int | None:
@@ -208,7 +209,7 @@ def export_xmp(items: list[ExportItem], target: Path, mode: str, ctx: JobContext
             if ctx:
                 ctx.progress(message=f"{'KI-Entrauschen' if amount else 'Retusche'} {it.src.name} ({i + 1}/{len(items)}) …")
             crs = {k: v for k, v in it.crs.items() if not k.startswith("Enhance")}
-            doc = XmpDoc(rating=it.rating, label=it.label, keywords=it.keywords, crs=crs, regions=it.regions,
+            doc = XmpDoc(rating=it.rating, label=it.label, keywords=it.keywords, crs=crs, regions=it.regions, people=list(it.people),
                          region_dims=it.region_dims)
             # wie Lightroom "Entrauschen": DNG neben dem Original (im Ablageort) bzw. im Export-Ordner
             folder = it.src.parent if mode == "inplace" else target
@@ -390,7 +391,7 @@ def export_rendered(items: list[ExportItem], target: Path, formats: list[str], l
                     try:
                         from ..io.jpegxmp import embed_xmp
 
-                        embed_xmp(out, serialize(XmpDoc(rating=it.rating, label=it.label, keywords=it.keywords),
+                        embed_xmp(out, serialize(XmpDoc(rating=it.rating, label=it.label, keywords=it.keywords, people=list(it.people)),
                                                  include_parent_keywords=s.keywords.write_parent_keywords))
                     except Exception as e:  # noqa: BLE001
                         log.debug("Metadaten nicht eingebettet (%s): %s", out.name, e)

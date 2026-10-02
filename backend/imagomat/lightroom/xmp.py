@@ -36,6 +36,7 @@ NS = {
     "exif": "http://ns.adobe.com/exif/1.0/",
     "photoshop": "http://ns.adobe.com/photoshop/1.0/",
     "xmpMM": "http://ns.adobe.com/xap/1.0/mm/",
+    "Iptc4xmpExt": "http://iptc.org/std/Iptc4xmpExt/2008-02-29/",
 }
 _PREFIX = {v: k for k, v in NS.items()}
 RDF = "{%s}" % NS["rdf"]
@@ -44,7 +45,7 @@ CRS = "{%s}" % NS["crs"]
 # Diese Eigenschaften verwaltet Imagomat; sie werden beim Mergen ersetzt.
 _MANAGED = {
     (NS["xmp"], "Rating"), (NS["xmp"], "Label"), (NS["dc"], "subject"), (NS["lr"], "hierarchicalSubject"),
-    (NS["mwg-rs"], "Regions"), (NS["xmp"], "MetadataDate"),
+    (NS["mwg-rs"], "Regions"), (NS["xmp"], "MetadataDate"), (NS["Iptc4xmpExt"], "PersonInImage"),
 }
 
 
@@ -65,6 +66,7 @@ class XmpDoc:
     keywords: list[str] = field(default_factory=list)   # hierarchisch mit "|"
     crs: dict[str, Any] = field(default_factory=dict)
     regions: list[FaceRegion] = field(default_factory=list)
+    people: list[str] = field(default_factory=list)       # IPTC "Person im Bild" (Bilddatenbanken lesen das)
     region_dims: tuple[int, int] | None = None
     other: dict[str, Any] = field(default_factory=dict)  # gelesene, nicht verwaltete Eigenschaften
 
@@ -277,6 +279,8 @@ def _write_managed(desc: etree._Element, doc: XmpDoc, include_parent_keywords: b
     if doc.keywords:
         _bag(desc, _q("dc", "subject"), flat_keywords(doc.keywords, include_parent_keywords))
         _bag(desc, _q("lr", "hierarchicalSubject"), doc.keywords)
+    if doc.people:
+        _bag(desc, _q("Iptc4xmpExt", "PersonInImage"), list(dict.fromkeys(doc.people)))
     if doc.regions and doc.region_dims:
         _write_regions(desc, doc)
 

@@ -43,7 +43,8 @@ def tagged_doc(db, image_id: int, existing: bytes | None, dims: tuple[int, int] 
     from ..vision.tags import labels
 
     old = parse_xmp(existing) if existing else XmpDoc()
-    people = [p.keyword for p in image_people(db, image_id)]
+    persons = image_people(db, image_id)
+    people = [p.keyword for p in persons]
     mode = load_settings().keywords.content_keywords
     content = labels(db.get_analysis(image_id).get("tags")) if mode == "always" or (
         mode == "no_person" and not people) else []
@@ -54,7 +55,12 @@ def tagged_doc(db, image_id: int, existing: bytes | None, dims: tuple[int, int] 
     if with_regions:
         known = {r.name for r in regions}
         regions += [r for r in _face_regions(db, image_id) if r.name not in known]
-    return XmpDoc(keywords=kws, regions=regions, region_dims=dims or old.region_dims)
+    names = [p.name for p in persons]
+    old_people = old.other.get("Iptc4xmpExt:PersonInImage") or []
+    if isinstance(old_people, str):
+        old_people = [old_people]
+    return XmpDoc(keywords=kws, regions=regions, region_dims=dims or old.region_dims,
+                  people=list(dict.fromkeys([*[str(x) for x in old_people], *names])))
 
 
 def unique_target(folder: Path, name: str) -> Path:
