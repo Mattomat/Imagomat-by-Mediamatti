@@ -128,3 +128,27 @@ def test_retouch_heal_remove_render_export(tmp_path: Path):
                                                        "denoise": "off", "include_rejected": False}).json()
         assert JobManager(db).run_sync(j["job_id"])["status"] == "done"
         assert list(Path(j["target"]).glob("*-Retusche.dng"))
+
+
+def test_camera_profile_matches_original(tmp_path: Path):
+    import struct
+
+    import cv2
+    import numpy as np
+    from fastapi.testclient import TestClient
+
+    from imagomat.server.app import create_app
+
+    db, dbp, sid, jm = _shoot(tmp_path)
+    iid = db.images(sid)[0]["id"]
+    with TestClient(create_app(str(dbp))) as c:
+        r = c.get(f"/api/images/{iid}/editor/source?size=400")
+        n = struct.unpack("<I", r.content[:4])[0]
+        cc = json.loads(r.content[4:4 + n])["cam_curve"]
+        assert cc and len(cc) == 3 and len(cc[0]) == 256
+        assert c.get(f"/api/images/{iid}/editor").json()["model"]["profile"] == "Camera Standard"
+        img = cv2.imdecode(np.frombuffer(c.get(f"/api/images/{iid}/render?size=600").content, np.uint8), 1)
+        pre = cv2.imdecode(np.frombuffer(c.get(f"/api/images/{iid}/preview").content, np.uint8), 1)
+        pre = cv2.resize(pre, (img.shape[1], img.shape[0]))
+        assert abs(float(img.mean()) - float(pre.mean())) < 12          # bei 0 wie das Original
+        assert not c.get(f"/api/shoots/{sid}/images").json()[0]["edited"]

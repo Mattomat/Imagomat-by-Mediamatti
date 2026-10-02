@@ -330,6 +330,10 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     })();
     return () => { cancelled = true; };
   }, [retouchKey, src, iid]);
+  // Werkzeug "Reparieren" gewählt: Bilddaten und KI-Modell schon vorbereiten
+  useEffect(() => {
+    if (tool === "heal" && iid) api.post(`/api/images/${iid}/editor/retouch/warmup`, {}).catch(() => undefined);
+  }, [tool, iid]);
   const submitRetouch = async (dabs: [number, number, number][], mode: "remove" | "heal", variant = 0, replace?: number) => {
     if (!iid || !dabs.length) return;
     setHealBusy(true);
@@ -1105,6 +1109,14 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
         <div className="dv-scroll">
           {model && tool === "edit" && <>
             <Panel id="basic" title="Grundeinstellungen" right={<button className="dv-auto-btn" onClick={autoTone} title="Automatisch wie in Lightroom (⌘U)">Auto</button>}>
+              <div className="dv-row">
+                <span className="dv-lbl">Profil</span>
+                <select value={String(model.profile ?? "Adobe Color").toLowerCase().startsWith("camera") ? "Camera Standard" : "Adobe Color"}
+                  onChange={(e) => { const v = e.target.value; update((m) => ({ ...m, profile: v })); commit(`Profil: ${v === "Camera Standard" ? "Kamera" : "Adobe Color"}`); }}>
+                  <option value="Camera Standard">Kamera (wie Original)</option>
+                  <option value="Adobe Color">Adobe Color</option>
+                </select>
+              </div>
               <div className="dv-row dv-wbrow">
                 <button className={`dv-pipette ${pipette ? "on" : ""}`} onClick={() => setPipette((p) => !p)} title="Weissabgleich-Pipette (W): auf etwas Neutrales klicken"><Ic.IcPipette size={18} /></button>
                 <span className="dv-lbl">WA:</span>

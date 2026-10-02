@@ -71,7 +71,7 @@ def crs_to_model(crs: dict[str, Any], orientation: int) -> dict[str, Any]:
         if k in crs and to_number(crs.get(k)) is not None:
             g[k] = _num(crs[k])
     model: dict[str, Any] = {"global": g, "wb_custom": str(crs.get("WhiteBalance", "As Shot")) != "As Shot",
-                             "masks": [], "curves": {}, "crop": {}}
+                             "masks": [], "curves": {}, "crop": {}, "profile": crs.get("CameraProfile") or "Adobe Color"}
     for name, key in CURVE_KEYS.items():
         pts = parse_curve(crs.get(key))
         if len(pts) >= 2:
@@ -134,6 +134,8 @@ def model_to_crs(model: dict[str, Any], base: dict[str, Any], orientation: int,
         crs["WhiteBalance"] = "As Shot"
         crs.pop("Temperature", None)
         crs.pop("Tint", None)
+    if model.get("profile"):
+        crs["CameraProfile"] = str(model["profile"])
     curves = model.get("curves")
     if isinstance(curves, dict):
         for name, key in CURVE_KEYS.items():

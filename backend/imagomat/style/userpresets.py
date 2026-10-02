@@ -26,6 +26,7 @@ META_KEYS = {"Name", "ShortName", "SortName", "Group", "Copyright", "Description
              "SupportsNormalDynamicRange", "SupportsSceneReferred", "SupportsOutputReferred", "CameraModelRestriction",
              "ContactInfo", "Version", "HasSettings", "AlreadyApplied", "RawFileName", "Amount"}
 NEUTRAL_CRS: dict[str, Any] = {
+    "CameraProfile": "Camera Standard",      # bei 0 wie das Kamera-Original (Lightroom: Kamera-Profil)
     "WhiteBalance": "As Shot", "Exposure2012": 0.0, "Contrast2012": 0, "Highlights2012": 0, "Shadows2012": 0,
     "Whites2012": 0, "Blacks2012": 0, "Texture": 0, "Clarity2012": 0, "Dehaze": 0, "Vibrance": 0, "Saturation": 0,
     "ToneCurveName2012": "Linear", "ToneCurvePV2012": ["0, 0", "255, 255"], "HasCrop": False, "CropAngle": 0.0,

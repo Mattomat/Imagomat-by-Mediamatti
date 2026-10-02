@@ -80,6 +80,7 @@ export interface ImageItem {
   edit_v?: number;
   rendered?: boolean;
   hand_edited?: boolean;
+  edited?: boolean;
   preset: string | null;
   moment: string | null;
   action: number | null;

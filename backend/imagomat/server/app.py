@@ -470,8 +470,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "edit_v": int((r["updated_at"] or 0) * 1000) % 10_000_000,
                 "rendered": _rendered_any(r["id"], r["path"], r["updated_at"]) is not None,
                 "hand_edited": r["edit_profile"] == "manual",
+                # Original, solange nichts bewusst bearbeitet wurde (neutral = wie importiert)
+                "edited": r["edit_profile"] not in (None, "neutral"),
             })
-        _prerender([o["id"] for o in out if o["decision"] == "keep"])
+        _prerender([o["id"] for o in out if o["decision"] == "keep" and o["edited"]])
         return out
 
     @app.post("/api/shoots/{sid}/export")
@@ -656,12 +658,45 @@ def create_app(db_path: str | None = None) -> FastAPI:
             return []
 
         def full() -> tuple[np.ndarray, np.ndarray]:
-            lin, info = _full_lin(iid, path)
-            return lin, np.asarray(info.camera_wb, np.float32)
+            lin, _xyz, wb, _o = _linear_hi(iid, path)
+            return lin, np.asarray(wb, np.float32)
         return ensure_patches(image_key(iid, path), ops, full)
 
-    def _with_as_shot(iid: int, crs: dict[str, Any]) -> dict[str, Any]:
-        """Bei schon weissabgeglichenen Daten (Apple RAW-Engine, Vorschau) den Aufnahme-Weissabgleich mitgeben."""
+    def _cam_curve(iid: int) -> list[list[float]] | None:
+        """Profil "Kamera": Kurven, mit denen die RAW-Entwicklung bei 0 genau wie das Kamera-Original aussieht."""
+        from ..render.pipeline import camera_curve, render
+        from ..style.userpresets import neutral_crs
+
+        a = db.get_analysis(iid) or {}
+        if a.get("camera_curve_v") == 1 and a.get("camera_curve"):
+            return a["camera_curve"]
+        r = db.one("SELECT * FROM images WHERE id=?", (iid,))
+        if not r or not raw_io.is_raw(Path(r["path"])):
+            return None
+        try:
+            lin, xyz, wb, orient = _linear(iid, Path(r["path"]))
+            crs = {**neutral_crs(), "CameraProfile": "Adobe Color"}
+            img = render(lin, xyz, wb, _with_as_shot(iid, crs, cam=False), orient, {}, 640)
+            cam = load_cached_preview(r)
+            if abs(np.log((cam.shape[1] / cam.shape[0]) / (img.shape[1] / img.shape[0]))) > 0.03:
+                return None
+            cam = cv2.resize(cam, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_AREA)
+            cc = camera_curve(img.astype(np.float32) / 255, cam.astype(np.float32) / 255)
+        except Exception:  # noqa: BLE001
+            log.debug("Kamera-Profil für %s nicht berechnet", iid, exc_info=True)
+            return None
+        db.update_analysis(iid, {"camera_curve": cc, "camera_curve_v": 1})
+        return cc
+
+    def _with_as_shot(iid: int, crs: dict[str, Any], cam: bool = True) -> dict[str, Any]:
+        """Bei schon weissabgeglichenen Daten (Apple RAW-Engine, Vorschau) den Aufnahme-Weissabgleich mitgeben;
+        beim Profil "Kamera" die Kurven dazu."""
+        from ..render.pipeline import CAM_CURVE, uses_camera_profile
+
+        if cam and uses_camera_profile(crs) and CAM_CURVE not in crs:
+            cc = _cam_curve(iid)
+            if cc:
+                crs = {**crs, CAM_CURVE: cc}
         src = _sources.get(iid)
         if not src or src[0] == "libraw":
             return crs
@@ -760,6 +795,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
             return FileResponse(hit[1], media_type="image/jpeg")
         return await _gated(request, lambda: render_after(iid, size))
 
+    def _neutral_profile(profile: str | None, crs: dict[str, Any]) -> dict[str, Any]:
+        """Ältere neutrale Bearbeitungen ohne Profil: wie das Kamera-Original zeigen."""
+        if profile == "neutral" and not crs.get("CameraProfile"):
+            return {**crs, "CameraProfile": "Camera Standard"}
+        return crs
+
     def _render_path(iid: int, path: str, updated_at: float | None, size: int) -> Path:
         return cache_dir() / "renders" / f"{image_key(iid, path)}_{size}_{int((updated_at or 0) * 1000)}_{RENDER_VERSION}.jpg"
 
@@ -773,7 +814,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return None
 
     def _render_cache(iid: int, size: int) -> tuple[Any, Path] | None:
-        r = db.one("SELECT i.path, e.params, e.masks, e.updated_at FROM images i LEFT JOIN edits e "
+        r = db.one("SELECT i.path, e.params, e.masks, e.updated_at, e.profile FROM images i LEFT JOIN edits e "
                    "ON e.image_id=i.id WHERE i.id=?", (iid,))
         if not r:
             return None
@@ -786,7 +827,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         r, cache = hit
         if cache.exists():
             return FileResponse(cache, media_type="image/jpeg")
-        crs = json.loads(r["params"]) if r["params"] else {}
+        crs = _neutral_profile(r["profile"], json.loads(r["params"]) if r["params"] else {})
         if r["masks"]:
             crs["MaskGroupBasedCorrections"] = json.loads(r["masks"])
         return _render_file(iid, Path(r["path"]), crs, size, cache)
@@ -797,7 +838,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                    "LEFT JOIN edits e ON e.image_id=i.id WHERE i.id=?", (iid,))
         if not r:
             raise HTTPException(404)
-        crs = json.loads(r["params"]) if r["params"] else {}
+        crs = _neutral_profile(r["profile"], json.loads(r["params"]) if r["params"] else {})
         if r["masks"]:
             crs["MaskGroupBasedCorrections"] = json.loads(r["masks"])
         return r, crs, int(r["orientation"] or 1)
@@ -874,7 +915,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         head = {"w": int(floored.shape[1]), "h": int(floored.shape[0]), "floor": [float(v) for v in floor],
                 "m": [float(v) for v in cam_to_srgb(xyz).astype(np.float32).ravel()], "gain": float(BASE_GAIN),
                 "wb": _wb_table(xyz, wb, iid), "as_shot": [float(as_temp or 5500), float(as_tint or 0)],
-                "source": src[0], "orientation": int(orient)}
+                "source": src[0], "orientation": int(orient), "cam_curve": _cam_curve(iid)}
         hb = json.dumps(head).encode()
         hb += b" " * ((-len(hb)) % 4)
         data = np.ascontiguousarray(floored.astype("<f2")).tobytes()
@@ -941,14 +982,32 @@ def create_app(db_path: str | None = None) -> FastAPI:
               "dabs": body.get("dabs") or [], "feather": float(body.get("feather", 40)), "variant": int(body.get("variant", 0))}
         if not op["dabs"]:
             raise HTTPException(400, "Nichts markiert")
-        lin, info = _full_lin(iid, path)
+        # Arbeitsauflösung (halbes RAW, ~3500 px, schon im Speicher): schnell; beim Export hochgerechnet
+        lin, _xyz, wb, _o = _linear_hi(iid, path)
         # frühere Retuschen zuerst, damit sich Reparaturen aufeinander beziehen können
         from ..retouch import apply_patches
 
         base = apply_patches(lin, _patches(iid, path, body.get("before") or []))
-        p = compute_patch(base, np.asarray(info.camera_wb, np.float32), op)
+        p = compute_patch(base, np.asarray(wb, np.float32), op)
         save_patch(image_key(iid, path), op["id"], p)
         return {"op": op, "method": p.get("method", "heal")}
+
+    @app.post("/api/images/{iid}/editor/retouch/warmup")
+    def editor_retouch_warmup(iid: int) -> dict[str, Any]:
+        """Werkzeug gewählt: Bilddaten und KI-Modell im Hintergrund vorbereiten."""
+        r = db.one("SELECT path FROM images WHERE id=?", (iid,))
+
+        def work() -> None:
+            from ..retouch import warmup
+
+            try:
+                if r and raw_io.is_raw(Path(r["path"])):
+                    _linear_hi(iid, Path(r["path"]))
+                warmup()
+            except Exception:  # noqa: BLE001
+                log.debug("Vorbereiten fehlgeschlagen", exc_info=True)
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True}
 
     @app.get("/api/images/{iid}/editor/retouch/{op_id}")
     def editor_retouch_patch(iid: int, op_id: str, w: int, h: int, floor: str = "0,0,0") -> Response:
@@ -992,7 +1051,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             raise HTTPException(404)
         img = load_cached_preview(r)
         h0, w0 = img.shape[:2]
-        s = 900 / max(h0, w0)
+        s = 1400 / max(h0, w0)
         small = cv2.resize(img, (int(w0 * s), int(h0 * s)), interpolation=cv2.INTER_AREA) if s < 1 else img
         h, w = small.shape[:2]
         bx = [float(v) for v in (body.get("box") or [0.3, 0.3, 0.7, 0.7])]
@@ -1000,17 +1059,45 @@ def create_app(db_path: str | None = None) -> FastAPI:
         x1, y1 = int(min(1, max(bx[0], bx[2])) * w), int(min(1, max(bx[1], bx[3])) * h)
         if x1 - x0 < 6 or y1 - y0 < 6:
             raise HTTPException(400, "Rahmen zu klein")
-        mask = np.zeros((h, w), np.uint8)
-        bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+        m = None
         try:
-            cv2.grabCut(cv2.cvtColor(small, cv2.COLOR_RGB2BGR), mask, (x0, y0, x1 - x0, y1 - y0), bgd, fgd, 5,
-                        cv2.GC_INIT_WITH_RECT)
-            m = np.isin(mask, (cv2.GC_FGD, cv2.GC_PR_FGD)).astype(np.uint8)
-        except cv2.error:
-            m = np.zeros((h, w), np.uint8)
-            m[y0:y1, x0:x1] = 1
-        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        dabs = mask_to_dabs(m, max_dabs=900)
+            # KI (BiRefNet, wie die Motiv-Maske) nur im gezogenen Rahmen: genaue Kanten
+            from ..vision.segmentation import _birefnet
+
+            net = _birefnet()
+            if net is not None:
+                H0, W0 = img.shape[:2]
+                mx, my = (bx[2] - bx[0]) * 0.08, (bx[3] - bx[1]) * 0.08
+                cx0, cy0 = int(max(0, min(bx[0], bx[2]) - mx) * W0), int(max(0, min(bx[1], bx[3]) - my) * H0)
+                cx1, cy1 = int(min(1, max(bx[0], bx[2]) + mx) * W0), int(min(1, max(bx[1], bx[3]) + my) * H0)
+                crop = img[cy0:cy1, cx0:cx1]
+                x = cv2.resize(crop, (1024, 1024), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+                x = (x - np.array([0.485, 0.456, 0.406])) / np.array([0.229, 0.224, 0.225])
+                t = net.torch.from_numpy(x.transpose(2, 0, 1)[None].astype(np.float32)).to(net.device)
+                if net.device in ("mps", "cuda"):
+                    t = t.half()
+                with net.torch.no_grad():
+                    pred = net.model(t)[-1].sigmoid().float().cpu().numpy()[0, 0]
+                full = np.zeros((H0, W0), np.float32)
+                full[cy0:cy1, cx0:cx1] = cv2.resize(pred, (cx1 - cx0, cy1 - cy0))
+                m = (cv2.resize(full, (w, h), interpolation=cv2.INTER_AREA) > 0.5).astype(np.uint8)
+                if m.sum() < 20:
+                    m = None
+        except Exception:  # noqa: BLE001
+            log.debug("Objekt-KI nicht verfügbar", exc_info=True)
+            m = None
+        if m is None:
+            mask = np.zeros((h, w), np.uint8)
+            bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+            try:
+                cv2.grabCut(cv2.cvtColor(small, cv2.COLOR_RGB2BGR), mask, (x0, y0, x1 - x0, y1 - y0), bgd, fgd, 8,
+                            cv2.GC_INIT_WITH_RECT)
+                m = np.isin(mask, (cv2.GC_FGD, cv2.GC_PR_FGD)).astype(np.uint8)
+            except cv2.error:
+                m = np.zeros((h, w), np.uint8)
+                m[y0:y1, x0:x1] = 1
+            m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        dabs = mask_to_dabs(m, max_dabs=2500, coverage=0.97)
         return {"dabs": [[round(x, 5), round(y, 5), round(rr, 5)] for x, y, rr in dabs]}
 
     @app.post("/api/images/{iid}/editor/mask")
@@ -1140,11 +1227,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def thumb(iid: int) -> Response:
         """Kleine Kachel fürs Raster: die Bearbeitung, sobald sie vorberechnet ist (wie in Lightroom), sonst die
         Kamera-Vorschau. Lädt viel schneller als die grosse Vorschau."""
-        r = db.one("SELECT i.path, i.preview_path, e.updated_at, c.decision FROM images i LEFT JOIN edits e "
+        r = db.one("SELECT i.path, i.preview_path, e.updated_at, e.profile, c.decision FROM images i LEFT JOIN edits e "
                    "ON e.image_id=i.id LEFT JOIN culling c ON c.image_id=i.id WHERE i.id=?", (iid,))
         if not r:
             raise HTTPException(404)
-        edited = _rendered_any(iid, r["path"], r["updated_at"]) if r["decision"] == "keep" else None
+        is_edited = r["profile"] not in (None, "neutral")
+        edited = _rendered_any(iid, r["path"], r["updated_at"]) if r["decision"] == "keep" and is_edited else None
         src = edited if edited is not None else (Path(r["preview_path"]) if r["preview_path"] else None)
         if src is None or not src.exists():
             return preview(iid)

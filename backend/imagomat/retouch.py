@@ -164,11 +164,13 @@ def _lama() -> Any:
                 return None
             import onnxruntime as ort
 
-            prov = [x for x in ("CoreMLExecutionProvider", "CPUExecutionProvider") if x in ort.get_available_providers()]
-            try:
-                _LAMA = ort.InferenceSession(str(p), providers=prov)
-            except Exception:  # noqa: BLE001 - CoreML kann einzelne Netze ablehnen
-                _LAMA = ort.InferenceSession(str(p), providers=["CPUExecutionProvider"])
+            import os
+
+            so = ort.SessionOptions()
+            so.intra_op_num_threads = max(2, (os.cpu_count() or 4))
+            so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            # CPU: LaMa nutzt FFT-Schichten, die CoreML nicht kann (sonst langsames Hin und Her)
+            _LAMA = ort.InferenceSession(str(p), sess_options=so, providers=["CPUExecutionProvider"])
         return _LAMA or None
 
 
@@ -181,12 +183,14 @@ def inpaint_ai(disp: np.ndarray, mask: np.ndarray) -> np.ndarray | None:
     ys, xs = np.nonzero(mask > 0.02)
     cx, cy = (xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2
     size = max(xs.max() - xs.min(), ys.max() - ys.min())
-    side = int(min(max(size * 2.6, 256), max(H, W)))
+    # kleine Stellen: Ausschnitt auf 512 vergrössern (volle Schärfe); grosse: so wenig Umgebung wie nötig
+    side = int(min(max(size * 2.0 + 48, 160), max(H, W)))
     x0 = int(min(max(cx - side / 2, 0), max(W - side, 0)))
     y0 = int(min(max(cy - side / 2, 0), max(H - side, 0)))
     x1, y1 = min(W, x0 + side), min(H, y0 + side)
     crop, mcrop = disp[y0:y1, x0:x1], mask[y0:y1, x0:x1]
-    a = cv2.resize(crop, (LAMA_SIDE, LAMA_SIDE), interpolation=cv2.INTER_AREA).astype(np.float32)
+    a = cv2.resize(crop, (LAMA_SIDE, LAMA_SIDE),
+                   interpolation=cv2.INTER_AREA if side > LAMA_SIDE else cv2.INTER_CUBIC).astype(np.float32)
     m = (cv2.resize(mcrop, (LAMA_SIDE, LAMA_SIDE), interpolation=cv2.INTER_LINEAR) > 0.02).astype(np.float32)
     m = cv2.dilate(m, np.ones((5, 5), np.uint8))
     names = [i.name for i in sess.get_inputs()]
@@ -194,21 +198,34 @@ def inpaint_ai(disp: np.ndarray, mask: np.ndarray) -> np.ndarray | None:
     res = sess.run(None, feed)[0][0].transpose(1, 2, 0).astype(np.float32)
     if res.max() > 2.0:
         res = res / 255.0
-    res = cv2.resize(np.clip(res, 0, 1), (x1 - x0, y1 - y0), interpolation=cv2.INTER_CUBIC)
-    # feines Korn der Umgebung zurückgeben (das Netz rechnet in 512 px)
-    if side > LAMA_SIDE:
-        hf = crop - cv2.GaussianBlur(crop, (0, 0), side / LAMA_SIDE * 0.8)
-        rng = np.random.default_rng(0)
-        idx = rng.integers(0, hf.shape[0] * hf.shape[1], size=hf.shape[0] * hf.shape[1])
-        res = res + hf.reshape(-1, 3)[idx].reshape(hf.shape) * 0.8
+    res = cv2.resize(np.clip(res, 0, 1), (x1 - x0, y1 - y0),
+                     interpolation=cv2.INTER_AREA if side < LAMA_SIDE else cv2.INTER_CUBIC)
+    if side > LAMA_SIDE * 1.1:
+        # das Netz rechnet in 512 px: feine Struktur (Korn, Rasen, Stoff) aus einer passenden Stelle zurückholen
+        img8 = (np.clip(crop, 0, 1) * 255 + 0.5).astype(np.uint8)
+        cands = heal_candidates(img8, mcrop, n=1)
+        if cands:
+            dx, dy = cands[0]
+            M = np.float32([[1, 0, -dx], [0, 1, -dy]])
+            src = cv2.warpAffine(crop.astype(np.float32), M, (crop.shape[1], crop.shape[0]), borderMode=cv2.BORDER_REFLECT)
+            sd = side / LAMA_SIDE * 0.9
+            res = np.clip(res + (src - cv2.GaussianBlur(src, (0, 0), sd)) * 0.9, 0, 1)
     out = disp.copy()
     out[y0:y1, x0:x1] = res
     return out
 
 
 # ---------------------------------------------------------------------------------------------- Ausführen
+def warmup() -> bool:
+    """KI-Modell schon laden (beim Wählen des Werkzeugs), damit der erste Strich nicht wartet."""
+    try:
+        return _lama() is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def compute_patch(lin: np.ndarray, wb: np.ndarray, op: dict[str, Any]) -> dict[str, Any]:
-    """Retusche in voller Auflösung -> Ausschnitt (x, y), lineares Ergebnis und Deckkraft."""
+    """Retusche (Arbeitsauflösung ~3500 px) -> Ausschnitt (x, y), lineares Ergebnis und Deckkraft."""
     H, W = lin.shape[:2]
     mask = mask_from_dabs(op.get("dabs") or [], W, H, float(op.get("feather", 40)))
     ys, xs = np.nonzero(mask > 0.003)

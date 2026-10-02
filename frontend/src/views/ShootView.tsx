@@ -74,7 +74,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     return () => clearInterval(t);
   }, [running, id]);
   // bearbeitete Kacheln erscheinen, sobald sie im Hintergrund vorberechnet sind
-  const waiting = !editing && !running && items.some((i) => i.decision === "keep" && !i.rendered);
+  const waiting = !editing && !running && items.some((i) => i.decision === "keep" && i.edited && !i.rendered);
   useEffect(() => {
     if (!waiting) return;
     const t = setInterval(() => api.get<ImageItem[]>(`/api/shoots/${id}/images`).then(setItems).catch(() => undefined), 6000);
@@ -105,7 +105,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const shootTeams: string[] = settings.teams ?? [];
   const decided = items.some((i) => i.decision !== null);
 
-  usePrefetch(loupe && !editing ? [1, -1].map((d) => shown[curIdx + d]).filter(Boolean)
+  usePrefetch(loupe && !editing ? [1, -1].map((d) => shown[curIdx + d]).filter((x) => x && x.edited)
     .map((x) => api.img(`/api/images/${x!.id}/render?size=${loupeSize()}&v=${editV}`)) : []);
 
   const patch = async (i: ImageItem, body: Partial<Pick<ImageItem, "decision" | "rating">>) => {
@@ -270,11 +270,11 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
         </div>
       ) : cur && (
         <div className="lib-loupe">
-          <div className="stage" onClick={() => setBefore((b) => !b)}>
+          <div className="stage" onClick={() => cur.edited && setBefore((b) => !b)}>
             <StageImage key={`${cur.id}-${before}-${editV}`} placeholder={api.img(`/api/images/${cur.id}/preview`)}
-              src={api.img(before || peopleMode ? `/api/images/${cur.id}/preview`
+              src={api.img(before || peopleMode || !cur.edited ? `/api/images/${cur.id}/preview`
                 : `/api/images/${cur.id}/render?size=${loupeSize()}&v=${editV}-${cur.edit_v ?? 0}`)} />
-            <div className="stage-badge">{before || peopleMode ? "Original (Kamera)" : "Bearbeitet"}</div>
+            <div className="stage-badge">{before || peopleMode || !cur.edited ? "Original" : "Bearbeitet"}</div>
           </div>
           <PeoplePanel ctx={ctx} image={cur} onChanged={load} />
           <div className="loupe-bar">

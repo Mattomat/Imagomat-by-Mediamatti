@@ -88,6 +88,49 @@ def _tone_local(lin: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarra
 
 
 AS_SHOT_TEMP, AS_SHOT_TINT = "_AsShotTemp", "_AsShotTint"     # nur intern beim Rendern, nie im XMP
+CAM_CURVE = "_CamCurve"      # Profil "Kamera": Kurven pro Kanal (Anzeige 0..1, je 256 Werte), nur intern
+
+
+def uses_camera_profile(crs: dict[str, Any]) -> bool:
+    """Profil wie die Kamera (Lightroom "Camera Standard" u. ä.) statt Adobe Color."""
+    return str(crs.get("CameraProfile") or "").lower().startswith("camera")
+
+
+def camera_curve(raw_disp: np.ndarray, cam: np.ndarray, n: int = 256) -> list[list[float]]:
+    """Kurven pro Kanal, die die neutrale RAW-Entwicklung auf das Kamera-JPEG abbilden (Verteilung angleichen;
+    robust gegen kleine Verschiebungen). Monoton, geglättet, Steigung begrenzt."""
+    out = []
+    q = np.linspace(0.002, 0.998, 96)
+    xs = np.arange(n, dtype=np.float32) / (n - 1)
+    for c in range(3):
+        r = raw_disp[..., c].ravel().astype(np.float32)
+        j = cam[..., c].ravel().astype(np.float32)
+        xr, yj = np.quantile(r, q), np.quantile(j, q)
+        keep = np.concatenate([[True], np.diff(xr) > 1e-4])
+        xr, yj = xr[keep], yj[keep]
+        if len(xr) < 4:
+            out.append(xs.tolist())
+            continue
+        xr = np.concatenate([[0.0], xr, [1.0]])
+        yj = np.concatenate([[min(yj[0] * 0.5, yj[0])], yj, [max(yj[-1], min(1.0, yj[-1] + (1 - xr[-2])))]])
+        lut = np.interp(xs, xr, yj)
+        lut = np.maximum.accumulate(np.clip(lut, 0, 1))
+        lut = np.convolve(np.pad(lut, 6, mode="edge"), np.ones(13) / 13, mode="valid")
+        # Steigung begrenzen (keine Tonwertabrisse)
+        d = np.clip(np.diff(lut), 0, 3.0 / (n - 1))
+        lut = np.concatenate([[lut[0]], lut[0] + np.cumsum(d)])
+        out.append([round(float(v), 5) for v in np.clip(lut, 0, 1)])
+    return out
+
+
+def _apply_cam_curve(disp: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
+    cc = crs.get(CAM_CURVE)
+    if not cc or not uses_camera_profile(crs):
+        return disp
+    out = disp.copy()
+    for c in range(3):
+        out[..., c] = _lut_apply(disp[..., c], np.asarray(cc[c], np.float32))
+    return out
 
 
 def _wb_mult(xyz_to_cam: np.ndarray, camera_wb: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
@@ -522,6 +565,7 @@ def render(lin_cam: np.ndarray, xyz_to_cam: np.ndarray, camera_wb: np.ndarray, c
     img = _tone_local(img, crs, scale)
     img = _apply_local(img, crs.get("MaskGroupBasedCorrections") or [], orientation, seg, scale)
     disp = base_curve(img, _n(crs, "Contrast2012")).astype(np.float32)
+    disp = _apply_cam_curve(disp, crs)
     disp = _white_black(disp, crs)
     sharp = _sharp_detail(disp, crs)
     disp = _presence(disp, crs, scale)

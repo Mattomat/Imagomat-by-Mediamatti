@@ -67,6 +67,7 @@ export class DevelopGL {
   private t: Record<string, Target> = {};
   private maskTex: WebGLTexture;
   private lut: WebGLTexture;
+  private cam: WebGLTexture | null = null;
   private hist: Target | null = null;
   readonly floatOk: boolean;
   w = 0;
@@ -166,6 +167,17 @@ export class DevelopGL {
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.maskTex);
     gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.R8, this.mw, this.mh, MAX_MASKS);
     this.params(gl.TEXTURE_2D_ARRAY);
+    // Profil "Kamera": Kurven pro Kanal
+    if (this.cam) gl.deleteTexture(this.cam);
+    this.cam = null;
+    if (s.cam_curve && s.cam_curve.length === 3) {
+      const n = s.cam_curve[0].length, d = new Float32Array(n * 4);
+      for (let i = 0; i < n; i++) { for (let c = 0; c < 3; c++) d[i * 4 + c] = s.cam_curve[c][i]; d[i * 4 + 3] = 1; }
+      this.cam = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, this.cam);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, n, 1, 0, gl.RGBA, gl.FLOAT, d);
+      this.params(gl.TEXTURE_2D);
+    }
     // einmalig: weichgezeichnete Quelle (Farbrauschen in den Tiefen, wie _calm_shadows)
     const sig = Math.max(1, 2 * (Math.max(s.w, s.h) / 1600));
     this.blur(this.src, this.t.tmp, this.t.sb, [sig, sig, sig, sig]);
@@ -294,6 +306,9 @@ export class DevelopGL {
     gl.uniform1f(this.loc(pr, "uWH"), (g.Whites2012 ?? 0) / 100);
     gl.uniform1f(this.loc(pr, "uBL"), (g.Blacks2012 ?? 0) / 100);
     gl.uniform1f(this.loc(pr, "uScale"), scale);
+    const camOn = !!this.cam && String(model.profile ?? "").toLowerCase().startsWith("camera");
+    this.tex(pr, "uCam", 3, this.cam ?? this.lut);
+    gl.uniform1i(this.loc(pr, "uCamOn"), camOn ? 1 : 0);
     this.draw(t.D);
     // Klarheit (25 px) und Dunst (30 px)
     this.down(t.D, t.R, 1);

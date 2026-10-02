@@ -33,6 +33,7 @@ export interface EdModel {
   crop: Crop;
   denoise?: number | null;      // KI-Entrauschen (Stärke) oder aus
   retouch?: RetouchOp[];         // Entfernen / Reparieren
+  profile?: string;              // "Camera Standard" (wie Original) | "Adobe Color"
 }
 
 export const DEFAULTS: Record<string, number> = {
@@ -46,14 +47,14 @@ export const NO_CROP: Crop = { HasCrop: false, CropLeft: 0, CropTop: 0, CropRigh
 
 export function normalize(m: EdModel): EdModel {
   return { global: m.global ?? {}, wb_custom: !!m.wb_custom, masks: m.masks ?? [], curves: m.curves ?? {},
-    crop: { ...NO_CROP, ...(m.crop ?? {}) }, denoise: m.denoise ?? null, retouch: m.retouch ?? [] };
+    crop: { ...NO_CROP, ...(m.crop ?? {}) }, denoise: m.denoise ?? null, retouch: m.retouch ?? [], profile: m.profile ?? "Adobe Color" };
 }
 
 // ------------------------------------------------------------------ Quelle (lineare RAW-Daten vom Server)
 export interface WBTable { mireds: number[]; tints: number[]; mult: number[]; base: number[] }
 export interface Source {
   w: number; h: number; floor: number[]; m: number[]; gain: number; wb: WBTable; as_shot: [number, number];
-  source: string; orientation: number; data: Uint16Array;
+  source: string; orientation: number; data: Uint16Array; cam_curve?: number[][] | null;
 }
 
 export function parseSource(buf: ArrayBuffer): Source {
