@@ -23,6 +23,9 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [kwFilter, setKwFilter] = useState("");
   const [kwNames, setKwNames] = useState<string[]>([]);
+  const [reviewKw, setReviewKw] = useState<number | null>(null);
+  const [marking, setMarking] = useState(false);
+  const stageRef = useRef<HTMLDivElement>(null);
   const anchor = useRef(0);
   const [saving, setSaving] = useState(false);
   const [lrSync, setLrSync] = useState(false);
@@ -119,6 +122,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
       if (["INPUT", "SELECT", "TEXTAREA"].includes(t.tagName) || saving || who || !cur) return;
       const k = e.key;
       if ((e.metaKey || e.ctrlKey) && (k === "a" || k === "A") && !loupe) { setPicked(new Set(shown.map((x) => x.id))); e.preventDefault(); return; }
+      if (k === "Escape" && marking) { setMarking(false); e.preventDefault(); return; }
       if (k === "Escape" && picked.size) { setPicked(new Set()); e.preventDefault(); return; }
       const cols = gridRef.current ? Math.max(1, Math.floor(gridRef.current.clientWidth / (cell + 8))) : 5;
       if (k === "ArrowRight") setSel((s) => Math.min(shown.length - 1, s + 1));
@@ -132,7 +136,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [cur, shown, loupe, saving, who, cell, picked.size]);
+  }, [cur, shown, loupe, saving, who, cell, picked.size, marking]);
   useEffect(() => { document.getElementById(`t-${cur?.id}`)?.scrollIntoView({ block: "nearest" }); }, [cur?.id]);
 
   if (!shoot) return <div className="page" />;
@@ -203,7 +207,7 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
           onClear={() => setPicked(new Set())} />
       )}
       {panel === "who" ? <div className="lib-grid lib-who"><WhoPanel ctx={ctx} shootId={id} onChanged={load} /></div>
-        : panel === "kw" ? <div className="lib-grid lib-who"><KeywordPanel ctx={ctx} shootId={id} items={items} onChanged={load} /></div>
+        : panel === "kw" ? <div className="lib-grid lib-who"><KeywordPanel ctx={ctx} shootId={id} items={items} onChanged={load} reviewId={reviewKw} /></div>
         : !loupe ? (
           <div className="lib-grid" ref={gridRef}>
             {shown.length === 0 && <div className="empty">{running ? "Bilder werden eingelesen …" : "Keine Bilder in dieser Ansicht."}</div>}
@@ -211,8 +215,23 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
           </div>
         ) : cur && (
           <div className="lib-loupe">
-            <div className="stage">
+            <div className="stage" ref={stageRef}>
               <StageImage key={cur.id} src={api.img(`/api/images/${cur.id}/preview`)} />
+              {marking && <RegionMarker key={`m-${cur.id}`} stageRef={stageRef} names={kwNames} onCancel={() => setMarking(false)}
+                onSubmit={async (name, bbox) => {
+                  try {
+                    const r = await api.post<{ keyword_id: number; job_id: number }>(`/api/images/${cur.id}/region-keyword`, { name, bbox });
+                    setMarking(false);
+                    ctx.toast(`„${name}“ gesetzt – suche dasselbe Objekt in den anderen Bildern …`);
+                    ctx.refreshJobs();
+                    load();
+                    const j = await waitForJob(r.job_id);
+                    if (j.status !== "done") throw new Error(j.error?.split("\n").filter(Boolean).pop() ?? "Suche fehlgeschlagen");
+                    setReviewKw(r.keyword_id);
+                    setLoupe(false);
+                    setPanel("kw");
+                  } catch (e) { ctx.toast((e as Error).message, "error"); }
+                }} />}
             </div>
             <PeoplePanel ctx={ctx} image={cur} onChanged={load} />
             <div className="loupe-bar">
@@ -225,6 +244,9 @@ export default function ShootView({ ctx, id }: { ctx: AppCtx; id: number }) {
                 <KeywordInput names={kwNames} placeholder="+ Stichwort" onSubmit={(n) => applyKeyword(n, [cur.id])} />
               </span>
               <span className="spacer" />
+              <button className={marking ? "on" : ""} onClick={() => setMarking((m) => !m)}
+                title="Rahmen um ein Objekt ziehen (z. B. den Brautstrauss) und ein Stichwort setzen – Tagmatti findet es in den anderen Bildern">
+                ▭ Bereich markieren</button>
               <button disabled={curIdx === 0} onClick={() => setSel(curIdx - 1)}>←</button>
               <button disabled={curIdx >= shown.length - 1} onClick={() => setSel(curIdx + 1)}>→</button>
               <button className="ghost" onClick={() => setLoupe(false)}>Raster</button>
@@ -453,6 +475,54 @@ function KeywordBar({ count, names, common, onApply, onRemove, onClear }: {
       ))}
       <span className="spacer" />
       <button className="ghost small" onClick={onClear}>Auswahl aufheben</button>
+    </div>
+  );
+}
+
+/** Rahmen über dem Bild ziehen, dann Stichwort tippen. Koordinaten normiert aufs angezeigte Bild. */
+function RegionMarker({ stageRef, names, onSubmit, onCancel }: {
+  stageRef: React.RefObject<HTMLDivElement>; names: string[];
+  onSubmit: (name: string, bbox: number[]) => void; onCancel: () => void;
+}) {
+  const [box, setBox] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [name, setName] = useState("");
+  const geo = () => {
+    const stage = stageRef.current;
+    const imgs = stage ? Array.from(stage.querySelectorAll("img")) : [];
+    const img = imgs[imgs.length - 1];
+    return stage && img ? { s: stage.getBoundingClientRect(), i: img.getBoundingClientRect() } : null;
+  };
+  const at = (e: React.PointerEvent) => {
+    const g = geo();
+    if (!g) return { x: 0, y: 0 };
+    return { x: Math.min(1, Math.max(0, (e.clientX - g.i.left) / g.i.width)), y: Math.min(1, Math.max(0, (e.clientY - g.i.top) / g.i.height)) };
+  };
+  const g = geo();
+  const r = box && g ? {
+    left: g.i.left - g.s.left + Math.min(box.x0, box.x1) * g.i.width,
+    top: g.i.top - g.s.top + Math.min(box.y0, box.y1) * g.i.height,
+    width: Math.abs(box.x1 - box.x0) * g.i.width,
+    height: Math.abs(box.y1 - box.y0) * g.i.height,
+  } : null;
+  const ready = !!box && !dragging && Math.abs(box.x1 - box.x0) > 0.01 && Math.abs(box.y1 - box.y0) > 0.01;
+  const bbox = box ? [Math.min(box.x0, box.x1), Math.min(box.y0, box.y1), Math.max(box.x0, box.x1), Math.max(box.y0, box.y1)] : [];
+  return (
+    <div className="region-layer"
+      onPointerDown={(e) => { if ((e.target as HTMLElement).closest(".region-form")) return; const p = at(e); setBox({ x0: p.x, y0: p.y, x1: p.x, y1: p.y }); setDragging(true); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); }}
+      onPointerMove={(e) => { if (!dragging) return; const p = at(e); setBox((b) => (b ? { ...b, x1: p.x, y1: p.y } : b)); }}
+      onPointerUp={() => setDragging(false)}>
+      {!box && <div className="region-hint">Rahmen um das Objekt ziehen, z. B. den Brautstrauss · Esc: abbrechen</div>}
+      {r && <div className="region-box" style={r} />}
+      {ready && r && (
+        <div className="region-form" style={{ left: r.left, top: r.top + r.height + 8 }}>
+          <input autoFocus list="kw-names" value={name} placeholder="Stichwort für diesen Bereich, Enter"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && name.trim()) onSubmit(name.trim(), bbox); if (e.key === "Escape") onCancel(); }} />
+          <button className="primary small" disabled={!name.trim()} onClick={() => onSubmit(name.trim(), bbox)}>Setzen</button>
+          <datalist id="kw-names">{names.map((n) => <option key={n} value={n} />)}</datalist>
+        </div>
+      )}
     </div>
   );
 }

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any
@@ -195,6 +196,93 @@ def score_images(img: np.ndarray, text: np.ndarray | None, examples: np.ndarray 
     return np.max(np.stack(parts), axis=0)
 
 
+# ---------------------------------------------------------------------------
+# Markierte Bereiche: genau dieses Objekt in anderen Bildern finden
+# ---------------------------------------------------------------------------
+
+PATCH_VERSION = 1
+
+
+def add_region(db: Database, image_id: int, keyword_id: int, bbox: list[float]) -> int:
+    x0, y0, x1, y1 = (min(max(float(v), 0.0), 1.0) for v in bbox)
+    if x1 - x0 < 0.01 or y1 - y0 < 0.01:
+        raise ValueError("Bereich ist zu klein")
+    with db.tx() as c:
+        cur = c.execute("INSERT INTO keyword_regions(keyword_id, image_id, bbox, created_at) VALUES(?,?,?,?)",
+                        (keyword_id, image_id, json.dumps([x0, y0, x1, y1]), time.time()))
+        rid = int(cur.lastrowid)
+    set_state(db, [image_id], keyword_id, "manual")
+    return rid
+
+
+def _crop(img: np.ndarray, box: tuple[float, float, float, float], pad: float = 0.1) -> np.ndarray:
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = box
+    px, py = (x1 - x0) * pad, (y1 - y0) * pad
+    a, b = int(max(0, (x0 - px) * w)), int(max(0, (y0 - py) * h))
+    c, d = int(min(w, (x1 + px) * w)), int(min(h, (y1 + py) * h))
+    return img[b:max(d, b + 2), a:max(c, a + 2)]
+
+
+def patch_boxes() -> list[tuple[float, float, float, float]]:
+    """Ausschnitte, in denen gesucht wird: ganzes Bild, 2x2 und 3x3 (überlappend)."""
+    out = []
+    for g in (1, 2, 3):
+        size = min(1.0, 1.25 / g)
+        steps = [0.0] if g == 1 else [i * (1 - size) / (g - 1) for i in range(g)]
+        out += [(x, y, x + size, y + size) for y in steps for x in steps]
+    return out
+
+
+def example_vectors(db: Database, emb: Any, keyword_id: int) -> np.ndarray | None:
+    from .analysis import load_cached_preview
+
+    vecs = []
+    for r in db.query("SELECT kr.bbox, i.* FROM keyword_regions kr JOIN images i ON i.id=kr.image_id "
+                      "WHERE kr.keyword_id=?", (keyword_id,)):
+        try:
+            img = load_cached_preview(r)
+        except Exception:  # noqa: BLE001
+            continue
+        vecs.append(_crop(img, tuple(json.loads(r["bbox"]))))
+    if not vecs:
+        return None
+    return np.asarray(emb.embed(vecs), dtype=np.float32)
+
+
+def patch_vectors(db: Database, emb: Any, image_ids: list[int], progress: Any = None) -> dict[int, np.ndarray]:
+    """CLIP-Vektoren der Ausschnitte jedes Bildes (zwischengespeichert)."""
+    from .analysis import load_cached_preview
+    from .config import cache_dir
+
+    folder = cache_dir() / "patches"
+    folder.mkdir(parents=True, exist_ok=True)
+    boxes = patch_boxes()
+    out: dict[int, np.ndarray] = {}
+    for n, iid in enumerate(image_ids):
+        f = folder / f"{iid}-v{PATCH_VERSION}.npy"
+        if f.exists():
+            out[iid] = np.load(f)
+        else:
+            row = db.one("SELECT * FROM images WHERE id=?", (iid,))
+            try:
+                img = load_cached_preview(row)
+            except Exception:  # noqa: BLE001
+                continue
+            v = np.asarray(emb.embed([_crop(img, b, pad=0.0) for b in boxes]), dtype=np.float32)
+            np.save(f, v)
+            out[iid] = v
+        if progress and n % 4 == 0:
+            progress(n + 1, len(image_ids))
+    return out
+
+
+def score_regions(patches: dict[int, np.ndarray], cand: list[int], examples: np.ndarray) -> np.ndarray:
+    """Wie stark der beste Ausschnitt eines Bildes dem markierten Objekt gleicht (0..1)."""
+    s = np.array([float((patches[i] @ examples.T).max()) if i in patches else 0.0 for i in cand])
+    return np.clip((s - 0.62) / 0.3, 0, 1) * pick(s, 0.74, 0.8)
+
+
 @job("kw_suggest")
 def kw_suggest(ctx: JobContext, shoot_id: int, keyword_id: int) -> dict[str, Any]:
     from .vision.tags import clip_embeddings, encode_text
@@ -218,8 +306,15 @@ def kw_suggest(ctx: JobContext, shoot_id: int, keyword_id: int) -> dict[str, Any
     emb, vecs = res
     cand = [i for i in ids if i in vecs and state.get(i) not in (*ASSIGNED, "rejected")]
     text = encode_text(emb, [kw["prompt"]]) if kw["prompt"] else None
-    ex = np.stack([vecs[i] for i in example_ids if i in vecs]) if any(i in vecs for i in example_ids) else None
+    regions = example_vectors(db, emb, keyword_id)
+    # Mit markiertem Bereich zählt das Objekt, nicht das ganze Bild (sonst wäre jedes Bild der Hochzeit ähnlich)
+    ex = None if regions is not None else (
+        np.stack([vecs[i] for i in example_ids if i in vecs]) if any(i in vecs for i in example_ids) else None)
     scores = score_images(np.stack([vecs[i] for i in cand]), text, ex) if cand else np.zeros(0)
+    if regions is not None and cand:
+        ctx.progress(0, f"„{kw['name']}“ in den Bildern suchen …")
+        patches = patch_vectors(db, emb, cand, progress=lambda d, n: ctx.progress(d, f"„{kw['name']}“ suchen {d}/{n}"))
+        scores = np.maximum(scores, score_regions(patches, cand, regions))
     ranked = sorted(((float(s), i) for s, i in zip(scores, cand) if s > 0), reverse=True)[:MAX_SUGGEST]
     with db.tx() as c:
         c.execute("DELETE FROM image_keywords WHERE keyword_id=? AND state='suggested' AND image_id IN "

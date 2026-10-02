@@ -441,3 +441,9 @@ input[type="radio"] { width: auto; margin-right: 8px; accent-color: var(--accent
 .cell-check { position: absolute; top: 3px; right: 6px; font-size: 11px; font-weight: 800; color: var(--accent); }
 .cell-kw { position: absolute; top: 3px; left: 28px; right: 22px; font-size: 10px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lib-actions button { white-space: nowrap; }
+.region-layer { position: absolute; inset: 0; cursor: crosshair; z-index: 5; touch-action: none; }
+.region-box { position: absolute; border: 2px solid var(--accent); background: rgba(240, 180, 60, 0.12); border-radius: 4px; pointer-events: none; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35); }
+.region-hint { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.75); padding: 6px 14px; border-radius: 8px; font-size: 13px; pointer-events: none; }
+.region-form { position: absolute; display: flex; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); cursor: default; }
+.region-form input { width: 240px; }
+.region-form button.small { margin: 0; }

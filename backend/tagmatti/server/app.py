@@ -588,6 +588,21 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         return K.suggestions(db, sid, kid)
 
+    @app.post("/api/images/{iid}/region-keyword")
+    def region_keyword(iid: int, body: dict[str, Any]) -> dict[str, Any]:
+        """Bereich markieren (z. B. den Brautstrauss) + Stichwort: dieses Bild bekommt es, ähnliche werden gesucht."""
+        from .. import keywords as K
+
+        img = db.one("SELECT shoot_id FROM images WHERE id=?", (iid,))
+        if img is None:
+            raise HTTPException(404, "Bild nicht gefunden")
+        try:
+            kid = int(body["keyword_id"]) if body.get("keyword_id") else K.get_or_create(db, str(body.get("name") or ""))
+            K.add_region(db, iid, kid, list(body.get("bbox") or []))
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e) or "Ungültiger Bereich") from e
+        return {"keyword_id": kid, "job_id": jobs.submit("kw_suggest", img["shoot_id"], keyword_id=kid)}
+
     @app.post("/api/images/keywords")
     def images_keywords(body: dict[str, Any]) -> dict[str, Any]:
         """Stichwort für mehrere Bilder setzen. state: manual | confirmed | rejected | remove."""

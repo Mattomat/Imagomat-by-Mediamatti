@@ -53,7 +53,7 @@ def pull(db: Database, shoot_id: int, lrcat: Path, team: str | None = None) -> d
         kw_by_name.setdefault(Path(p).name, []).append(v)
     people_names = {n.lower() for v in named.values() for n, _ in v}
     root = load_settings().keywords.people_root
-    skip_roots = {root.lower(), "tagmatti"}
+    skip_roots = {root.lower(), "tagmatti", "imagomat"}
     kw_added = 0
     by_path = {_key(p): v for p, v in named.items()}
     by_name: dict[str, list[Any]] = {}

@@ -145,3 +145,36 @@ def test_person_in_image_metadata(tmp_path: Path):
     people = doc.other.get("Iptc4xmpExt:PersonInImage")
     assert "Lena Meier" in (people if isinstance(people, list) else [people])
     assert "Lena Meier" in doc.keywords
+
+
+def test_region_keyword_finds_same_object(tmp_path: Path, monkeypatch):
+    """Bereich markieren: Bilder, in denen ein Ausschnitt dem markierten Objekt gleicht, werden vorgeschlagen."""
+    db, sid, ids = _shoot(tmp_path, 4)
+    vecs = {i: np.eye(8, dtype=np.float32)[n] for n, i in enumerate(ids)}       # ganze Bilder: alle verschieden
+    import tagmatti.vision.tags as T
+
+    monkeypatch.setattr(T, "clip_embeddings", lambda db_, ids_, progress=None: (object(), vecs))
+    strauss = np.eye(8, dtype=np.float32)[7]
+    monkeypatch.setattr(K, "example_vectors", lambda db_, emb, kid: strauss[None, :])
+    other = np.eye(8, dtype=np.float32)[6]
+    patches = {i: np.stack([other] * 13 + [strauss if n == 2 else other]) for n, i in enumerate(ids)}
+    monkeypatch.setattr(K, "patch_vectors", lambda db_, emb, cand, progress=None: patches)
+    kid = K.get_or_create(db, "Strauss")
+    K.add_region(db, ids[0], kid, [0.4, 0.4, 0.6, 0.7])
+    assert K.image_keywords(db, ids[0]) == ["Strauss"]
+    K.kw_suggest(JobContext(db, db.create_job("kw_suggest", sid, {})), sid, kid)
+    assert [s["image_id"] for s in K.suggestions(db, sid, kid)] == [ids[2]]
+    assert len(K.patch_boxes()) == 14
+
+
+def test_old_imagomat_database_is_taken_over(tmp_path: Path, monkeypatch):
+    """Nach der Umbenennung: die alte imagomat.db (mit Personen) wird zur tagmatti.db."""
+    import tagmatti.db as D
+
+    old = Database(tmp_path / "imagomat.db")
+    with old.tx() as c:
+        c.execute("INSERT INTO keywords(name) VALUES('Alt')")
+    old.conn.close()
+    monkeypatch.setattr(D, "data_dir", lambda: tmp_path)
+    db = D.Database()
+    assert db.path.endswith("tagmatti.db") and db.one("SELECT name FROM keywords")["name"] == "Alt"

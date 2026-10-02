@@ -8,8 +8,8 @@ export interface ShootKeyword { id: number; name: string; prompt: string; theme:
 const sortKws = (xs: ShootKeyword[]) => [...xs].sort((a, b) =>
   (b.assigned + b.suggested > 0 ? 1 : 0) - (a.assigned + a.suggested > 0 ? 1 : 0) || a.name.localeCompare(b.name));
 
-export default function KeywordPanel({ ctx, shootId, items, onChanged }: {
-  ctx: AppCtx; shootId: number; items: ImageItem[]; onChanged: () => void;
+export default function KeywordPanel({ ctx, shootId, items, onChanged, reviewId }: {
+  ctx: AppCtx; shootId: number; items: ImageItem[]; onChanged: () => void; reviewId?: number | null;
 }) {
   const [kws, setKws] = useState<ShootKeyword[]>([]);
   const [themes, setThemes] = useState<Record<string, string[]>>({});
@@ -23,6 +23,11 @@ export default function KeywordPanel({ ctx, shootId, items, onChanged }: {
     api.get<ShootKeyword[]>(`/api/shoots/${shootId}/keywords`).then((r) => setKws(sortKws(r))).catch(() => undefined);
   }, [shootId]);
   useEffect(load, [load, ctx.tick]);
+  // Nach "Bereich markieren": Vorschläge dieses Stichworts gleich zeigen
+  useEffect(() => {
+    const k = reviewId ? kws.find((x) => x.id === reviewId) : undefined;
+    if (k && k.suggested > 0) setReview(k);
+  }, [reviewId, kws]);
   useEffect(() => { api.get<{ themes: Record<string, string[]> }>("/api/keywords").then((r) => setThemes(r.themes)).catch(() => undefined); }, []);
 
   const add = async () => {

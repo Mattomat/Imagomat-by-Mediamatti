@@ -131,6 +131,14 @@ CREATE TABLE IF NOT EXISTS image_keywords (
   PRIMARY KEY (image_id, keyword_id)
 );
 CREATE INDEX IF NOT EXISTS idx_imgkw_kw ON image_keywords(keyword_id);
+-- Markierte Bereiche ("dieser Strauss"): Beispiel für die Suche nach genau diesem Objekt
+CREATE TABLE IF NOT EXISTS keyword_regions (
+  id INTEGER PRIMARY KEY,
+  keyword_id INTEGER NOT NULL REFERENCES keywords(id) ON DELETE CASCADE,
+  image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+  bbox TEXT NOT NULL,              -- JSON [x0,y0,x1,y1] normiert, Anzeige-Orientierung
+  created_at REAL
+);
 
 -- "Das ist nicht X": nie wieder automatisch zuordnen (Gesicht oder ganzes Bild)
 CREATE TABLE IF NOT EXISTS person_rejects (
@@ -185,10 +193,23 @@ def blob_to_f32(b: bytes | None) -> np.ndarray | None:
     return np.frombuffer(b, dtype=np.float32).copy()
 
 
+def _migrate_old_db(folder: Path) -> None:
+    """Die App hiess früher "Imagomat": deren Datenbank (Personen, Shoots, Stichwörter) übernehmen."""
+    new, old = folder / "tagmatti.db", folder / "imagomat.db"
+    if new.exists() or not old.exists():
+        return
+    for suffix in ("", "-wal", "-shm"):
+        src = Path(str(old) + suffix)
+        if src.exists():
+            src.rename(Path(str(new) + suffix))
+
+
 class Database:
     """Dünne Hülle um sqlite3 mit einer Verbindung pro Thread."""
 
     def __init__(self, path: Path | str | None = None):
+        if path is None:
+            _migrate_old_db(data_dir())
         self.path = str(path or (data_dir() / "tagmatti.db"))
         self._local = threading.local()
         self._write_lock = threading.RLock()

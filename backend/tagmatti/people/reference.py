@@ -35,7 +35,7 @@ from .registry import MATCH_THRESHOLD, exemplars, match, persons, upsert_person
 log = logging.getLogger(__name__)
 REFERENCE_SHOOT = "__Referenzbilder__"
 _NAME_RE = re.compile(r"^[A-ZÄÖÜÀ-Ý][\w'’\-\.]+(?: [A-ZÄÖÜÀ-Ý][\w'’\-\.]+){1,3}$")
-_SKIP_WORDS = {"tagmatti", "culling", "behalten", "aussortiert", "denoise", "prüfen", "fc", "sport", "fussball",
+_SKIP_WORDS = {"tagmatti", "imagomat", "culling", "behalten", "aussortiert", "denoise", "prüfen", "fc", "sport", "fussball",
                "match", "konzert", "training"}
 
 
