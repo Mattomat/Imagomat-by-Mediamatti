@@ -56,6 +56,11 @@ MODELS: dict[str, ModelSpec] = {
         "https://github.com/megvii-research/NAFNet/releases/download/v1.0/NAFNet-SIDD-width64.pth",
         "NAFNet-SIDD-width64.pth", "MIT", True,
         note="Falls der Download scheitert: Datei manuell aus dem NAFNet-Repository laden."),
+    "lama": ModelSpec(
+        "LaMa (Inpainting, Objekte entfernen), ONNX",
+        "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
+        "lama_fp32.onnx", "Apache-2.0", True,
+        note="Falls der Download scheitert: Reparieren aus der Umgebung (ohne KI) wird genutzt."),
 }
 
 # Modelle, die über ihre eigenen Bibliotheken geladen werden (nur Lizenz-Info)

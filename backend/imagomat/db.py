@@ -135,6 +135,11 @@ CREATE TABLE IF NOT EXISTS edits (
   updated_at REAL
 );
 
+CREATE TABLE IF NOT EXISTS retouch (
+  image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+  ops TEXT NOT NULL                -- JSON: Retusche (Entfernen/Reparieren) in Anzeige-Koordinaten
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL,

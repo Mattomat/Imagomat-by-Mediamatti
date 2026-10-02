@@ -171,6 +171,17 @@ export class DevelopGL {
     this.blur(this.src, this.t.tmp, this.t.sb, [sig, sig, sig, sig]);
   }
 
+  /** Bilddaten ersetzen (gleiche Grösse), z. B. nach einer Retusche. */
+  updateSource(data: Uint16Array) {
+    const gl = this.gl, s = this.source;
+    if (!s || !this.src) return;
+    gl.bindTexture(gl.TEXTURE_2D, this.src);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, s.w, s.h, gl.RGB, gl.HALF_FLOAT, data);
+    const sig = Math.max(1, 2 * (Math.max(s.w, s.h) / 1600));
+    this.blur(this.src, this.t.tmp, this.t.sb, [sig, sig, sig, sig]);
+  }
+
   /** Maskenebene setzen (Graustufen, Grösse mw x mh). */
   setMaskLayer(layer: number, data: Uint8Array) {
     const gl = this.gl;

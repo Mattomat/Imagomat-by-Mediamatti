@@ -7,6 +7,7 @@ import { DevelopGL, MASK_SIDE, MAX_MASKS, maskUniforms, OutOpts } from "./gl";
 import {
   buildCurveTable, cropRect, EdMask, EdModel, fitCrop, grayWorld, internalAngle, labelOf, MaskKind,
   normalize, parseSource, Pt, samplePixel, solveWB, Source, toLrCrop, View, imgToView, viewToImg, fmtValue, def,
+  half, toHalf, RetouchOp,
 } from "./model";
 import { ColorWheel, CurveEditor, Group, Histogram, Panel, Slider } from "./panels";
 import * as Ic from "./icons";
@@ -21,7 +22,8 @@ interface EdInfo {
   is_raw: boolean;
   exif: { iso?: number; exposure_time?: number; aperture?: number; focal_length?: number; camera?: string; lens?: string };
 }
-type Tool = "edit" | "crop" | "mask";
+type Tool = "edit" | "crop" | "mask" | "heal";
+type Patch = { x: number; y: number; w: number; h: number; rgb: Uint16Array; a: Uint8Array };
 type StyleOpt = { key: string; label: string; group?: string; user?: boolean };
 type Hist = [Uint32Array, Uint32Array, Uint32Array];
 interface HEntry { label: string; model: EdModel }
@@ -99,6 +101,15 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
   const [dnPreview, setDnPreview] = useState<{ url: string; method: string } | null>(null);
   const [dnBusy, setDnBusy] = useState(false);
   const [dnPick, setDnPick] = useState(false);
+  const [heal, setHeal] = useState({ mode: "remove" as "remove" | "heal", size: 0.025, feather: 40 });
+  const [stroke, setStroke] = useState<[number, number, number][]>([]);
+  const strokeRef = useRef<[number, number, number][]>([]);
+  strokeRef.current = stroke;
+  const [healBusy, setHealBusy] = useState(false);
+  const [hoverOp, setHoverOp] = useState<number | null>(null);
+  const baseData = useRef<Uint16Array | null>(null);
+  const patchCache = useRef(new Map<string, Patch>());
+  const appliedKey = useRef("");
   const [hover, setHover] = useState<number | null>(null);
   const [pipette, setPipette] = useState(false);
   const [before, setBefore] = useState<"off" | "on" | "split">("off");
@@ -266,6 +277,76 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     layerKeys.current = []; layerReady.current = [];
     setLayerTick((t) => t + 1);
   }, [src]);
+
+  // ---------------------------------------------------------------- Retusche (Entfernen / Reparieren) einblenden
+  useEffect(() => {
+    if (!src) return;
+    baseData.current = src.data.slice();
+    patchCache.current.clear();
+    appliedKey.current = "";
+  }, [src]);
+  const retouchKey = (model?.retouch ?? []).map((o) => o.id).join(",");
+  useEffect(() => {
+    const g = glRef.current;
+    if (!g || !src || !baseData.current || !iid) return;
+    if (retouchKey === appliedKey.current) return;
+    let cancelled = false;
+    (async () => {
+      const ops = modelRef.current?.retouch ?? [];
+      for (const op of ops) {
+        if (patchCache.current.has(op.id)) continue;
+        try {
+          const r = await fetch(`${BASE}/api/images/${iid}/editor/retouch/${op.id}?w=${src.w}&h=${src.h}&floor=${src.floor.join(",")}`);
+          if (!r.ok) continue;
+          const buf = await r.arrayBuffer();
+          const n = new DataView(buf).getUint32(0, true);
+          const hd = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+          const rgb = new Uint16Array(buf, 4 + n, hd.w * hd.h * 3);
+          const a = new Uint8Array(buf, 4 + n + hd.w * hd.h * 6, hd.w * hd.h);
+          patchCache.current.set(op.id, { ...hd, rgb, a });
+        } catch { /* ohne diese Retusche weiter */ }
+      }
+      if (cancelled || !baseData.current) return;
+      const data = baseData.current.slice();
+      for (const op of ops) {
+        const p = patchCache.current.get(op.id);
+        if (!p) continue;
+        for (let yy = 0; yy < p.h; yy++) {
+          const ty = p.y + yy;
+          if (ty < 0 || ty >= src.h) continue;
+          for (let xx = 0; xx < p.w; xx++) {
+            const al = p.a[yy * p.w + xx];
+            const tx = p.x + xx;
+            if (!al || tx < 0 || tx >= src.w) continue;
+            const f = al / 255, di = (ty * src.w + tx) * 3, si = (yy * p.w + xx) * 3;
+            for (let c = 0; c < 3; c++) data[di + c] = toHalf(half(data[di + c]) * (1 - f) + half(p.rgb[si + c]) * f);
+          }
+        }
+      }
+      if (cancelled || !glRef.current) return;
+      glRef.current.updateSource(data);
+      appliedKey.current = retouchKey;
+      setLayerTick((t) => t + 1);
+    })();
+    return () => { cancelled = true; };
+  }, [retouchKey, src, iid]);
+  const submitRetouch = async (dabs: [number, number, number][], mode: "remove" | "heal", variant = 0, replace?: number) => {
+    if (!iid || !dabs.length) return;
+    setHealBusy(true);
+    try {
+      const ops = modelRef.current?.retouch ?? [];
+      const before = replace !== undefined ? ops.slice(0, replace) : ops;
+      const r = await api.post<{ op: RetouchOp; method: string }>(`/api/images/${iid}/editor/retouch`,
+        { mode, dabs, feather: heal.feather, variant, before });
+      update((m) => {
+        const list = [...(m.retouch ?? [])];
+        if (replace !== undefined) list[replace] = r.op; else list.push(r.op);
+        return { ...m, retouch: list };
+      });
+      commit(replace !== undefined ? "Andere Quelle" : mode === "remove" ? (r.method === "ai" ? "Entfernt (KI)" : "Entfernt") : "Repariert");
+      if (mode === "remove" && r.method !== "ai") toast("KI-Modell (LaMa) nicht verfügbar – stattdessen aus der Umgebung repariert");
+    } catch (e) { toast((e as Error).message, "error"); } finally { setHealBusy(false); setStroke([]); }
+  };
 
   // ---------------------------------------------------------------- Masken-Ebenen (KI-Masken vom Server, Pinsel lokal)
   const toLayer = useCallback((img: CanvasImageSource, w: number, h: number): Uint8Array => {
@@ -573,6 +654,13 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
       runDnPreview(p);
       return;
     }
+    if (tool === "heal") {
+      if (healBusy) return;
+      const p = viewToImg(view, q);
+      drag.current = { mode: "heal", start: q, q0: q };
+      setStroke([[p[0], p[1], heal.size]]);
+      return;
+    }
     if (tool === "mask" && objMode && curMask && sel !== null) {
       drag.current = { mode: "obj", start: q, q0: q };
       setObjBox([q, q]); setDrawing(true);
@@ -639,6 +727,15 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     }
     if (d.mode === "brush") { brushDab(q, e.altKey || brush.erase); return; }
     if (d.mode === "obj") { setObjBox([d.start, q]); return; }
+    if (d.mode === "heal") {
+      const p = viewToImg(view, q);
+      setStroke((st) => {
+        const last = st[st.length - 1];
+        if (last && Math.hypot((last[0] - p[0]) * W, (last[1] - p[1]) * H) < heal.size * Math.max(W, H) * 0.3) return st;
+        return [...st, [p[0], p[1], heal.size]];
+      });
+      return;
+    }
     if (d.mode.startsWith("crop") && d.rect) {
       let [x0, y0, x1, y1] = d.rect;
       const dx = q[0] - d.start[0], dy = q[1] - d.start[1];
@@ -702,6 +799,10 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     drag.current = null;
     setDrawing(false);
     if (!d) return;
+    if (d.mode === "heal") {
+      submitRetouch(strokeRef.current.map(([x, y, r]) => [Math.round(x * 1e5) / 1e5, Math.round(y * 1e5) / 1e5, r]), heal.mode);
+      return;
+    }
     if (d.mode === "obj") {
       setObjBox(null);
       if (pxDist(d.start, qOf(e)) > 8) pickObject(d.start, qOf(e));
@@ -750,7 +851,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     if (e.key === "Escape") {
       if (pipette) setPipette(false);
       else if (tool === "crop") leaveCrop();
-      else if (tool === "mask") { setTool("edit"); setSel(null); }
+      else if (tool === "mask" || tool === "heal") { setTool("edit"); setSel(null); }
       else onClose();
     } else if (e.key === "ArrowRight") go(index + 1);
     else if (e.key === "ArrowLeft") go(index - 1);
@@ -758,6 +859,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     else if (k === "y") setBefore((b) => (b === "split" ? "off" : "split"));
     else if (k === "r") (tool === "crop" ? leaveCrop() : startCrop());
     else if (k === "m") { setTool((x) => (x === "mask" ? "edit" : "mask")); setCropDraft(null); }
+    else if (k === "q") { setTool((x) => (x === "heal" ? "edit" : "heal")); setCropDraft(null); }
     else if (k === "w") setPipette((p) => !p);
     else if (k === "j") setClip((c) => !c);
     else if (k === "z") setZoom((z) => !z);
@@ -782,12 +884,12 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
   const copySettings = () => { if (modelRef.current) { clipboard = clone(modelRef.current); toast("Einstellungen kopiert (⇧⌘V fügt ein)"); } };
   const pasteSettings = () => {
     if (!clipboard || !modelRef.current) { toast("Nichts kopiert", "error"); return; }
-    setModel({ ...clone(clipboard), crop: modelRef.current.crop });
+    setModel({ ...clone(clipboard), crop: modelRef.current.crop, retouch: modelRef.current.retouch });
     commit("Einstellungen eingefügt");
   };
   const usePrevious = () => {
     if (!previous || !modelRef.current) { toast("Noch kein vorheriges Bild bearbeitet", "error"); return; }
-    setModel({ ...clone(previous), crop: modelRef.current.crop });
+    setModel({ ...clone(previous), crop: modelRef.current.crop, retouch: modelRef.current.retouch });
     commit("Vorherige Einstellungen");
   };
   const resetAll = async () => {
@@ -867,6 +969,24 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
         return <g><polyline points={pts} fill="none" stroke="#fff" strokeWidth="1.3" />
           {hs.map((p, i) => { const v = imgToView(view, p); return <circle key={i} cx={v[0] * box.w} cy={v[1] * box.h} r={i ? 5 : 7} className={`dv-h ${i ? "" : "main"}`} />; })}</g>;
       })()}
+      {tool === "heal" && (() => {
+        const sc = Math.max(box.w / (view.rect[2] - view.rect[0]), box.h / (view.rect[3] - view.rect[1]));
+        const dots = (ds: [number, number, number][], cls: string) => ds.map(([x, y, r], i) => {
+          const v = imgToView(view, [x, y]);
+          return <circle key={i} cx={v[0] * box.w} cy={v[1] * box.h} r={r * sc} className={cls} />;
+        });
+        return <g>
+          {(model.retouch ?? []).map((op, i) => {
+            const cx = op.dabs.reduce((a, d) => a + d[0], 0) / Math.max(op.dabs.length, 1);
+            const cy = op.dabs.reduce((a, d) => a + d[1], 0) / Math.max(op.dabs.length, 1);
+            const v = imgToView(view, [cx, cy]);
+            return <g key={op.id}>{hoverOp === i && dots(op.dabs, "dv-heal-op")}
+              <circle cx={v[0] * box.w} cy={v[1] * box.h} r="5" className="dv-heal-pin" /></g>;
+          })}
+          {dots(stroke, "dv-heal-stroke")}
+          {cursor && !healBusy && <circle cx={cursor[0] * box.w} cy={cursor[1] * box.h} r={heal.size * sc} fill="none" stroke="#fff" strokeWidth="1.2" />}
+        </g>;
+      })()}
       {objBox && (
         <rect x={Math.min(objBox[0][0], objBox[1][0]) * box.w} y={Math.min(objBox[0][1], objBox[1][1]) * box.h}
           width={Math.abs(objBox[1][0] - objBox[0][0]) * box.w} height={Math.abs(objBox[1][1] - objBox[0][1]) * box.h}
@@ -879,7 +999,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     </svg>
   );
 
-  const stageCursor = pipette || dnPick || (tool === "mask" && objMode) ? "crosshair" : tool === "mask" && curMask && curMask.kind !== "other" && !["subject", "background", "sky", "person"].includes(curMask.kind)
+  const stageCursor = tool === "heal" ? (healBusy ? "progress" : "none") : pipette || dnPick || (tool === "mask" && objMode) ? "crosshair" : tool === "mask" && curMask && curMask.kind !== "other" && !["subject", "background", "sky", "person"].includes(curMask.kind)
     ? (curMask.kind === "brush" ? "none" : "crosshair") : tool === "crop" ? "move" : zoom ? "grab" : "zoom-in";
   const saveLabel = { saved: "Gespeichert", dirty: "Geändert …", saving: "Speichert …", error: "Speichern fehlgeschlagen" }[save];
 
@@ -950,6 +1070,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
           {tool === "crop" && <div className="dv-badge">Ecken ziehen · innen verschieben · aussen ziehen dreht · Esc fertig</div>}
           {tool === "mask" && curMask?.kind === "brush" && !objMode && <div className="dv-badge">Malen · Alt gedrückt löscht · [ ] Pinselgrösse</div>}
           {tool === "mask" && objMode && <div className="dv-badge">Rahmen um das Objekt ziehen – Imagomat findet die Kanten</div>}
+          {tool === "heal" && <div className="dv-badge">{healBusy ? "rechnet …" : heal.mode === "remove" ? "Über das Störende malen – KI entfernt es" : "Über den Fleck malen – wird repariert"}</div>}
           {dnPick && <div className="dv-badge">Auf die Stelle klicken, die du 1:1 sehen willst</div>}
           {noGpu && <div className="dv-badge warn">Grafikkarte nicht nutzbar – langsamere Vorschau</div>}
         </div>
@@ -978,6 +1099,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
         <div className="dv-tools">
           <button className={tool === "edit" ? "on" : ""} onClick={() => { if (tool === "crop") leaveCrop(); setTool("edit"); }} title="Bearbeiten"><Ic.IcSliders size={20} /><span>Bearbeiten</span></button>
           <button className={tool === "crop" ? "on" : ""} onClick={() => (tool === "crop" ? leaveCrop() : startCrop())} title="Zuschneiden und Begradigen (R)"><Ic.IcCrop size={20} /><span>Zuschneiden</span></button>
+          <button className={tool === "heal" ? "on" : ""} onClick={() => { if (tool === "crop") leaveCrop(); setTool(tool === "heal" ? "edit" : "heal"); }} title="Entfernen und Reparieren (Q)"><Ic.IcHeal size={20} /><span>Reparieren</span></button>
           <button className={tool === "mask" ? "on" : ""} onClick={() => { if (tool === "crop") leaveCrop(); setTool(tool === "mask" ? "edit" : "mask"); }} title="Masken (M)"><Ic.IcMask size={20} /><span>Masken</span></button>
         </div>
         <div className="dv-scroll">
@@ -1119,6 +1241,38 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
                 <button className="primary" onClick={leaveCrop}><Ic.IcCheck size={15} /> Fertig</button>
               </div>
               <div className="dv-hint">Zuschnitt und Winkel gehen 1:1 nach Lightroom. Beim Übertragen auf alle Bilder richtet jedes Bild sich selbst gerade.</div>
+            </Panel>
+          )}
+
+          {model && tool === "heal" && (
+            <Panel id="heal" title="Entfernen und Reparieren">
+              <div className="dv-seg">
+                <button className={heal.mode === "remove" ? "on" : ""} onClick={() => setHeal((h) => ({ ...h, mode: "remove" }))}>Entfernen (KI)</button>
+                <button className={heal.mode === "heal" ? "on" : ""} onClick={() => setHeal((h) => ({ ...h, mode: "heal" }))}>Reparieren</button>
+              </div>
+              <div className="dv-hint" style={{ marginTop: 0 }}>{heal.mode === "remove"
+                ? "Über Störendes malen (Personen, Schilder, Kabel …): die KI füllt die Stelle passend auf."
+                : "Über Flecken malen: eine passende Stelle aus der Nähe wird nahtlos übernommen."}</div>
+              <Slider k="hsize" label="Grösse" value={Math.round(heal.size * 1000)} min={3} max={200} dflt={25} fmt={(v) => `${v}`}
+                onChange={(_k, v) => setHeal((h) => ({ ...h, size: v / 1000 }))} onCommit={() => undefined} />
+              <Slider k="hfeather" label="Weiche Kante" value={heal.feather} min={0} max={100} dflt={40} fmt={(v) => `${Math.round(v)}`}
+                onChange={(_k, v) => setHeal((h) => ({ ...h, feather: v }))} onCommit={() => undefined} />
+              {healBusy && <div className="dv-hint">rechnet in voller Auflösung …</div>}
+              <div className="dv-masklist" style={{ marginTop: 8 }}>
+                {(model.retouch ?? []).map((op, i) => (
+                  <div key={op.id} className="dv-mask" onMouseEnter={() => setHoverOp(i)} onMouseLeave={() => setHoverOp(null)}>
+                    <Ic.IcHeal size={15} />
+                    <span style={{ flex: 1 }}>{op.mode === "remove" ? "Entfernt" : "Repariert"} {i + 1}</span>
+                    {op.mode === "heal" && <button className="dv-iconbtn sm" disabled={healBusy} title="Andere Quelle"
+                      onClick={() => submitRetouch(op.dabs, "heal", op.variant + 1, i)}>↻</button>}
+                    <button className="dv-iconbtn sm" title="Löschen" onClick={() => {
+                      update((m) => ({ ...m, retouch: (m.retouch ?? []).filter((_, j) => j !== i) })); commit("Retusche gelöscht");
+                    }}><Ic.IcTrash size={14} /></button>
+                  </div>
+                ))}
+                {(model.retouch ?? []).length === 0 && <div className="dv-muted">Noch nichts retuschiert.</div>}
+              </div>
+              <div className="dv-hint">Lightroom kann solche Retuschen nicht aus XMP lesen: beim Export entsteht eine „…-Retusche.dng“ mit allen Einstellungen.</div>
             </Panel>
           )}
 

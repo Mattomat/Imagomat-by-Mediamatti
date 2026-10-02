@@ -70,6 +70,7 @@ class ExportItem:
     notes: list[str] = field(default_factory=list)
     preset: str | None = None
     dims: tuple[int, int] | None = None
+    retouch: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _items(db: Database, shoot_id: int, include_rejected: bool) -> list[ExportItem]:
@@ -109,6 +110,8 @@ def _items(db: Database, shoot_id: int, include_rejected: bool) -> list[ExportIt
             notes=a.get("develop_notes", []), preset=a.get("preset"),
             dims=(int(r["width"]), int(r["height"])) if r["width"] and r["height"] else None,
         )
+        rt = db.one("SELECT ops FROM retouch WHERE image_id=?", (r["id"],))
+        it.retouch = json.loads(rt["ops"]) if rt and rt["ops"] else []
         # Stichwörter
         for p in image_people(db, r["id"]):
             it.keywords.append(p.keyword)
@@ -189,31 +192,32 @@ def denoise_amount_for(it: ExportItem, denoise: str | None) -> int | None:
 def export_xmp(items: list[ExportItem], target: Path, mode: str, ctx: JobContext | None = None,
                denoise: str | None = None) -> None:
     s = load_settings()
-    from ..denoise.local import denoise_to_dng
 
     for i, it in enumerate(items):
         if ctx:
             ctx.check()
         with_develop = it.decision == "keep" and bool(it.crs)
         amount = denoise_amount_for(it, denoise) if with_develop else None
-        if amount:
+        retouched = bool(it.retouch) and with_develop and raw_io.is_raw(it.src)
+        if amount or retouched:
             if ctx:
-                ctx.progress(message=f"KI-Entrauschen {it.src.name} ({i + 1}/{len(items)}) …")
+                ctx.progress(message=f"{'KI-Entrauschen' if amount else 'Retusche'} {it.src.name} ({i + 1}/{len(items)}) …")
             crs = {k: v for k, v in it.crs.items() if not k.startswith("Enhance")}
             doc = XmpDoc(rating=it.rating, label=it.label, keywords=it.keywords, crs=crs, regions=it.regions,
                          region_dims=it.region_dims)
             # wie Lightroom "Entrauschen": DNG neben dem Original (im Ablageort) bzw. im Export-Ordner
             folder = it.src.parent if mode == "inplace" else target
-            dst = folder / f"{it.src.stem}-Enhanced-NR.dng"
+            dst = folder / f"{it.src.stem}-{'Retusche' if retouched else 'Enhanced-NR'}.dng"
             packet = serialize(doc, include_parent_keywords=s.keywords.write_parent_keywords)
             import hashlib
 
             marker = dst.with_name(f".{dst.stem}.imagomat")
-            sig = f"{amount}|{hashlib.sha1(packet).hexdigest()}"
+            sig = f"{amount}|{json.dumps(it.retouch, sort_keys=True)}|{hashlib.sha1(packet).hexdigest()}"
             if not dst.exists() or not marker.exists() or marker.read_text() != sig:
-                res = denoise_to_dng(it.src, dst, amount, s.denoise.local_model, xmp=packet, exif=it.exif)
+                used = raw_to_dng(it, dst, amount, packet, s.denoise.local_model)
                 marker.write_text(sig)
-                it.notes.append(f"KI-entrauscht ({res['method']}, Stärke {amount})")
+                it.notes.append(f"DNG: {'Retusche, ' if retouched else ''}"
+                                f"{f'KI-entrauscht ({used}, Stärke {amount})' if amount else 'ohne Entrauschen'}")
             if mode == "inplace" and it.src.suffix.lower() != ".dng":
                 write_sidecar(it.src, _doc(it, with_develop), include_parent_keywords=s.keywords.write_parent_keywords)
             it.out = dst
@@ -271,6 +275,38 @@ def export_jpeg(items: list[ExportItem], target: Path, long_side: int = 2048, ct
             ctx.progress(advance=1, message=f"JPEG {i + 1}/{len(items)}")
 
 
+def _patches_for(it: ExportItem, full_oriented: Any) -> list[dict[str, Any]]:
+    from ..config import image_key
+    from ..retouch import ensure_patches
+
+    return ensure_patches(image_key(it.image_id, str(it.src)), it.retouch, full_oriented) if it.retouch else []
+
+
+def raw_to_dng(it: ExportItem, dst: Path, amount: int | None, xmp: bytes, model: str = "auto") -> str:
+    """RAW -> lineare DNG mit KI-Entrauschen und/oder Retusche (Lightroom liest beides nicht aus XMP)."""
+    from ..denoise.local import denoise_linear
+    from ..io.dng import write_dng
+    from ..retouch import apply_patches
+
+    lin, info = raw_io.decode(it.src, half_size=False, oriented=False)
+    wb = np.asarray(info.camera_wb, dtype=np.float32)
+    used = "keine"
+    if it.retouch:
+        o = info.orientation
+        lin_o = raw_io.orient(lin, o)
+        lin_o = apply_patches(lin_o, _patches_for(it, lambda: (lin_o, wb)))
+        lin = raw_io.orient(lin_o, {6: 8, 8: 6}.get(o, o))       # zurück in Sensororientierung
+    if amount:
+        lin, used = denoise_linear(lin, wb, raw_io.estimate_noise(it.src)["sigma_mid"], amount, model)
+    data16 = np.clip(lin * 65535, 0, 65535).astype(np.uint16)
+    e = it.exif
+    write_dng(dst, data16, cfa=False, color_matrix=info.xyz_to_cam, as_shot_neutral=tuple((1.0 / wb[:3]).tolist()),
+              make=str(e.get("make") or "Imagomat"), model=str(e.get("camera") or "Imagomat"),
+              iso=int(e["iso"]) if e.get("iso") else None, exposure_time=e.get("exposure_time"),
+              fnumber=e.get("aperture"), focal_length=e.get("focal_length"), orientation=info.orientation, xmp=xmp)
+    return used
+
+
 RENDER_FORMATS = {"jpeg": ".jpg", "webp": ".webp", "png": ".png", "tiff": ".tif"}
 
 
@@ -283,6 +319,15 @@ def render_full(it: ExportItem, long_side: int | None, denoise_amount: int | Non
         return img
     half = bool(long_side and long_side <= 3000)
     lin, info = raw_io.decode_any(it.src, half_size=half)
+    if it.retouch:
+        from ..retouch import apply_patches
+
+        def full() -> tuple[np.ndarray, np.ndarray]:
+            if not half:
+                return lin, np.asarray(info.camera_wb, np.float32)
+            fl, fi = raw_io.decode_any(it.src, half_size=False)
+            return fl, np.asarray(fi.camera_wb, np.float32)
+        lin = apply_patches(lin, _patches_for(it, full))
     if denoise_amount:
         from ..denoise.local import denoise_linear
 

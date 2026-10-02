@@ -175,3 +175,6 @@
 .dv-dn { margin-top: 8px; }
 .dv-dn img { width: 100%; display: block; border-radius: 3px; image-rendering: auto; }
 .dv-dn-l { display: flex; justify-content: space-around; font-size: 11px; color: var(--dv-muted); margin-top: 3px; }
+.dv-heal-stroke { fill: rgba(255, 255, 255, 0.45); stroke: none; }
+.dv-heal-op { fill: rgba(255, 255, 255, 0.25); stroke: rgba(255, 255, 255, 0.7); stroke-width: 1; }
+.dv-heal-pin { fill: rgba(30, 30, 30, 0.7); stroke: #fff; stroke-width: 1.5; }

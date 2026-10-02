@@ -44,3 +44,4 @@ export const IcClip = (p: P) => <I {...p}><path d="M4 20 12 4l8 16z" /></I>;
 export const IcPreset = (p: P) => <I {...p}><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M7 15l3-3 2 2 5-5" /></I>;
 export const IcInvert = (p: P) => <I {...p}><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" /></I>;
 export const IcErase = (p: P) => <I {...p}><path d="m7 21-4-4 10-10 7 7-7 7zM21 21H7M9 11l7 7" /></I>;
+export const IcHeal = (p: P) => <I {...p}><rect x="2.5" y="8.5" width="19" height="7" rx="3.5" transform="rotate(-45 12 12)" /><path d="M10.5 10.5h.01M13.5 13.5h.01M13.5 10.5h.01M10.5 13.5h.01" strokeWidth="2.4" /></I>;

@@ -24,6 +24,7 @@ export interface Crop {
   CropAngle: number;
 }
 export interface Curves { main?: Pt[]; red?: Pt[]; green?: Pt[]; blue?: Pt[] }
+export interface RetouchOp { id: string; mode: "remove" | "heal"; dabs: [number, number, number][]; feather: number; variant: number }
 export interface EdModel {
   global: Record<string, number>;
   wb_custom: boolean;
@@ -31,6 +32,7 @@ export interface EdModel {
   curves: Curves;
   crop: Crop;
   denoise?: number | null;      // KI-Entrauschen (Stärke) oder aus
+  retouch?: RetouchOp[];         // Entfernen / Reparieren
 }
 
 export const DEFAULTS: Record<string, number> = {
@@ -44,7 +46,7 @@ export const NO_CROP: Crop = { HasCrop: false, CropLeft: 0, CropTop: 0, CropRigh
 
 export function normalize(m: EdModel): EdModel {
   return { global: m.global ?? {}, wb_custom: !!m.wb_custom, masks: m.masks ?? [], curves: m.curves ?? {},
-    crop: { ...NO_CROP, ...(m.crop ?? {}) }, denoise: m.denoise ?? null };
+    crop: { ...NO_CROP, ...(m.crop ?? {}) }, denoise: m.denoise ?? null, retouch: m.retouch ?? [] };
 }
 
 // ------------------------------------------------------------------ Quelle (lineare RAW-Daten vom Server)
@@ -65,6 +67,18 @@ export function half(h: number): number {
   if (e === 0) return s * 6.103515625e-5 * (f / 1024);
   if (e === 31) return f ? NaN : s * Infinity;
   return s * Math.pow(2, e - 15) * (1 + f / 1024);
+}
+
+const _f32 = new Float32Array(1), _u32 = new Uint32Array(_f32.buffer);
+export function toHalf(v: number): number {
+  _f32[0] = v;
+  const x = _u32[0], sign = (x >> 16) & 0x8000;
+  let e = ((x >> 23) & 0xff) - 127 + 15;
+  const m = x & 0x7fffff;
+  if (e <= 0) return e < -10 ? sign : sign | ((m | 0x800000) >> (1 - e + 13));
+  if (e >= 31) return sign | 0x7c00;
+  const h = sign | (e << 10) | (m >> 13);
+  return (m & 0x1000) ? h + 1 : h;
 }
 
 /** Weissabgleich-Faktoren (Kamera-RGB) für Temperatur/Tönung, bilinear aus der Server-Tabelle. */

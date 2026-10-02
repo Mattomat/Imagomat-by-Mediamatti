@@ -607,6 +607,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     _sources: dict[int, tuple[str, float, float]] = {}
     _hi: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray, int]] = {}
+    _full: dict[str, Any] = {}
+    _full_lock = threading.Lock()
     _hi_lock = threading.Lock()
 
     def _linear_hi(iid: int, path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
@@ -633,6 +635,31 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 _hi.pop(next(iter(_hi)))
         return out
 
+    def _retouch_ops(iid: int) -> list[dict[str, Any]]:
+        r = db.one("SELECT ops FROM retouch WHERE image_id=?", (iid,))
+        return json.loads(r["ops"]) if r and r["ops"] else []
+
+    def _full_lin(iid: int, path: Path) -> tuple[np.ndarray, Any]:
+        """Volle Auflösung (Anzeigeorientierung) für Retusche und 1:1-Ansichten; nur das letzte Bild im Speicher."""
+        with _full_lock:
+            if _full.get("key") != image_key(iid, path):
+                lin, info = raw_io.decode_any(path, half_size=False)
+                _full.clear()
+                _full.update(key=image_key(iid, path), lin=lin, info=info)
+            return _full["lin"], _full["info"]
+
+    def _patches(iid: int, path: Path, ops: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        from ..retouch import ensure_patches
+
+        ops = _retouch_ops(iid) if ops is None else ops
+        if not ops:
+            return []
+
+        def full() -> tuple[np.ndarray, np.ndarray]:
+            lin, info = _full_lin(iid, path)
+            return lin, np.asarray(info.camera_wb, np.float32)
+        return ensure_patches(image_key(iid, path), ops, full)
+
     def _with_as_shot(iid: int, crs: dict[str, Any]) -> dict[str, Any]:
         """Bei schon weissabgeglichenen Daten (Apple RAW-Engine, Vorschau) den Aufnahme-Weissabgleich mitgeben."""
         src = _sources.get(iid)
@@ -647,11 +674,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def _render_file(iid: int, path: Path, crs: dict[str, Any], size: int, cache: Path) -> Response:
         if not raw_io.is_raw(path):
             return preview(iid)            # fertige JPGs: nichts zu entwickeln, Vorschau zeigen
+        from ..retouch import apply_patches
+
         m = load_masks(iid)
         seg = {"subject": m[0], "sky": m[1]} if m else {}
-        if size > 2048:
-            # grosse Vorschau: direkt aus dem RAW in Bildschirmauflösung (mit Schärfen wie Lightroom)
-            lin, xyz, wb, orient = _linear_hi(iid, path)
+        patches = _patches(iid, path)
+        if size > 2048 or patches:
+            # grosse Vorschau: direkt aus dem RAW in Bildschirmauflösung (mit Schärfen wie Lightroom); mit Retusche
+            # nie aus der Kamera-Vorschau (dort wäre das Entfernte noch zu sehen)
+            lin, xyz, wb, orient = _linear_hi(iid, path) if size > 2048 else _linear(iid, path)
+            lin = apply_patches(lin, patches)
             img = render(lin, xyz, wb, _with_as_shot(iid, crs), orient, seg, size)
             cache.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(cache), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
@@ -778,6 +810,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         a = db.get_analysis(iid) or {}
         model = crs_to_model(crs, orient)
         model["denoise"] = r["edit_denoise"]
+        model["retouch"] = _retouch_ops(iid)
         return {"model": model, "manual": r["profile"] == "manual", "orientation": orient,
                 "has_subject": load_masks(iid) is not None, "local_keys": LOCAL_KEYS,
                 "as_shot": [a.get("as_shot_temp"), a.get("as_shot_tint")], "profile": r["profile"],
@@ -848,9 +881,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return Response(struct.pack("<I", len(hb)) + hb + data, media_type="application/octet-stream",
                         headers={"Cache-Control": "no-store"})
 
-    _full: dict[str, Any] = {}
-    _full_lock = threading.Lock()
-
     @app.post("/api/images/{iid}/denoise/preview")
     def denoise_preview(iid: int, body: dict[str, Any]) -> Response:
         """1:1-Ausschnitt vorher | nachher fürs KI-Entrauschen (wie das Detail-Fenster in Lightroom)."""
@@ -861,12 +891,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if not r or not raw_io.is_raw(Path(r["path"])):
             raise HTTPException(400, "Nur RAW-Dateien")
         path = Path(r["path"])
+        lin, info = _full_lin(iid, path)
         with _full_lock:
-            if _full.get("key") != image_key(iid, path):
-                lin, info = raw_io.decode_any(path, half_size=False)
-                _full.clear()
-                _full.update(key=image_key(iid, path), lin=lin, info=info, noise=raw_io.estimate_noise(path))
-            lin, info, noise = _full["lin"], _full["info"], _full["noise"]
+            if "noise" not in _full:
+                _full["noise"] = raw_io.estimate_noise(path)
+            noise = _full["noise"]
+        from ..retouch import apply_patches
+
+        lin = apply_patches(lin, _patches(iid, path))
         h, w = lin.shape[:2]
         side, pad = int(min(max(int(body.get("size") or 360), 128), 720)), 32
         cx, cy = float(body.get("x", 0.5)) * w, float(body.get("y", 0.5)) * h
@@ -893,6 +925,61 @@ def create_app(db_path: str | None = None) -> FastAPI:
         ok, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
         return Response(buf.tobytes(), media_type="image/jpeg", headers={"X-Denoise-Method": used,
                                                                          "Cache-Control": "no-store"})
+
+    @app.post("/api/images/{iid}/editor/retouch")
+    def editor_retouch(iid: int, body: dict[str, Any]) -> dict[str, Any]:
+        """Entfernen (KI) / Reparieren: einmal in voller Auflösung rechnen und zwischenspeichern."""
+        import uuid
+
+        from ..retouch import compute_patch, save_patch
+
+        r = db.one("SELECT path FROM images WHERE id=?", (iid,))
+        if not r or not raw_io.is_raw(Path(r["path"])):
+            raise HTTPException(400, "Nur RAW-Dateien")
+        path = Path(r["path"])
+        op = {"id": uuid.uuid4().hex[:10], "mode": "remove" if body.get("mode") == "remove" else "heal",
+              "dabs": body.get("dabs") or [], "feather": float(body.get("feather", 40)), "variant": int(body.get("variant", 0))}
+        if not op["dabs"]:
+            raise HTTPException(400, "Nichts markiert")
+        lin, info = _full_lin(iid, path)
+        # frühere Retuschen zuerst, damit sich Reparaturen aufeinander beziehen können
+        from ..retouch import apply_patches
+
+        base = apply_patches(lin, _patches(iid, path, body.get("before") or []))
+        p = compute_patch(base, np.asarray(info.camera_wb, np.float32), op)
+        save_patch(image_key(iid, path), op["id"], p)
+        return {"op": op, "method": p.get("method", "heal")}
+
+    @app.get("/api/images/{iid}/editor/retouch/{op_id}")
+    def editor_retouch_patch(iid: int, op_id: str, w: int, h: int, floor: str = "0,0,0") -> Response:
+        """Retusche-Ausschnitt in der Grösse der Editor-Quelle: Kopf + RGB (Halbfloat, ohne Sockel) + Deckkraft."""
+        import struct
+
+        from ..retouch import load_patch
+
+        r = db.one("SELECT path FROM images WHERE id=?", (iid,))
+        if not r:
+            raise HTTPException(404)
+        p = load_patch(image_key(iid, Path(r["path"])), op_id)
+        if p is None:
+            ops = [o for o in _retouch_ops(iid) if str(o.get("id")) == op_id]
+            if not ops:
+                raise HTTPException(404, "Retusche nicht gefunden")
+            p = _patches(iid, Path(r["path"]), ops)[0]
+        pl = p["lin"]
+        sx, sy = w / float(p["W"]), h / float(p["H"])
+        x0, y0 = int(np.floor(p["x"] * sx)), int(np.floor(p["y"] * sy))
+        x1, y1 = min(w, int(np.ceil((p["x"] + pl.shape[1]) * sx))), min(h, int(np.ceil((p["y"] + pl.shape[0]) * sy)))
+        tw, th = max(1, x1 - x0), max(1, y1 - y0)
+        interp = cv2.INTER_AREA if sx < 1 else cv2.INTER_LINEAR
+        fl = np.array([float(v) for v in floor.split(",")[:3]], np.float32)
+        rgb = cv2.resize(pl.astype(np.float32), (tw, th), interpolation=interp) - fl[None, None]
+        a = cv2.resize(p["alpha"], (tw, th), interpolation=interp)
+        head = json.dumps({"x": x0, "y": y0, "w": tw, "h": th}).encode()
+        head += b" " * ((-len(head)) % 4)
+        return Response(struct.pack("<I", len(head)) + head + np.ascontiguousarray(rgb.astype("<f2")).tobytes()
+                        + np.ascontiguousarray(a.astype(np.uint8)).tobytes(), media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-store"})
 
     @app.post("/api/images/{iid}/editor/object")
     def editor_object(iid: int, body: dict[str, Any]) -> dict[str, Any]:
@@ -991,6 +1078,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
                       " updated_at) VALUES(?, 'manual', ?, ?, 1.0, ?, (SELECT user_params FROM edits WHERE image_id=?), ?)",
                       (iid, dumps({k: v for k, v in crs.items() if k != "MaskGroupBasedCorrections"}),
                        dumps(masks) if masks else None, dn, iid, time.time()))
+        if isinstance(model.get("retouch"), list):
+            ops = [{"id": str(o.get("id")), "mode": "remove" if o.get("mode") == "remove" else "heal",
+                    "dabs": o.get("dabs") or [], "feather": float(o.get("feather", 40)),
+                    "variant": int(o.get("variant", 0))} for o in model["retouch"] if isinstance(o, dict) and o.get("id")]
+            with db.tx() as c:
+                if ops:
+                    c.execute("INSERT OR REPLACE INTO retouch(image_id, ops) VALUES(?, ?)", (iid, json.dumps(ops)))
+                else:
+                    c.execute("DELETE FROM retouch WHERE image_id=?", (iid,))
         db.update_analysis(iid, {"develop_notes": ["von Hand bearbeitet"]})
         return crs
 

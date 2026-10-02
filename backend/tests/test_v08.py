@@ -87,3 +87,44 @@ def test_neutral_presets_object_denoise_export(tmp_path: Path):
         jpgs = sorted(tgt.glob("Match-*.jpg"))
         assert jpgs and sorted(tgt.glob("Match-*.webp")) and sorted(tgt.glob("Match-*.png"))
         assert max(Image.open(jpgs[0]).size) == 300
+
+
+def test_retouch_heal_remove_render_export(tmp_path: Path):
+    import numpy as np
+    from fastapi.testclient import TestClient
+
+    from imagomat.jobs import JobManager
+    from imagomat.retouch import apply_patches, compute_patch
+    from imagomat.server.app import create_app
+
+    # Fleck auf gleichmässiger Struktur: Reparieren holt die Umgebung, nicht den Fleck
+    rng = np.random.default_rng(1)
+    lin = (0.2 + rng.normal(0, 0.01, (300, 400, 3))).astype(np.float32)
+    lin[140:160, 190:210] = 0.9
+    op = {"id": "t1", "mode": "heal", "dabs": [[0.5, 0.5, 0.04]], "feather": 30, "variant": 0}
+    p = compute_patch(lin, np.ones(3, np.float32), op)
+    out = apply_patches(lin, [p])
+    assert out[145:155, 195:205].mean() < 0.3 and abs(out[:100].mean() - lin[:100].mean()) < 1e-4
+    small = apply_patches(lin[::2, ::2].copy(), [p])            # verkleinert eingeblendet
+    assert small[72:78, 97:103].mean() < 0.35
+
+    db, dbp, sid, jm = _shoot(tmp_path)
+    iid = db.images(sid)[0]["id"]
+    app = create_app(str(dbp))
+    with TestClient(app) as c:
+        r = c.post(f"/api/images/{iid}/editor/retouch", json={"mode": "remove", "dabs": [[0.3, 0.4, 0.05]], "feather": 40})
+        assert r.status_code == 200, r.text
+        op = r.json()["op"]
+        assert r.json()["method"] in ("ai", "heal")
+        b = c.get(f"/api/images/{iid}/editor/retouch/{op['id']}?w=300&h=200&floor=0,0,0")
+        assert b.status_code == 200 and len(b.content) > 100
+        model = c.get(f"/api/images/{iid}/editor").json()["model"]
+        model["retouch"] = [op]
+        assert c.put(f"/api/images/{iid}/editor", json={"model": model}).json()["ok"]
+        assert c.get(f"/api/images/{iid}/editor").json()["model"]["retouch"][0]["id"] == op["id"]
+        assert c.get(f"/api/images/{iid}/render?size=600").status_code == 200
+        out = tmp_path / "exp"
+        j = c.post(f"/api/shoots/{sid}/export", json={"target": str(out), "formats": ["xmp", "jpeg"], "long_side": 0,
+                                                       "denoise": "off", "include_rejected": False}).json()
+        assert JobManager(db).run_sync(j["job_id"])["status"] == "done"
+        assert list(Path(j["target"]).glob("*-Retusche.dng"))
