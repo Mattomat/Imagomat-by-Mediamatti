@@ -2,8 +2,8 @@
 
 Ablauf pro Shoot:
 1. Bekannte Personen wiedererkennen (Vergleich mit bestätigten Gesichtern).
-2. Rückennummer/Trikotname nur als Notlösung: nur wenn im Bild gar kein Gesicht erkannt wurde, und nur Spieler des Shoot-Teams auf roten,
-   weissen oder schwarzen Trikots (FC Winterthur). Gegner und andere eigene Teams zählen nie.
+2. Rückennummer/Trikotname nur als Notlösung: nur wenn im Bild gar kein Gesicht erkannt wurde, und nur Spieler des
+   Shoot-Teams (optional nur auf rot/weiss/schwarzen Trikots, Einstellung shirt_color_check). Andere Teams zählen nie.
 3. Rest clustern. In der UI gibst du Clustern einen Namen; ab dann erkennt die
    App die Person auch in künftigen Shoots.
 """
@@ -207,7 +207,7 @@ def _clear(f) -> bool:
 
 
 def team_color_share(img: np.ndarray, bbox) -> float | None:
-    """Wie viel des Trikots rund um die Nummer ist rot, weiss oder schwarz? (FCW: Heim rot, auswärts
+    """Wie viel des Trikots rund um die Nummer ist rot, weiss oder schwarz? (z. B. Heim rot, auswärts
     weiss/schwarz). Blaue, gelbe, grüne ... Gegner-Trikots fallen so heraus."""
     import cv2
 
@@ -357,10 +357,11 @@ def people_job(ctx: JobContext, shoot_id: int, threshold: float | None = None) -
                 evidence.setdefault((n["image_id"], pid), []).append(n)
     accepted: dict[int, int] = {}                 # numbers.id -> Person
     via_shirt = vetoed = 0
+    color_check = load_settings().shirt_color_check
     for (image_id, pid), rows in evidence.items():
-        img = preview(image_id)
-        if img is None or not any((team_color_share(img, json.loads(n["bbox"])) or 0) >= TEAM_COLOR_MIN
-                                  for n in rows):
+        img = preview(image_id) if color_check else None
+        if color_check and (img is None or not any((team_color_share(img, json.loads(n["bbox"])) or 0)
+                                                   >= TEAM_COLOR_MIN for n in rows)):
             vetoed += 1
             continue
         centers = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in (json.loads(n["bbox"]) for n in rows)]

@@ -152,7 +152,9 @@ class Settings:
     ocr_backend: str = "auto"           # auto | vision | easyocr | none
     action_backend: str = "auto"        # auto (Pose nur mit GPU) | pose | clip | none
     # Wörter auf Trikots, die nie ein Spielername sind (Sponsoren); weitere erkennt Imagomat selbst
-    ignored_shirt_words: list[str] = field(default_factory=lambda: ["KELLER", "INIT"])
+    ignored_shirt_words: list[str] = field(default_factory=list)
+    # Rückennummer nur zählen, wenn das Trikot rot/weiss/schwarz ist (für Vereine mit diesen Farben; aus = alle)
+    shirt_color_check: bool = False
     workers: int = max(2, (os.cpu_count() or 4) - 2)
     default_profile: str | None = None
     # Ablageort: hierhin kopiert Imagomat die RAWs beim Import (Ordner je Shoot); dort verlinkt sie auch

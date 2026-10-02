@@ -114,7 +114,7 @@ def test_face_beats_number_and_name(tmp_path: Path):
     assert {r[0] for r in db.query("SELECT person_id FROM numbers")} == {None}
 
 
-def test_shirt_needs_team_and_fcw_colors(tmp_path: Path):
+def test_shirt_needs_team_and_team_colors(tmp_path: Path):
     # Ohne bekanntes Team: nichts über das Trikot (sonst landen Spielerinnen anderer Teams im Bild)
     db, sid, iid, maluvunu, _ = _setup(tmp_path)
     with db.tx() as c:
@@ -123,7 +123,12 @@ def test_shirt_needs_team_and_fcw_colors(tmp_path: Path):
     jm = JobManager(db)
     assert jm.run_sync(db.create_job("people", sid, {}))["status"] == "done"
     assert db.one("SELECT person_id FROM numbers")[0] is None
-    # Gegner in Blau: auch mit Team nichts
+    # Gegner in Blau: mit eingeschalteter Trikotfarben-Prüfung auch mit Team nichts
+    from imagomat.config import load_settings, save_settings
+
+    st = load_settings()
+    st.shirt_color_check = True
+    save_settings(st)
     (tmp_path / "blau").mkdir()
     db2, sid2, iid2, _, _ = _setup(tmp_path / "blau", color=(30, 60, 200))
     with db2.tx() as c:

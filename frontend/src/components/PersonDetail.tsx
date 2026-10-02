@@ -69,7 +69,7 @@ export default function PersonDetail({ person, teams, onClose, onChanged, toast 
             <input className="pd-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
             <div className="row">
               <input className="narrow" value={number} onChange={(e) => setNumber(e.target.value.replace(/\D/g, ""))} placeholder="Nr." />
-              <input list="pd-teams" value={team} onChange={(e) => setTeam(e.target.value)} placeholder="Team (z. B. FCW Herren)" />
+              <input list="pd-teams" value={team} onChange={(e) => setTeam(e.target.value)} placeholder="Team (z. B. Herren 1)" />
               <datalist id="pd-teams">{teams.map((t) => <option key={t} value={t} />)}</datalist>
               <button className="primary" disabled={!dirty || !name.trim()} onClick={save}>Speichern</button>
             </div>

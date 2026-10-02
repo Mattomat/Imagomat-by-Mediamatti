@@ -21,12 +21,8 @@ from pathlib import Path
 from ..db import Database
 from .registry import upsert_person
 
-# Vorschläge, auf deinem Rechner zu prüfen (von hier aus nicht erreichbar gewesen)
-DEFAULT_SOURCES = {
-    "FC Winterthur 1. Mannschaft": "https://www.fcw.ch/teams/1-mannschaft",
-    "FC Winterthur Frauen": "https://www.fcw.ch/teams/frauen",
-    "FC Winterthur U21": "https://www.fcw.ch/teams/u21",
-}
+# Vorgeschlagene Kader-Seiten (keine: jeder startet mit eigenen Teams)
+DEFAULT_SOURCES: dict[str, str] = {}
 
 _NAME = r"[A-ZÄÖÜÀ-Ý][\w'’\-\.]+(?:\s+(?:de|da|van|von|dos|del|di|le|la)?\s*[A-ZÄÖÜÀ-Ý][\w'’\-\.]+){1,3}"
 _POSITIONS = re.compile(

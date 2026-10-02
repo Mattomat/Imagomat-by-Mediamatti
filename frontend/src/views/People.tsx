@@ -185,7 +185,7 @@ export default function PeopleView({ ctx, setDrop }: { ctx: AppCtx; setDrop: (h:
       </div>
       <div className="team-row">
         <label>Team für neue Personen</label>
-        <input list="teams" value={team} placeholder="z. B. FC Winterthur Frauen" onChange={(e) => setTeam(e.target.value)} />
+        <input list="teams" value={team} placeholder="z. B. Damen 1" onChange={(e) => setTeam(e.target.value)} />
         <datalist id="teams">{teams.map((t) => <option key={t} value={t} />)}</datalist>
       </div>
 
