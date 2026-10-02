@@ -55,6 +55,7 @@ export interface WBTable { mireds: number[]; tints: number[]; mult: number[]; ba
 export interface Source {
   w: number; h: number; floor: number[]; m: number[]; gain: number; wb: WBTable; as_shot: [number, number];
   source: string; orientation: number; data: Uint16Array; cam_curve?: number[][] | null;
+  cam_ratio?: { w: number; h: number; data: number[] } | null;
 }
 
 export function parseSource(buf: ArrayBuffer): Source {

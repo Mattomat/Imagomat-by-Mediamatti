@@ -89,6 +89,7 @@ def _tone_local(lin: np.ndarray, crs: dict[str, Any], scale: float) -> np.ndarra
 
 AS_SHOT_TEMP, AS_SHOT_TINT = "_AsShotTemp", "_AsShotTint"     # nur intern beim Rendern, nie im XMP
 CAM_CURVE = "_CamCurve"      # Profil "Kamera": Kurven pro Kanal (Anzeige 0..1, je 256 Werte), nur intern
+CAM_RATIO = "_CamRatio"      # Profil "Kamera": grobe Karte (H x W x 3) für lokale Kamera-Anpassungen, nur intern
 
 
 def uses_camera_profile(crs: dict[str, Any]) -> bool:
@@ -131,6 +132,10 @@ def _apply_cam_curve(disp: np.ndarray, crs: dict[str, Any]) -> np.ndarray:
     out = disp.copy()
     for c in range(3):
         out[..., c] = _lut_apply(disp[..., c], np.asarray(cc[c], np.float32))
+    ratio = crs.get(CAM_RATIO)
+    if ratio is not None:
+        r = cv2.resize(np.asarray(ratio, np.float32), (out.shape[1], out.shape[0]), interpolation=cv2.INTER_LINEAR)
+        out = out * r
     return out
 
 

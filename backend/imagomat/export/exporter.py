@@ -336,6 +336,13 @@ def render_full(it: ExportItem, long_side: int | None, denoise_amount: int | Non
         lin, _ = denoise_linear(lin, info.camera_wb, raw_io.estimate_noise(it.src)["sigma_mid"], denoise_amount,
                                 load_settings().denoise.local_model)
     crs = {k: v for k, v in it.crs.items() if not ("Denoise" in k and "Amount" in k)}
+    from ..config import image_key
+    from ..render import camprofile
+    from ..render.pipeline import CAM_CURVE, CAM_RATIO, uses_camera_profile
+
+    prof = camprofile.load(image_key(it.image_id, str(it.src))) if uses_camera_profile(crs) else None
+    if prof:
+        crs = {**crs, CAM_CURVE: prof[0], CAM_RATIO: prof[1]}
     src = "preview" if info.extra.get("from_preview") else str(info.extra.get("source", "libraw"))
     if src != "libraw":
         crs = {**crs, AS_SHOT_TEMP: info.as_shot_temp or crs.get("Temperature"), AS_SHOT_TINT: info.as_shot_tint or 0}

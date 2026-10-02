@@ -127,6 +127,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
   const [cropDraft, setCropDraft] = useState<{ rect: [number, number, number, number]; ang: number } | null>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [cursor, setCursor] = useState<Pt | null>(null);
+  const initialJson = useRef("");
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -216,6 +217,7 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
       const m = normalize(i.model);
       setInfo(i);
       savedJson.current = JSON.stringify({ model: m });
+      initialJson.current = ["neutral", null, undefined].includes((i as unknown as { profile?: string | null }).profile) ? JSON.stringify(m) : "";
       setModel(m, false);
       setSave("saved");
       const h = [{ label: "Geöffnet", model: clone(m) }];
@@ -936,6 +938,8 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
     return Float32Array.from({ length: 256 }, (_, i) => t[i * 4 + 1]);
   }, [model, curveCh]);
 
+  // Noch nichts bearbeitet: genau das Original zeigen (kein Vorher/Nachher)
+  const pristine = !!model && !!initialJson.current && JSON.stringify(model) === initialJson.current && tool === "edit";
   if (!cur) return null;
   const overlaySvg = model && src && box.w > 0 && (
     <svg className="dv-ov" width={box.w} height={box.h} viewBox={`0 0 ${box.w} ${box.h}`}>
@@ -1055,8 +1059,8 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
           </div>
           <div className="dv-title"><b>{cur.filename}</b><span className="dv-muted">{index + 1} / {items.length}</span></div>
           <div className="dv-top-r">
-            <button className={`dv-iconbtn ${before === "on" ? "on" : ""}`} onClick={() => setBefore((b) => (b === "on" ? "off" : "on"))} title="Vorher/Nachher (Taste \)"><Ic.IcCompare /> Vorher</button>
-            <button className={`dv-iconbtn ${before === "split" ? "on" : ""}`} onClick={() => setBefore((b) => (b === "split" ? "off" : "split"))} title="Vorher und Nachher nebeneinander (Y)">Y|Y</button>
+            <button disabled={pristine} className={`dv-iconbtn ${before === "on" && !pristine ? "on" : ""}`} onClick={() => setBefore((b) => (b === "on" ? "off" : "on"))} title="Vorher/Nachher (Taste \)"><Ic.IcCompare /> Vorher</button>
+            <button disabled={pristine} className={`dv-iconbtn ${before === "split" ? "on" : ""}`} onClick={() => setBefore((b) => (b === "split" ? "off" : "split"))} title="Vorher und Nachher nebeneinander (Y)">Y|Y</button>
             <button className={`dv-iconbtn ${zoom ? "on" : ""}`} onClick={() => setZoom((z) => !z)} title="Einpassen / 1:1 (Z)"><Ic.IcZoom /> {zoom ? "1:1" : "Einpassen"}</button>
             <button className={`dv-iconbtn ${clip ? "on" : ""}`} onClick={() => setClip((c) => !c)} title="Beschnittene Lichter/Tiefen zeigen (J)"><Ic.IcClip /></button>
             <span className="dv-sep" />
@@ -1071,13 +1075,13 @@ export default function Develop({ items, index, onIndex, onClose, toast, onSynce
             onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={() => setCursor(null)}>
             <canvas ref={canvasRef} style={{ width: box.w, height: box.h, display: noGpu ? "none" : undefined }} />
             {noGpu && fallbackUrl && <img src={fallbackUrl} style={{ width: box.w, height: box.h }} draggable={false} />}
-            {before === "on" && <img className="dv-before" src={`${BASE}/api/images/${iid}/preview`} style={{ width: box.w, height: box.h }} draggable={false} />}
+            {(before === "on" || pristine) && <img className="dv-before" src={`${BASE}/api/images/${iid}/preview`} style={{ width: box.w, height: box.h }} draggable={false} />}
             {overlaySvg}
           </div>
           {before === "split" && <span className="dv-split-r">Nachher</span>}
           {(!src || !model) && !err && <div className="dv-loading">Lädt RAW …</div>}
           {err && <div className="dv-loading err">{err}</div>}
-          {before === "on" && <div className="dv-badge">Vorher (\\)</div>}
+          {before === "on" && !pristine && <div className="dv-badge">Vorher (\\)</div>}
           {pipette && <div className="dv-badge">Auf etwas Neutrales (Grau/Weiss) klicken · Esc bricht ab</div>}
           {tool === "crop" && <div className="dv-badge">Ecken ziehen · innen verschieben · aussen ziehen dreht · Esc fertig</div>}
           {tool === "mask" && curMask?.kind === "brush" && !objMode && <div className="dv-badge">Malen · Alt gedrückt löscht · [ ] Pinselgrösse</div>}

@@ -113,6 +113,7 @@ uniform sampler2D uA;
 uniform sampler2D uQb;
 uniform float uHL, uSH, uContrast, uWH, uBL, uScale;
 uniform sampler2D uCam;
+uniform sampler2D uRatio;
 uniform int uCamOn;
 uniform vec4 uL0[16];
 uniform vec4 uL1[16];
@@ -166,6 +167,7 @@ void main() {
   if (uCamOn == 1) {   // Profil "Kamera": bei 0 wie das Original
     vec3 lc = disp * 255.0 / 256.0 + 0.5 / 256.0;
     disp = vec3(texture(uCam, vec2(lc.r, 0.5)).r, texture(uCam, vec2(lc.g, 0.5)).g, texture(uCam, vec2(lc.b, 0.5)).b);
+    disp *= texture(uRatio, uv).rgb;   // was die Kamera lokal macht (z. B. DRO)
   }
   if (uWH != 0.0 || uBL != 0.0) {
     float Y = clamp(lum(disp), 1e-4, 1.0);

@@ -676,17 +676,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
                               (json.dumps(d), time.time(), r["image_id"]))
             c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('cam_profile_fix_v1', '1')")
 
-    def _cam_curve(iid: int) -> list[list[float]] | None:
-        """Profil "Kamera": Kurven, mit denen die RAW-Entwicklung bei 0 genau wie das Kamera-Original aussieht."""
-        from ..render.pipeline import camera_curve, render
+    def _cam_profile(iid: int) -> tuple[list[list[float]], np.ndarray] | None:
+        """Profil "Kamera": Kurven + grobe Karte, mit denen die RAW-Entwicklung bei 0 wie das Original aussieht."""
+        from ..render import camprofile
+        from ..render.pipeline import render
         from ..style.userpresets import neutral_crs
 
-        a = db.get_analysis(iid) or {}
-        if a.get("camera_curve_v") == 1 and a.get("camera_curve"):
-            return a["camera_curve"]
         r = db.one("SELECT * FROM images WHERE id=?", (iid,))
         if not r or not raw_io.is_raw(Path(r["path"])):
             return None
+        key = image_key(iid, r["path"])
+        hit = camprofile.load(key)
+        if hit is not None:
+            return hit
         try:
             lin, xyz, wb, orient = _linear(iid, Path(r["path"]))
             crs = {**neutral_crs(), "CameraProfile": "Adobe Color"}
@@ -695,22 +697,34 @@ def create_app(db_path: str | None = None) -> FastAPI:
             if abs(np.log((cam.shape[1] / cam.shape[0]) / (img.shape[1] / img.shape[0]))) > 0.03:
                 return None
             cam = cv2.resize(cam, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_AREA)
-            cc = camera_curve(img.astype(np.float32) / 255, cam.astype(np.float32) / 255)
+            cc, ratio = camprofile.compute(img.astype(np.float32) / 255, cam.astype(np.float32) / 255)
         except Exception:  # noqa: BLE001
             log.debug("Kamera-Profil für %s nicht berechnet", iid, exc_info=True)
             return None
-        db.update_analysis(iid, {"camera_curve": cc, "camera_curve_v": 1})
-        return cc
+        camprofile.save(key, cc, ratio)
+        return cc, ratio
+
+    def _cam_head(iid: int) -> dict[str, Any]:
+        p = _cam_profile(iid)
+        if not p:
+            return {"cam_curve": None}
+        r = p[1]
+        return {"cam_curve": p[0], "cam_ratio": {"w": int(r.shape[1]), "h": int(r.shape[0]),
+                                                  "data": [round(float(v), 4) for v in r.ravel()]}}
+
+    def _cam_curve(iid: int) -> list[list[float]] | None:
+        p = _cam_profile(iid)
+        return p[0] if p else None
 
     def _with_as_shot(iid: int, crs: dict[str, Any], cam: bool = True) -> dict[str, Any]:
         """Bei schon weissabgeglichenen Daten (Apple RAW-Engine, Vorschau) den Aufnahme-Weissabgleich mitgeben;
         beim Profil "Kamera" die Kurven dazu."""
-        from ..render.pipeline import CAM_CURVE, uses_camera_profile
+        from ..render.pipeline import CAM_CURVE, CAM_RATIO, uses_camera_profile
 
         if cam and uses_camera_profile(crs) and CAM_CURVE not in crs:
-            cc = _cam_curve(iid)
-            if cc:
-                crs = {**crs, CAM_CURVE: cc}
+            prof = _cam_profile(iid)
+            if prof:
+                crs = {**crs, CAM_CURVE: prof[0], CAM_RATIO: prof[1]}
         src = _sources.get(iid)
         if not src or src[0] == "libraw":
             return crs
@@ -929,7 +943,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         head = {"w": int(floored.shape[1]), "h": int(floored.shape[0]), "floor": [float(v) for v in floor],
                 "m": [float(v) for v in cam_to_srgb(xyz).astype(np.float32).ravel()], "gain": float(BASE_GAIN),
                 "wb": _wb_table(xyz, wb, iid), "as_shot": [float(as_temp or 5500), float(as_tint or 0)],
-                "source": src[0], "orientation": int(orient), "cam_curve": _cam_curve(iid)}
+                "source": src[0], "orientation": int(orient), **_cam_head(iid)}
         hb = json.dumps(head).encode()
         hb += b" " * ((-len(hb)) % 4)
         data = np.ascontiguousarray(floored.astype("<f2")).tobytes()

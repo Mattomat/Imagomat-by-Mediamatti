@@ -150,5 +150,6 @@ def test_camera_profile_matches_original(tmp_path: Path):
         img = cv2.imdecode(np.frombuffer(c.get(f"/api/images/{iid}/render?size=600").content, np.uint8), 1)
         pre = cv2.imdecode(np.frombuffer(c.get(f"/api/images/{iid}/preview").content, np.uint8), 1)
         pre = cv2.resize(pre, (img.shape[1], img.shape[0]))
-        assert abs(float(img.mean()) - float(pre.mean())) < 12          # bei 0 wie das Original
+        d = np.abs(img.astype(np.float32) - pre.astype(np.float32)).mean()
+        assert d < 10, d                                                  # bei 0 wie das Original
         assert not c.get(f"/api/shoots/{sid}/images").json()[0]["edited"]

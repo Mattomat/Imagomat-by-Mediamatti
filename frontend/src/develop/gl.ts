@@ -68,6 +68,7 @@ export class DevelopGL {
   private maskTex: WebGLTexture;
   private lut: WebGLTexture;
   private cam: WebGLTexture | null = null;
+  private ratio: WebGLTexture | null = null;
   private hist: Target | null = null;
   readonly floatOk: boolean;
   w = 0;
@@ -178,6 +179,16 @@ export class DevelopGL {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, n, 1, 0, gl.RGBA, gl.FLOAT, d);
       this.params(gl.TEXTURE_2D);
     }
+    if (this.ratio) gl.deleteTexture(this.ratio);
+    this.ratio = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.ratio);
+    const cr = s.cam_ratio;
+    if (cr && cr.data.length === cr.w * cr.h * 3) {
+      const d = new Float32Array(cr.w * cr.h * 4);
+      for (let i = 0; i < cr.w * cr.h; i++) { d[i * 4] = cr.data[i * 3]; d[i * 4 + 1] = cr.data[i * 3 + 1]; d[i * 4 + 2] = cr.data[i * 3 + 2]; d[i * 4 + 3] = 1; }
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, cr.w, cr.h, 0, gl.RGBA, gl.FLOAT, d);
+    } else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.FLOAT, new Float32Array([1, 1, 1, 1]));
+    this.params(gl.TEXTURE_2D);
     // einmalig: weichgezeichnete Quelle (Farbrauschen in den Tiefen, wie _calm_shadows)
     const sig = Math.max(1, 2 * (Math.max(s.w, s.h) / 1600));
     this.blur(this.src, this.t.tmp, this.t.sb, [sig, sig, sig, sig]);
@@ -309,6 +320,7 @@ export class DevelopGL {
     const prof = String(model.profile ?? "").toLowerCase();
     const camOn = !!this.cam && (!prof || prof.startsWith("camera"));
     this.tex(pr, "uCam", 3, this.cam ?? this.lut);
+    this.tex(pr, "uRatio", 4, this.ratio ?? this.lut);
     gl.uniform1i(this.loc(pr, "uCamOn"), camOn ? 1 : 0);
     this.draw(t.D);
     // Klarheit (25 px) und Dunst (30 px)
